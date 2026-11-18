@@ -529,14 +529,14 @@
                                     <TextBlock Text="Yunzhao" Style="{StaticResource LargeTitleStyle}" />
                                     <TextBlock x:Name="VersionText" Style="{StaticResource RowNoteStyle}" Typography.NumeralAlignment="Tabular" />
                                     <TextBlock Style="{StaticResource RowNoteStyle}" Margin="0,6,0,0"
-                                               Text="玻璃任务栏与桌面组件" />
-                                    <HyperlinkButton NavigateUri="https://github.com/wynter-yaxley/atrium-desktop" Padding="0" Margin="0,6,0,0"
-                                                     Content="github.com/wynter-yaxley/atrium-desktop" />
+                                               Text="桌面、日历、课表和账号" />
+                                    <HyperlinkButton NavigateUri="https://github.com/TingMax/Yunzhao-Desktop" Padding="0" Margin="0,6,0,0"
+                                                     Content="github.com/TingMax/Yunzhao-Desktop" />
                                 </StackPanel>
                             </Grid>
                         </Border>
 
-                        <StackPanel Visibility="Collapsed">
+                        <StackPanel>
                             <TextBlock Text="软件更新" Style="{StaticResource SectionStyle}" />
                             <Border Style="{StaticResource TileStyle}">
                                 <StackPanel Spacing="12">

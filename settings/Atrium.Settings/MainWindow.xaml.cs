@@ -208,7 +208,6 @@ public sealed partial class MainWindow : Window
                                  "start" => 10, "tray" => 11, "status" => 12, "clock" => 13, _ => 0 } : 0;
         SelectPage(page);
         _ = ConnectAndLoadAsync();
-        // Product updates stay off until that flow is developed again.
     }
 
     // ---- Pages ----
@@ -282,6 +281,7 @@ public sealed partial class MainWindow : Window
         if (_mains[index] == MainStage) ShowStagePreview(true);
         if (_mains[index] == MainDisplays) RefreshDisplays();
         if (_mains[index] == MainAccount) RefreshAccount();
+        if (_mains[index] == MainAbout) _ = CheckForUpdatesAsync();
         if (_mains[index] == MainStage) RefreshIsland();
         else HideIslandHost();
         if (index >= 10) EnterModulePage(index);
@@ -593,7 +593,7 @@ public sealed partial class MainWindow : Window
             if (release == null)
             {
                 UpdateAvailableButton.Visibility = Visibility.Collapsed;
-                UpdateStatus.Text = "暂无正式版本";
+                UpdateStatus.Text = "main 上还没有安装包";
                 return;
             }
             var current = typeof(MainWindow).Assembly.GetName().Version!;

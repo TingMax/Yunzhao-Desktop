@@ -1,161 +1,77 @@
-<p align="center">
-  <img src="assets/atrium-256.png" alt="Atrium Desktop" width="112">
-</p>
+# Yunzhao
 
-<h1 align="center">Atrium Desktop</h1>
+Yunzhao 是一套跑在 Windows 11 上的桌面。打开之后，屏幕上是 Yunzhao 自己的任务栏、日历、课表和当日待办；设置、账号、教师工作台和多维表格用的是同一套界面。程序名是 `Yunzhao.exe`。
 
-<p align="center">
-  <b>不仅仅是桌面美化。</b><br>
-  保留 Windows 的用法，换上一块实时折射的液态玻璃，<br>
-  再用同一套设计语言，把任务栏、开始菜单、控制中心、通知和小组件连成一个整体。
-</p>
+数据放在本机的 `%LOCALAPPDATA%\Yunzhao`。账号登录的是 [yunzhao-desktop.com](https://yunzhao-desktop.com)。代码仓库是 [TingMax/Yunzhao-Desktop](https://github.com/TingMax/Yunzhao-Desktop)。
 
-<p align="center">
-  <a href="https://github.com/TingMax/Yunzhao-Desktop/releases/latest"><b>下载</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="#功能"><b>功能</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="#开始使用"><b>开始使用</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="README_EN.md"><b>English</b></a>
-</p>
+## 桌面
 
-<p align="center">
-  <a href="https://github.com/TingMax/Yunzhao-Desktop/releases/latest"><img src="https://img.shields.io/github/v/release/TingMax/Yunzhao-Desktop?style=flat-square&label=version&labelColor=1d1d1f&color=3a3a3c" alt="version"></a>
-  <a href="https://github.com/TingMax/Yunzhao-Desktop/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/TingMax/Yunzhao-Desktop/build.yml?branch=main&style=flat-square&label=build&labelColor=1d1d1f" alt="build"></a>
-  <img src="https://img.shields.io/badge/Windows-11-3a3a3c?style=flat-square&labelColor=1d1d1f" alt="Windows 11">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/TingMax/Yunzhao-Desktop?style=flat-square&labelColor=1d1d1f&color=3a3a3c" alt="license"></a>
-</p>
+Yunzhao 运行时使用自己的任务栏。任务栏自动隐藏，鼠标靠向屏幕边缘时出现。它不另外注册开机启动，开发构建也不修改 Windows 的启动项。
 
-<p align="center">
-  <img src="docs/images/readme/hero.jpg" alt="Atrium Desktop" width="100%">
-</p>
+桌面上的日历和课表是一组组件。它们平时位于普通窗口下面，按 Win+D 显示桌面时会回到前面。组件可以拖到桌面上；拖动时能看到跟随鼠标的影子。贴到屏幕上边或左右两边时会收起，下边不收。日历默认留在放下它的那块屏幕上，不会自己跑到另一块屏幕。
 
-## 不仅仅是桌面美化
+日历和课表在同一个窗口里切换。课表按周显示课程，也能记下调课。双击某一天，或者从工具栏打开，会另外弹出「当日待办」。这个窗口没有系统标题栏，可以拖动改变大小，大小会记住。在日历或课表上再点别的日期，已经打开的当日待办会换成那一天，而不是再开一个窗口。里面仍然是原来的日期、条数、天气、黄历和待办：可以新建、编辑、完成，收起则关闭这个窗口。
 
-Windows 的桌面是几代设计叠起来的：任务栏、托盘、开始菜单、通知、快捷设置，各有各的圆角、字号和动画。Atrium 把每天看到的这一层重新做了一遍，但没有改变你用 Windows 的方式。
+## 灵动岛
 
-- **用法不变**：固定应用、切换窗口、右键菜单、把文件拖到应用图标上打开，都和原来一样。
-- **同一块玻璃**：栏、面板、菜单、通知和小组件用的是同一种材质，实时映出背后的桌面。
-- **同一套设计语言**：圆角、间距、字体和动画遵循同一套规则，同一种控件在哪里都是同样的手感。
-- **三个独立模块**：任务栏、桌面小组件和台前调度可以分别打开，只用其中一个也行。
-- **干净**：不向系统进程注入代码，不改系统文件，不装服务，不需要管理员权限。退出后，Windows 自己的任务栏照常回来。
+灵动岛是 Yunzhao 拉起的一个独立程序，不单独占一个任务栏图标，设置也嵌在 Yunzhao 的「灵动岛」页里。它的源码在 `third_party/fly-island`，许可证是 GPL-3.0，不编进 Yunzhao 主程序。
 
-## 功能
+## 设置
 
-### 液态与磨砂
+设置窗口的页面有：
 
-<p align="center">
-  <img src="docs/images/readme/material.jpg" alt="左边液态，右边磨砂" width="100%">
-</p>
+- 材质、形状、任务栏、通知、状态栏、时间
+- 组件：把日历、课表放到桌面
+- 灵动岛
+- 教师工作台
+- 显示器、系统
+- 账号
+- 设计语言
+- 关于：版本、软件更新、设置文件位置
 
-玻璃会折射背后的画面，边缘带一点高光和色散。喜欢通透，用液态（左）；喜欢安静，用磨砂（右）。透明度、模糊和折射强度也可以在设置中心里自己调。玻璃上的文字会跟着背后的明暗自动换成深色或浅色。
+「关于」里的软件更新会向 GitHub 查询。自动检查在后台进行，不弹窗。
 
-### 任务栏
+## 账号
 
-<p align="center">
-  <img src="docs/images/readme/bar.jpg" alt="指针下的图标放大，并显示应用名称" width="100%">
-</p>
+用 Yunzhao 账号登录。退出时会先把需要同步的桌面内容上传，再清除本机登录状态。再次登录后把云端内容拉回来。登录状态只保存在本机当前用户下，不明文存放。
 
-- 悬浮在屏幕底部的胶囊形玻璃栏。指针划过时，图标像波浪一样放大，停一下会浮出应用名称。
-- 指针停在打开的应用上，会显示它每个窗口的实时预览，可以直接切换或关闭。
-- 右键图标和 Windows 任务栏一样，列出程序自己的跳转列表：已固定和最近的文件、文件夹、工作区，以及程序提供的任务（如浏览器的新窗口、无痕窗口）；还可以以管理员身份运行、查看属性。设置中心里可以关掉，恢复简单的菜单。
-- 固定的应用可以拖动排序；前台应用全屏或最大化时，栏会让开（也可以设成常驻或一直隐藏）。游戏、视频等铺满整个屏幕的应用在前台时，指针碰到底边也不会唤出任务栏，和 Windows 任务栏一样，不会把全屏游戏挤回桌面。打开后，Win + 1…9 可以直接打开栏上的应用。
-- 多显示器：在另一块屏幕底边停留即可唤出 Dock；也可固定到主屏、指定屏幕，或在所有屏幕显示任务栏。在设置中心的“显示器”页可选择任务栏应用显示在所有屏幕、主屏和窗口所在屏、或仅窗口所在屏，并调整跨屏停留时间。
-- 小组件与台前调度可单独选择桌面显示器。目标屏幕断开时临时回到主屏，重新连接后自动恢复。
+## 教师工作台
 
-### 开始菜单
+教师工作台不再单独做一套登录。打开后读取 Yunzhao 已经登录的账号，页头显示这个账号的名称、用户名和邮箱。没有桌面登录时，页面只提示先在 Yunzhao 登录。
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/readme/start-pins.jpg" alt="开始菜单里的固定应用"></td>
-    <td width="50%"><img src="docs/images/readme/start-search.jpg" alt="在开始菜单里直接打字搜索"></td>
-  </tr>
-</table>
+## 多维表格
 
-点栏左侧的 Windows 徽标打开，也可以设成按 Win 键打开。Windows 开始菜单里固定的应用照常在这里；图标可以拖动换位置，拖到另一个图标上就建成文件夹，可以命名。菜单有小、中、大三档。打开后不用点搜索框，直接打字就能搜索应用和文件夹，也能按拼音首字母搜（wx 找到微信）；“全部应用”按 A–Z 排列，左侧字母条可以快速跳转。右键应用可以以管理员身份运行、打开文件所在的位置，不想看到的应用也可以右键隐藏。下面一条是账户、网络、音量、电量和电源；设置中心里可以选菜单大小，也可以去掉其中的托盘或状态按钮。
+多维表格从桌面打开，出现在点击它所在的那块屏幕上。页面、卡片和按钮使用 Yunzhao 的颜色：页面底是浅灰，卡片是白的，强调色是蓝色。
 
-### 状态圆环与控制中心
+## 软件更新
 
-<p align="center">
-  <img src="docs/images/readme/ring.jpg" alt="状态圆环：充电中、调节音量、调节亮度" width="100%">
-</p>
+自动更新每 12 小时做一次：
 
-栏的右侧只有一个圆环，代替一排电池、网络和音量图标。外圈是电量，充电时开口处有一道闪电；中间是 Wi‑Fi。调音量或亮度时，圆环变成对应的刻度，1.5 秒后自己回到电量和 Wi‑Fi。在圆环上滚动滚轮可以直接调音量。习惯 Windows 的样子，也可以换成并排的网络、音量、电池三个图标。
+1. 先访问 GitHub，确认网络是否通。
+2. 不通就取消正在下载的包，不提示、不报错。
+3. 通了就只查找 `main` 上的正式安装包，文件名是 `Yunzhao-<版本>-win-x64.zip`。
+4. `dev` 和其他分支上的包不会下载。
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/readme/control-center.jpg" alt="控制中心"></td>
-    <td width="50%"><img src="docs/images/readme/notifications.jpg" alt="通知列表"></td>
-  </tr>
-</table>
+安装包是一个文件夹，不是 Windows 安装程序。换上去的是程序本身；`%LOCALAPPDATA%\Yunzhao` 里的账号和数据留在原地。
 
-点圆环打开控制中心：Wi‑Fi、蓝牙、电池、投屏、台前调度、显示器亮度、声音和输出设备，还能分别调各个应用的音量。点铃铛打开通知：新消息叠成一摞，点一下展开成列表。点时钟打开带农历和节日的日历。
+目前仓库还没有发布过安装包。打开「关于」后，软件更新会显示「main 上还没有安装包」。以后发版时，把测过的 `dev` 合进 `main`，再在 `main` 上发布这个 zip。
 
-设置中心的“通知 → 通知位置”可选择“跟随任务栏”（默认）或“主屏右上角”。右上角模式下，新通知从右侧淡入，已有通知平滑向下让位；通知较多时可滚动查看，点击铃铛打开的通知中心也在主屏右上角展开。
+## 分支
 
-### 桌面小组件
-
-<p align="center">
-  <img src="docs/images/readme/widgets.jpg" alt="桌面上的小组件" width="100%">
-</p>
-
-时钟、数字时钟、日历（带农历）、天气、电池、蓝牙设备、系统监视、备忘录、提醒事项和照片，十类小组件，三种尺寸。中号的时钟和数字时钟会显示几座城市的时间，右键“更改城市…”可以逐个换成其他城市。拖到哪里都会吸附到网格上；指针移上去，下角会出现一段弧形握把，拖动它就能改变大小。小组件平时在所有窗口下面，按 Win + D 显示桌面时浮到最上。
-
-<p align="center">
-  <img src="docs/images/readme/widget-materials.jpg" alt="小组件的三种材质：跟随任务栏、暮色、原色" width="100%">
-</p>
-
-三种材质可选：**跟随任务栏**的透明玻璃；把玻璃调暗、文字全白的**暮色**；不透明、带原本颜色的**原色**。
-
-### 台前调度
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/readme/stage.jpg" alt="台前调度：当前应用在中间，其余应用在左侧"></td>
-    <td width="50%"><img src="docs/images/readme/stage-hover.jpg" alt="指针移到侧边的窗口上时，窗口转正并放大"></td>
-  </tr>
-</table>
-
-正在用的应用留在屏幕中间，其余应用收到一侧，窗口画面斜立成一列，每个窗口一张卡片，同一个应用的几个窗口也分开放。指针移上去，窗口转正并稍稍放大；点一下就换到前面，按住 Shift 点按可以把几个应用组成一组。侧边可以一直显示（压在侧边上的窗口来到前台时会自动挪到旁边；窗口最大化时侧边让开，指针碰到屏幕边缘再滑出），也可以只在指针碰到屏幕边缘时滑出。打开“窗口最小化到台前调度”后，最小化前面的应用，它的窗口画面会直接飞进侧边，不再缩到任务栏。关闭台前调度或退出 Atrium 时，所有窗口都会恢复原样。
-
-## 开始使用
-
-1. 从 [Releases](https://github.com/TingMax/Yunzhao-Desktop/releases/latest) 下载 `Yunzhao-<版本>-win-x64.zip`，解压到任意文件夹。
-2. 运行 `Yunzhao.exe`。屏幕底部会出现玻璃任务栏，第一次运行时会导入 Windows 任务栏里固定的应用。
-3. 双击托盘里的 Atrium 图标，或右键选择“外观设置…”，打开设置中心。材质、尺寸、固定的应用、通知、小组件和三个模块的开关都在这里，“关于”页里可以检查更新。
-4. 在托盘图标上右键，选择“退出 Atrium”即可完全退出。设置保存在 `%LOCALAPPDATA%\Atrium`。
-
-系统要求：Windows 10 19041 及以上，推荐 Windows 11。
-
-### 被 Windows 拦截时
-
-Atrium 的发布包没有代码签名，每个新版本的文件在 Windows 那里都还没有信誉。
-
-- **SmartScreen 提示“Windows 已保护你的电脑”**：点“更多信息” › “仍要运行”。
-- **提示“应用程序控制策略已阻止此文件”**（运行时出现，或更新时显示“更新未安装”）：是智能应用控制或单位的应用控制策略拦下了新文件。更新会自动恢复旧版本，不会丢设置。在 PowerShell 里运行 `(Get-MpComputerStatus).SmartAppControlState`：
-  - 结果是 `On`：可以在 Windows 安全中心 › 应用和浏览器控制 › 智能应用控制里把它关闭。注意，在部分 Windows 版本上，关闭后不重装系统就无法再打开。
-  - 结果是 `Off` 但仍被拦截：多半是单位的策略，请联系管理员放行 Atrium 所在的目录。
-
-## 当前状态
-
-| | |
-| :--- | :--- |
-| 可以日常使用 | 任务栏、开始菜单、控制中心、日历、托盘、通知、桌面小组件、台前调度、设置中心 |
-| 实验功能 | 把 Windows 通知显示为 Atrium 卡片；微信和飞书消息 |
-| 还没有验证 | 多显示器、HDR、高刷新率、睡眠唤醒、稳定版 Windows 11 |
-| 已知限制 | 使用 DXGI 桌面复制的录屏软件拍不到 Atrium；双显卡笔记本第一次运行后需要重启一次 Atrium |
+日常改动都在 `dev`。只有明确要求推送到 `main` 时，`main` 才会更新。紧急修复也要在当次说清楚，否则仍然先走 `dev`。
 
 ## 构建
 
-需要 .NET 10 SDK，以及带 C++ 工作负载和 Windows SDK 的 Visual Studio 或 Build Tools（CMake 3.25+）。
+在仓库根目录执行：
 
 ```powershell
-./tools/build.ps1          # 输出到 dist/Atrium，加 -Zip 同时打包
+tools\build.ps1 -Development
 ```
 
-核心是 C++20（Win32、Direct3D 11、DirectComposition），设置中心是 WinUI 3。设计规范见 [docs/DESIGN.md](docs/DESIGN.md)。
+需要 Visual Studio 2022 的 C++ 构建工具，以及 .NET 10。开发版输出在 `dist\Development\Atrium\Yunzhao.exe`。
 
-## 参与贡献
+日历、课表和当日待办在开发时由 `tools\yunzhao-note.ps1` 启动。多维表格由 `tools\smart-table.ps1` 启动。这两个开发服务不是自动更新包的一部分。
 
-最有价值的是设计上的意见，以及在不同硬件和系统上的使用反馈。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+## 许可
 
-## 许可证
-
-[MIT](LICENSE)。视觉灵感来自 Apple 的 Liquid Glass；本项目与 Apple、Microsoft 无关。
-
-<sub>本页配图按 Atrium 的真实尺寸和材质参数离线渲染，应用图标为原创的示意图形，通知内容为虚构。</sub>
+Yunzhao 主程序和设置以仓库根目录的 MIT 许可证发布。灵动岛是独立程序，许可证是 GPL-3.0，见 `third_party/fly-island`。
