@@ -530,8 +530,6 @@
                                     <TextBlock x:Name="VersionText" Style="{StaticResource RowNoteStyle}" Typography.NumeralAlignment="Tabular" />
                                     <TextBlock Style="{StaticResource RowNoteStyle}" Margin="0,6,0,0"
                                                Text="桌面、日历、课表和账号" />
-                                    <HyperlinkButton NavigateUri="https://github.com/TingMax/Yunzhao-Desktop" Padding="0" Margin="0,6,0,0"
-                                                     Content="github.com/TingMax/Yunzhao-Desktop" />
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -554,10 +552,6 @@
                                         <Button x:Name="CheckUpdateButton" Grid.Column="2" Content="检查更新" MinWidth="104"
                                                 VerticalAlignment="Center" Click="OnCheckForUpdates" />
                                     </Grid>
-                                    <StackPanel x:Name="ReleaseLinks" Orientation="Horizontal" Spacing="20" Visibility="Collapsed">
-                                        <Button x:Name="InstallRelease" Content="下载并安装" Click="OnInstallRelease" Visibility="Collapsed" />
-                                        <HyperlinkButton x:Name="ReleaseNotes" Content="发布说明" Padding="0" />
-                                    </StackPanel>
                                 </StackPanel>
                             </Border>
                         </StackPanel>
@@ -571,7 +565,6 @@
 
                         <TextBlock Style="{StaticResource FootnoteStyle}" Margin="4,0,0,0"
                                    Text="界面字体：MiSans，版权归小米科技有限责任公司，依《MiSans 字体知识产权许可协议》使用。" />
-                        <HyperlinkButton NavigateUri="https://unsplash.com/@martz90" Content="示例照片：Martin Martz / Unsplash" Padding="4,0" />
                     </StackPanel>
 
                     <!-- A narrow window: the inspector's groups come here, under the page (OnContentSizeChanged) -->

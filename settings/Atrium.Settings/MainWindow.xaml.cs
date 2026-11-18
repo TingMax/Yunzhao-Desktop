@@ -464,15 +464,20 @@ public sealed partial class MainWindow : Window
     private DispatcherTimer? _downloadTimer;
     private bool _downloadRefreshBusy, _queueingDownload, _updatesClosed;
 
+    private bool HasInstallOffer()
+    {
+        var current = typeof(MainWindow).Assembly.GetName().Version!;
+        if (_preparedRelease != null || _transferStatus != null) return true;
+        return _latestRelease?.Download != null && _latestRelease.Version > current;
+    }
+
     private void ShowInstallAction()
     {
-        InstallRelease.Content = _preparedRelease != null ? "重启并完成更新"
-            : _transferStatus is { CanRetry: false } || _queueingDownload ? "后台下载中" : "重试下载";
-        InstallRelease.IsEnabled = _updateCheck == null && !_queueingDownload
-            && (_preparedRelease != null || _transferStatus?.CanRetry != false);
-        InstallRelease.Visibility = _preparedRelease != null || _transferStatus != null || _latestRelease?.Download != null
-            && _latestRelease.Version > typeof(MainWindow).Assembly.GetName().Version!
-            ? Visibility.Visible : Visibility.Collapsed;
+        bool offer = HasInstallOffer();
+        CheckUpdateButton.Content = offer ? "点击安装" : "检查更新";
+        CheckUpdateButton.IsEnabled = _updateCheck == null && !_queueingDownload;
+        UpdateAvailableButton.Visibility = offer ? Visibility.Visible : Visibility.Collapsed;
+        if (offer) UpdateStatus.Text = "功能样式已更新，是否需要安装";
     }
 
     private void ObserveDownload()
@@ -497,17 +502,9 @@ public sealed partial class MainWindow : Window
             _preparedRelease = state.Ready;
             _transferStatus = state.Transfer;
             if (_preparedRelease != null)
-            {
-                UpdateStatus.Text = "更新已准备好，重启后生效";
-                UpdateAvailableButton.Visibility = ReleaseLinks.Visibility = Visibility.Visible;
-                ReleaseNotes.NavigateUri ??= new Uri("https://github.com/TingMax/Yunzhao-Desktop/releases/latest");
                 _downloadTimer?.Stop();
-            }
             else if (_transferStatus != null)
             {
-                UpdateStatus.Text = _transferStatus.Text;
-                UpdateAvailableButton.Visibility = ReleaseLinks.Visibility = Visibility.Visible;
-                ReleaseNotes.NavigateUri ??= new Uri("https://github.com/TingMax/Yunzhao-Desktop/releases/latest");
                 if (_transferStatus.CanRetry) _downloadTimer?.Stop();
                 else ObserveDownload();
             }
@@ -562,7 +559,15 @@ public sealed partial class MainWindow : Window
 
     private void OnOpenUpdate(object sender, RoutedEventArgs e) => SelectPage(9);
 
-    private async void OnCheckForUpdates(object sender, RoutedEventArgs e) => await CheckForUpdatesAsync();
+    private async void OnCheckForUpdates(object sender, RoutedEventArgs e)
+    {
+        if (HasInstallOffer())
+        {
+            OnInstallRelease(sender, e);
+            return;
+        }
+        await CheckForUpdatesAsync();
+    }
 
     private async Task CheckForUpdatesAsync()
     {
@@ -572,41 +577,29 @@ public sealed partial class MainWindow : Window
         CheckUpdateButton.IsEnabled = false;
         UpdateProgress.Visibility = Visibility.Visible;
         UpdateProgress.IsActive = true;
-        ReleaseLinks.Visibility = Visibility.Collapsed;
         UpdateStatus.Text = "正在检查…";
         try
         {
-            string? installFailure = ReleaseInstaller.ReadFailure();
             await RefreshDownloadAsync();
             if (cancel.IsCancellationRequested) return;
             if (_preparedRelease != null)
             {
-                UpdateAvailableButton.Visibility = ReleaseLinks.Visibility = Visibility.Visible;
-                UpdateStatus.Text = installFailure == null ? "更新已准备好，重启后生效" : $"更新未安装：{installFailure}";
-                ReleaseNotes.NavigateUri = new Uri("https://github.com/TingMax/Yunzhao-Desktop/releases/latest");
                 ShowInstallAction();
                 return;
             }
-            if (_transferStatus is { CanRetry: false }) await QueueDownloadAsync(null);
             var release = await ReleaseInfo.FetchLatestAsync(cancel.Token);
             if (cancel.IsCancellationRequested) return;
-            if (release == null)
+            var current = typeof(MainWindow).Assembly.GetName().Version!;
+            bool newer = release?.Download != null && release.Version > current;
+            _latestRelease = newer ? release : null;
+            if (!newer && _transferStatus == null)
             {
                 UpdateAvailableButton.Visibility = Visibility.Collapsed;
-                UpdateStatus.Text = "main 上还没有安装包";
+                CheckUpdateButton.Content = "检查更新";
+                UpdateStatus.Text = "软件暂无更新";
                 return;
             }
-            var current = typeof(MainWindow).Assembly.GetName().Version!;
-            int comparison = release.Version.CompareTo(current);
-            UpdateAvailableButton.Visibility = comparison > 0 ? Visibility.Visible : Visibility.Collapsed;
-            UpdateStatus.Text = comparison > 0 ? $"有可用更新 {release.Tag}"
-                : comparison == 0 ? "已是最新版本" : $"当前版本高于最新正式版 {release.Tag}";
-            ReleaseNotes.NavigateUri = release.Page;
-            _latestRelease = release;
             ShowInstallAction();
-            ReleaseLinks.Visibility = Visibility.Visible;
-            if (comparison > 0 && release.Download != null) await QueueDownloadAsync(release);
-            else if (_transferStatus != null) UpdateStatus.Text = _transferStatus.Text;
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException
             or JsonException or FormatException or InvalidOperationException or KeyNotFoundException or IOException or UnauthorizedAccessException)
