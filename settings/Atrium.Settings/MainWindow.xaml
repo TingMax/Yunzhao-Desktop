@@ -6,10 +6,6 @@
     xmlns:local="using:Atrium.Settings"
     Title="Yunzhao 设置">
 
-    <Window.SystemBackdrop>
-        <MicaBackdrop Kind="Base" />
-    </Window.SystemBackdrop>
-
     <!-- Three columns (DESIGN.md §8): the sidebar on the window's material; the workspace (live preview,
          the page's main choices) scrolling on its own; the inspector (the page's other parameters) on the right,
          scrolling on its own. A narrow window folds the inspector under the workspace (OnContentSizeChanged). -->

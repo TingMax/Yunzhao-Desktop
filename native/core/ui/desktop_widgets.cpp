@@ -3,6 +3,7 @@
 
 #include "clock.h"
 #include "log.h"
+#include "os.h"
 #include "motion.h"
 #include "settings.h"
 #include "shell/displays.h"
@@ -2218,10 +2219,13 @@ void DesktopWidgets::OrderCalendarNote()
     }
     // A 1-bit rounded region composites the curve against black. Windows 11 rounds
     // the window itself, and the page clips to the same curve, so the corner is wallpaper.
-    const int corner = 2; // DWMWCP_ROUND
-    DwmSetWindowAttribute(note, 33, &corner, sizeof(corner)); // DWMWA_WINDOW_CORNER_PREFERENCE
-    const COLORREF border = 0xFFFFFFFE; // DWMWA_COLOR_NONE, no dark frame
-    DwmSetWindowAttribute(note, 34, &border, sizeof(border)); // DWMWA_BORDER_COLOR
+    // Windows 10 has no system corner preference; the window stays square there.
+    if (Windows11()) {
+        const int corner = 2; // DWMWCP_ROUND
+        DwmSetWindowAttribute(note, 33, &corner, sizeof(corner)); // DWMWA_WINDOW_CORNER_PREFERENCE
+        const COLORREF border = 0xFFFFFFFE; // DWMWA_COLOR_NONE, no dark frame
+        DwmSetWindowAttribute(note, 34, &border, sizeof(border)); // DWMWA_BORDER_COLOR
+    }
     HRGN probe = CreateRectRgn(0, 0, 0, 0);
     const int kind = GetWindowRgn(note, probe);
     DeleteObject(probe);

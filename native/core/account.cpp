@@ -1,6 +1,7 @@
 #include "account.h"
 
 #include "log.h"
+#include "os.h"
 #include "settings.h"
 
 #include <dwmapi.h>
@@ -798,10 +799,12 @@ bool ShowForm(HINSTANCE instance)
     form.window = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, L"登录 Yunzhao", WS_POPUP,
                                    CW_USEDEFAULT, CW_USEDEFAULT, 400, 460, nullptr, nullptr, instance, nullptr);
     SetWindowLongPtrW(form.window, GWLP_USERDATA, (LONG_PTR)&form);
-    int corner = 2;
-    DwmSetWindowAttribute(form.window, 33, &corner, sizeof(corner));
-    COLORREF border = 0xFFFFFFFE;
-    DwmSetWindowAttribute(form.window, 34, &border, sizeof(border));
+    if (Windows11()) {
+        int corner = 2;
+        DwmSetWindowAttribute(form.window, 33, &corner, sizeof(corner));
+        COLORREF border = 0xFFFFFFFE;
+        DwmSetWindowAttribute(form.window, 34, &border, sizeof(border));
+    }
     auto label = [&](const wchar_t* text, int y) {
         HWND hwnd = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE, 28, y, 344, 18, form.window, nullptr, instance, nullptr);
         SendMessageW(hwnd, WM_SETFONT, (WPARAM)form.bodyFont, TRUE);

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
+using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.UI.Xaml.Automation;
@@ -90,6 +91,10 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (MicaController.IsSupported())
+            SystemBackdrop = new MicaBackdrop { Kind = MicaKind.Base };
+        else
+            RootGrid.Background = (Brush)Application.Current.Resources["PageBrush"];
         RootGrid.Loaded += (_, _) => ContinuousCorners.Install(RootGrid);
         RootGrid.Loaded += (_, _) => LoadStageArt(); // the Stage Manager page's pictures, ready before it opens
 #if ATRIUM_DEVELOPMENT
