@@ -1,0 +1,290 @@
+/**
+ * Smart Table Variables
+ * 全局样式变量定义
+ * 与 Home.vue 和设计系统保持一致
+ */
+
+// ============================================
+// 颜色系统 (Color System)
+// ============================================
+
+// Yunzhao：一种蓝，浅灰页面，近黑文字
+$primary-color: #0a84ff;
+$primary-light: #e8f3ff;
+$primary-dark: #0060c8;
+$primary-hover: #0071e3;
+
+// 渐变色
+$primary-gradient-start: #0a84ff;
+$primary-gradient-end: #0a84ff;
+
+// 功能色
+$success-color: #10B981;
+$success-light: #D1FAE5;
+$success-dark: #059669;
+
+$warning-color: #F59E0B;
+$warning-light: #FEF3C7;
+$warning-dark: #D97706;
+
+$error-color: #EF4444;
+$error-light: #FEE2E2;
+$error-dark: #DC2626;
+
+// 信息色
+$info-color: #6B7280;
+$info-light: #F3F4F6;
+
+// 灰度色板 - 与 Home.vue 保持一致
+$gray-50: #F9FAFB;
+$gray-100: #F3F4F6;
+$gray-200: #E5E7EB;
+$gray-300: #D1D5DB;
+$gray-400: #9CA3AF;
+$gray-500: #6B7280;
+$gray-600: #4B5563;
+$gray-700: #374151;
+$gray-800: #1F2937;
+$gray-900: #1d1d1f;
+
+// 背景色
+$bg-color: #f5f5f7;
+$surface-color: #FFFFFF;
+$border-color: #e8e8ed;
+
+// 文字色
+$text-primary: #1d1d1f;
+$text-secondary: #6e6e73;
+$text-disabled: #a1a1a6;
+
+// 收藏/星标色
+$star-color: $warning-color;
+
+// ============================================
+// 间距系统 (Spacing System) - 8px 网格
+// ============================================
+
+$spacing-xs: 4px;
+$spacing-sm: 8px;
+$spacing-md: 12px;
+$spacing-lg: 16px;
+$spacing-xl: 20px;
+$spacing-2xl: 24px;
+$spacing-3xl: 32px;
+$spacing-4xl: 48px;
+
+// ============================================
+// 圆角系统 (Border Radius)
+// ============================================
+
+$border-radius-sm: 8px;
+$border-radius-base: 12px;
+$border-radius-md: 12px;
+$border-radius-lg: 16px;
+$border-radius-xl: 16px;
+$border-radius-2xl: 16px;
+$border-radius-full: 9999px;
+
+// ============================================
+// 阴影系统 (Shadow System)
+// ============================================
+
+$shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+$shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+$shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+$shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+
+// 主色阴影
+$shadow-primary: 0 4px 14px rgba($primary-color, 0.35);
+$shadow-primary-hover: 0 6px 20px rgba($primary-color, 0.45);
+
+// 组件特定阴影
+$shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05);
+$shadow-button: 0 2px 4px rgba(0, 0, 0, 0.05);
+
+// ============================================
+// 字体系统 (Typography)
+// ============================================
+
+$font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+$font-size-xs: 12px;
+$font-size-sm: 13px;
+$font-size-base: 14px;
+$font-size-lg: 16px;
+$font-size-xl: 18px;
+$font-size-2xl: 20px;
+$font-size-3xl: 24px;
+$font-size-4xl: 30px;
+
+// ============================================
+// 过渡系统 (Transitions)
+// ============================================
+
+$transition-fast: 0.15s ease;
+$transition-normal: 0.25s ease;
+$transition-slow: 0.35s ease;
+
+// 贝塞尔曲线
+$ease-out-cubic: cubic-bezier(0.4, 0, 0.2, 1);
+$ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+// ============================================
+// 布局常量 (Layout Constants)
+// ============================================
+
+$header-height: 56px;
+$sidebar-width: 240px;
+$sidebar-collapsed-width: 64px;
+
+// 内容最大宽度
+$content-max-width: 1200px;
+
+// ============================================
+// 响应式断点 (Responsive Breakpoints)
+// ============================================
+
+$breakpoints: (
+  "xs": 360px,
+  // 小屏手机 (iPhone SE / 320~360)
+  "sm": 480px,
+  // 常规手机 (360~480)
+  "md": 640px,
+  // 大屏手机 / 小平板竖屏
+  "lg": 768px,
+  // 平板竖屏 / 手机横屏
+  "xl": 1024px,
+  // 平板横屏 / 小笔记本
+  "2xl": 1280px, // 桌面
+);
+
+// 移动端判定阈值：小于等于该宽度视为移动端
+$mobile-max-width: 768px;
+
+// ============================================
+// 移动端布局常量 (Mobile Layout Constants)
+// ============================================
+
+$m-navbar-height: 44px;
+$m-tabbar-height: 50px;
+$m-statusbar-height: 20px;
+
+// ============================================
+// 层级系统 (Z-Index)
+// ============================================
+
+$z-index-dropdown: 1000;
+$z-index-modal: 1100;
+$z-index-tooltip: 1200;
+$z-index-toast: 1300;
+
+// ============================================
+// CSS 自定义属性 (CSS Variables)
+// ============================================
+
+:root {
+  // 颜色变量
+  --primary-color: #{$primary-color};
+  --primary-light: #{$primary-light};
+  --primary-dark: #{$primary-dark};
+  --primary-hover: #{$primary-hover};
+
+  --success-color: #{$success-color};
+  --success-light: #{$success-light};
+  --success-dark: #{$success-dark};
+
+  --warning-color: #{$warning-color};
+  --warning-light: #{$warning-light};
+  --warning-dark: #{$warning-dark};
+
+  --error-color: #{$error-color};
+  --error-light: #{$error-light};
+  --error-dark: #{$error-dark};
+
+  --info-color: #{$info-color};
+  --info-light: #{$info-light};
+
+  // 灰度色
+  --gray-50: #{$gray-50};
+  --gray-100: #{$gray-100};
+  --gray-200: #{$gray-200};
+  --gray-300: #{$gray-300};
+  --gray-400: #{$gray-400};
+  --gray-500: #{$gray-500};
+  --gray-600: #{$gray-600};
+  --gray-700: #{$gray-700};
+  --gray-800: #{$gray-800};
+  --gray-900: #{$gray-900};
+
+  // 背景色
+  --bg-color: #{$bg-color};
+  --surface-color: #{$surface-color};
+  --border-color: #{$border-color};
+
+  // 文字色
+  --text-primary: #{$text-primary};
+  --text-secondary: #{$text-secondary};
+  --text-disabled: #{$text-disabled};
+
+  // 阴影
+  --shadow-sm: #{$shadow-sm};
+  --shadow-md: #{$shadow-md};
+  --shadow-lg: #{$shadow-lg};
+  --shadow-xl: #{$shadow-xl};
+  --shadow-primary: #{$shadow-primary};
+  --shadow-primary-hover: #{$shadow-primary-hover};
+
+  // 过渡
+  --transition-fast: #{$transition-fast};
+  --transition-normal: #{$transition-normal};
+  --transition-slow: #{$transition-slow};
+
+  // 圆角
+  --border-radius-sm: #{$border-radius-sm};
+  --border-radius-base: #{$border-radius-base};
+  --border-radius-md: #{$border-radius-md};
+  --border-radius-lg: #{$border-radius-lg};
+  --border-radius-xl: #{$border-radius-xl};
+  --border-radius-full: #{$border-radius-full};
+
+  // 移动端：动态视口高度（由 useDevice 写入，1vh 的真实像素值）
+  --vh: 1vh;
+  // 移动端：安全区
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  // 注意：--m-* 等移动端 CSS 变量不要定义在这里。
+  // 本文件经 vite additionalData 注入到每个组件的 style，而 scoped 组件中的
+  // :root 规则会被 Vue 改写为 :root[data-v-xxx]，永远无法匹配 <html>，
+  // 导致变量（尤其 :root.dark 下的深色值）全部失效。
+  // 移动端变量统一在 src/mobile/styles/mobile.scss（非 scoped）中定义。
+}
+
+// ============================================
+// 暗色主题 (Dark Theme)
+// ============================================
+
+:root.dark {
+  --primary-color: #{$primary-color};
+  --primary-light: rgba(#{$primary-color}, 0.2);
+
+  --success-color: #{$success-color};
+  --warning-color: #{$warning-color};
+  --error-color: #{$error-color};
+
+  --bg-color: #1a1a1a;
+  --surface-color: #2d2d2d;
+  --border-color: #404040;
+
+  --text-primary: #f5f5f5;
+  --text-secondary: #adadb3;
+  // 原值 #606060 在深色卡片（#1f1f1f）上对比度不足，抬亮保证可读
+  --text-disabled: #83838a;
+  // --m-* 移动端变量见 src/mobile/styles/mobile.scss（此处定义会因 scoped 失效）
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6);
+}

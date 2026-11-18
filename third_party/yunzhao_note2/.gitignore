@@ -1,0 +1,42 @@
+node_modules
+/dist*/
+.audit-unpacked/
+out
+output/
+.vs/
+.DS_Store
+.eslintcache
+*.log*
+/latest.yml
+/identifier.sqlite
+
+# C++ DLL 构建产物
+native_blur/build/
+*.aps
+*.user
+*.sln
+*.vcxproj*
+CMakeCache.txt
+CMakeFiles/
+# 内部发布流程文档，不上传仓库
+docs/完整发布流程.md
+docs/发布构建与应用更新流程.md
+
+# Local QA snapshots and native transition build artifacts
+/tmp/
+/native_blur/build-transition/
+/native_capture/build/
+/native_capture/deploy/
+
+# Isolated Electron test profiles retained locally beside acceptance evidence
+/docs/testing/evidence/**/temp-*/
+
+# Local working records and standalone experiments; keep files on this machine.
+/docs/planning/2026-10-20-system-improvement/
+/docs/releases/investigations/2026-10-19-release-optimization.md
+/docs/testing/2026-10-15-show-desktop-prototype.md
+/docs/testing/2026-10-19-z-order-failure-diagnostics.md
+/scripts/prototypes/frame-pacing/
+/scripts/prototypes/show-desktop/matrix.cjs
+/scripts/prototypes/show-desktop/probe.mjs
+/scripts/prototypes/show-desktop/run.cjs

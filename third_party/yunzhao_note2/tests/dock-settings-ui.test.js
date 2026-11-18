@@ -1,0 +1,81 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+
+const SETTINGS_PANEL_PATH = new URL(
+  '../src/renderer/src/components/system/SettingsPanel.vue',
+  import.meta.url
+)
+const HELP_PAGE_PATH = new URL(
+  '../src/renderer/src/components/help/help-content.js',
+  import.meta.url
+)
+const readDock = () =>
+  [
+    '../src/renderer/src/components/system/settings/DockSettingsSection.vue',
+    '../src/renderer/src/composables/useDockSettingsForm.js'
+  ]
+    .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+    .join('\n')
+
+describe('dock settings UI', () => {
+  it('offers all three reveal modes and all three edges in the shared settings panel', () => {
+    const source = readDock()
+
+    expect(source).toContain('<h4 class="section-title">贴边隐藏</h4>')
+    expect(source).toContain('>隐藏后的唤出方式<HelpButton')
+    expect(source).toContain('aria-label="隐藏后的唤出方式"')
+    expect(source).toContain("label: '直接唤出'")
+    expect(source).toContain("label: '触边确认'")
+    expect(source).toContain("label: '常显确认'")
+    expect(source).toContain('外部程序全屏时常显条会暂时收回')
+    expect(source).toContain('v-for="edge in dockEdgeOptions"')
+    expect(source).toContain(':aria-pressed="dockEnabledEdges.includes(edge.value)"')
+    expect(source).toContain('未选择边缘时，当前{{ currentViewLabel }}不会贴边隐藏')
+    const queue = readFileSync(
+      new URL('../src/renderer/src/composables/useSettingsWriteQueue.js', import.meta.url),
+      'utf8'
+    )
+    const panel = readFileSync(SETTINGS_PANEL_PATH, 'utf8')
+    expect(panel).toContain('write: (config) => settingsWrites.saveDockConfig(config)')
+    expect(queue).toContain('api.setDockConfig(config)')
+    expect(source).toContain('return !runtime.value.supported ||')
+    expect(source).toContain(':disabled="isDockRevealModeDisabled(option.value)"')
+    expect(source).toContain(':disabled="!dockRuntime.supported"')
+  })
+
+  it('documents per-view edge selection and all reveal modes', () => {
+    const source = readFileSync(HELP_PAGE_PATH, 'utf8')
+
+    expect(source).toContain('列表、月和周视图分别多选上、左、右边缘')
+    expect(source).toContain('“直接唤出”会在鼠标触边后立即展开窗口')
+    expect(source).toContain('“触边确认”会先显示小黑条')
+    expect(source).toContain('“常显确认”会在窗口收起完成后自动显示小黑条并保持')
+    expect(source).toContain('退出全屏后自动恢复')
+  })
+
+  it('reflows the three-mode selector against the settings panel width', () => {
+    const source = readDock()
+    const dockSection = source.slice(source.indexOf('<h4 class="section-title">贴边隐藏</h4>'))
+
+    expect(dockSection).toMatch(
+      /<div class="setting-item dock-reveal-setting">[\s\S]*?>隐藏后的唤出方式<HelpButton/
+    )
+    expect(readFileSync(SETTINGS_PANEL_PATH, 'utf8')).toContain('container-type: inline-size')
+    expect(source).toContain('@container (max-width: 340px)')
+    expect(source).toMatch(
+      /@container \(max-width: 340px\)[\s\S]*?\.dock-reveal-setting \.setting-right\s*{[\s\S]*?width:\s*100%/
+    )
+  })
+
+  it('loads the saved panel size before opening', () => {
+    const source = readFileSync(SETTINGS_PANEL_PATH, 'utf8')
+    const mountedBlock = source.slice(
+      source.indexOf('onMounted(async () => {'),
+      source.indexOf('onBeforeUnmount(() => {')
+    )
+
+    expect(mountedBlock.indexOf('await loadSettingsSnapshot()')).toBeLessThan(
+      mountedBlock.indexOf('openRaf = requestAnimationFrame')
+    )
+  })
+})

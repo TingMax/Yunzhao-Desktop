@@ -1,0 +1,158 @@
+const { access, mkdtemp, readdir, rm } = require('node:fs/promises')
+const { execFileSync } = require('node:child_process')
+const { tmpdir } = require('node:os')
+const path = require('node:path')
+const { pathToFileURL } = require('node:url')
+const { extractAll, listPackage } = require('@electron/asar')
+const { resolveNativeTarget } = require('./package-native-plan.cjs')
+
+const projectRoot = path.resolve(__dirname, '..')
+const captureRuntimeFiles = Object.freeze([
+  'YunzhaoCapture.exe',
+  'capture_host.dll',
+  'Qt6Core.dll',
+  'Qt6Gui.dll',
+  'Qt6Widgets.dll',
+  'Qt6Network.dll',
+  'platforms/qwindows.dll',
+  'imageformats/qjpeg.dll',
+  'imageformats/qwebp.dll',
+  'msvcp140.dll',
+  'vcruntime140.dll',
+  'vcruntime140_1.dll',
+  'LICENSE',
+  'THIRD_PARTY.md'
+])
+
+async function getExpectedNativeAbiVersion() {
+  const moduleUrl = pathToFileURL(
+    path.join(projectRoot, 'src', 'shared', 'native-abi-version.js')
+  ).href
+  const { NATIVE_ABI_VERSION } = await import(moduleUrl)
+  return NATIVE_ABI_VERSION
+}
+
+function validateWindowsNativeAbi(dllPath, expectedAbiVersion) {
+  const checkScript = [
+    "const koffi = require('koffi')",
+    'const library = koffi.load(process.argv[1])',
+    "const getAbiVersion = library.func('YunzhaoNative_GetAbiVersion', 'int', [])",
+    'process.stdout.write(String(getAbiVersion()))'
+  ].join(';')
+  const output = execFileSync(process.execPath, ['-e', checkScript, dllPath], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    windowsHide: true
+  })
+  const actualAbiVersion = Number(output.trim())
+  if (!Number.isInteger(actualAbiVersion) || actualAbiVersion !== expectedAbiVersion) {
+    throw new Error(
+      `Windows blur DLL ABI mismatch: expected=${expectedAbiVersion}, actual=${output.trim() || 'invalid'}`
+    )
+  }
+}
+
+async function exists(target) {
+  try {
+    await access(target)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function validateNativeBinaryPaths(paths, target) {
+  for (const entry of paths) {
+    const relativePath = entry.replaceAll('\\', '/')
+    if (
+      target.binaryScopes.some((scope) => relativePath.startsWith(scope + '/')) &&
+      /\.(?:node|dll|exe|dylib|so(?:\.\d+)*)$/i.test(relativePath) &&
+      !target.required.includes(relativePath)
+    ) {
+      throw new Error(
+        `Unexpected native module in ${target.platform}-${target.arch} package: ${relativePath}`
+      )
+    }
+  }
+}
+
+async function validatePackagedApp(context, dependencies = {}) {
+  const target = resolveNativeTarget(context)
+  const resourcesDir = context.packager.getResourcesDir(context.appOutDir)
+  const modulesDir = path.join(resourcesDir, 'app.asar.unpacked', 'node_modules')
+
+  for (const relativePath of target.required) {
+    await access(path.join(modulesDir, relativePath))
+  }
+
+  // 物理目录可能含 ASAR 索引之外的残留文件，须独立验证两个已知原生模块目录。
+  for (const scope of target.binaryScopes) {
+    const entries = await readdir(path.join(modulesDir, scope), { recursive: true })
+    validateNativeBinaryPaths(
+      entries.map((entry) => scope + '/' + entry),
+      target
+    )
+  }
+
+  const windowsBlurPath = path.join(resourcesDir, 'native_blur', 'blur_engine.dll')
+  for (const file of captureRuntimeFiles)
+    await access(path.join(resourcesDir, 'native_capture', file))
+  await access(windowsBlurPath)
+  const expectedAbiVersion = await getExpectedNativeAbiVersion()
+  const validateAbi = dependencies.validateWindowsNativeAbi || validateWindowsNativeAbi
+  validateAbi(windowsBlurPath, expectedAbiVersion)
+
+  const asarPath = path.join(resourcesDir, 'app.asar')
+  const asarEntries = listPackage(asarPath).map((entry) => entry.replaceAll('\\', '/'))
+  // 外来二进制也可能被错误地直接装入 ASAR，不能只检查 unpacked。
+  validateNativeBinaryPaths(
+    asarEntries
+      .filter((entry) => entry.startsWith('/node_modules/'))
+      .map((entry) => entry.slice('/node_modules/'.length)),
+    target
+  )
+  const forbiddenAsarPrefixes = [
+    '/.audit-unpacked/',
+    '/.git/',
+    '/build/',
+    '/docs/',
+    '/native_blur/',
+    '/native_capture/',
+    '/output/',
+    '/scripts/',
+    '/src/',
+    '/tests/',
+    '/tmp/',
+    '/tools/'
+  ]
+  const forbiddenAsarFiles = new Set(['/AGENTS.md'])
+  const leakedEntry = asarEntries.find(
+    (entry) =>
+      forbiddenAsarFiles.has(entry) ||
+      entry.startsWith('/electron-builder.') ||
+      forbiddenAsarPrefixes.some((prefix) => entry.startsWith(prefix))
+  )
+
+  if (leakedEntry) {
+    throw new Error(`Development file leaked into app.asar: ${leakedEntry}`)
+  }
+
+  const extractionRoot = await mkdtemp(path.join(tmpdir(), 'yunzhao-asar-verify-'))
+  try {
+    extractAll(asarPath, extractionRoot)
+    for (const entry of ['out/preload/reminder.js', 'out/renderer/reminder.html']) {
+      await access(path.join(extractionRoot, entry))
+    }
+  } finally {
+    await rm(extractionRoot, { recursive: true, force: true })
+  }
+
+  console.log(`[package-verify] ${target.platform}-${target.arch} native modules and ASAR verified`)
+}
+
+exports.default = validatePackagedApp
+exports.exists = exists
+exports.getExpectedNativeAbiVersion = getExpectedNativeAbiVersion
+exports.validateWindowsNativeAbi = validateWindowsNativeAbi
+exports.captureRuntimeFiles = captureRuntimeFiles

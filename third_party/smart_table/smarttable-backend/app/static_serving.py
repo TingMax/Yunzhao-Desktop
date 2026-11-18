@@ -1,0 +1,264 @@
+"""
+前端静态文件托管模块
+用于在 PyInstaller 打包后的单文件可执行程序中托管 Vue 前端资源
+
+功能：
+- 自动检测 PyInstaller 打包环境或开发环境
+- 提供 Vue SPA 的路由回退支持（history 模式）
+- 正确设置 MIME 类型以优化浏览器缓存
+- 支持前端资源的热重载（开发环境）
+"""
+
+import os
+import sys
+from flask import send_from_directory, abort
+
+# 全局标志：防止重复注册路由
+_static_serving_initialized = False
+
+
+def get_dist_path():
+    """
+    获取前端构建产物的目录路径
+    
+    优先级：
+    1. PyInstaller 打包后的临时目录 (sys._MEIPASS)
+    2. 开发环境：backend 目录的上级 dist（smart-table/dist）
+    
+    Returns:
+        str: dist 目录的绝对路径，如果不存在则返回 None
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后的临时目录
+        base_path = sys._MEIPASS
+    else:
+        # 开发环境：相对于 backend 目录
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    dist_path = os.path.join(base_path, 'dist')
+
+    # 如果开发环境的 dist 不存在，尝试项目根目录下的 smart-table/dist
+    if not os.path.exists(dist_path) and not getattr(sys, 'frozen', False):
+        alternative_path = os.path.join(base_path, '..', 'smart-table', 'dist')
+        if os.path.exists(alternative_path):
+            dist_path = os.path.abspath(alternative_path)
+
+    # Docker 环境中前端被复制到 /app/static
+    if not os.path.exists(dist_path):
+        static_path = os.path.join(base_path, 'static')
+        if os.path.exists(static_path):
+            dist_path = static_path
+
+    if os.path.exists(dist_path):
+        return os.path.abspath(dist_path)
+    
+    return None
+
+
+def configure_static_serving(app):
+    """
+    配置 Flask 应用以托管前端静态文件
+    
+    此函数会注册一个 catch-all 路由，用于：
+    - 提供前端构建产物（HTML/CSS/JS/图片等）
+    - 处理 Vue Router 的 history 模式回退到 index.html
+    - 将 API 请求 (/api/*) 和上传请求 (/uploads/*) 转发给后端路由处理
+    
+    Args:
+        app: Flask 应用实例
+        
+    Returns:
+        bool: 是否成功配置（如果 dist 目录不存在则返回 False）
+    """
+    global _static_serving_initialized
+
+    # 防止重复注册路由
+    if _static_serving_initialized:
+        print('[Static Serving] Already configured, skipping...')
+        return True
+
+    from app.services.attachment_service import AttachmentService
+
+    dist_path = get_dist_path()
+    
+    if not dist_path:
+        print('[Static Serving] ⚠️ Warning: Frontend dist directory not found!')
+        print('[Static Serving]   Please run "pnpm run build" in smart-table/ first.')
+        # 开发模式下前端由 Vite dev server 提供，此处不注册 catch-all 路由，
+        # 避免捕获 /api/* 请求导致 API 无法正常响应。
+        return False
+
+    print(f'[Static Serving] ✓ Frontend dist path: {dist_path}')
+
+    @app.route('/', defaults={'path': ''})
+    @app.route('/<path:path>', endpoint='serve_frontend')
+    def serve_frontend(path):
+        """处理所有非 API 请求，返回前端静态资源"""
+
+        # API 请求由其他路由处理；若因路由顺序问题被匹配到，直接 404，
+        # 避免 return None 导致 Flask 抛出 TypeError。
+        if path.startswith('api/'):
+            abort(404)
+
+        # ===== 上传文件请求：直接服务（避免返回 None 导致 TypeError）=====
+        if path.startswith('uploads/'):
+            try:
+                upload_path = AttachmentService.get_upload_path()
+                file_path = os.path.join(upload_path, path[8:])  # 去掉 "uploads/" 前缀
+
+                if os.path.isfile(file_path):
+                    filename = os.path.basename(file_path)
+                    # 文本/网页类文件强制以附件下载，避免浏览器内联执行
+                    response = send_from_directory(
+                        os.path.dirname(file_path),
+                        filename,
+                        as_attachment=AttachmentService.should_force_attachment(filename),
+                        download_name=filename,
+                        mimetype=AttachmentService.get_inline_mimetype(filename)
+                    )
+                    response.headers['X-Content-Type-Options'] = 'nosniff'
+                    return response
+            except Exception as e:
+                print(f'[Static Serving] ⚠️ uploads 文件服务失败: {e}')
+
+            abort(404)
+
+        # ===== 缓存策略（与 Nginx 部署保持一致）=====
+        # 精确匹配 version.json 和 index.html — 完全禁止缓存
+        # 带 hash 的 assets（/assets/xxx-abc123.js）— 长期 immutable 缓存
+        cache_headers_no_store = {
+            'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        }
+        cache_headers_immutable = {
+            'Cache-Control': 'public, immutable',
+            'Expires': '31536000',  # 30 天（秒）
+        }
+
+        # 尝试查找请求的静态文件
+        file_path = os.path.join(dist_path, path)
+        if path and os.path.isfile(file_path):
+            mimetype = _get_mimetype(path)
+            directory = os.path.dirname(file_path)
+            filename = os.path.basename(file_path)
+            response = send_from_directory(directory, filename, mimetype=mimetype)
+
+            # === 按资源类型设置缓存头 ===
+            basename = os.path.basename(path)
+            # version.json / index.html — 禁止缓存
+            if path in ('version.json', 'index.html') or basename == 'version.json' or basename == 'index.html':
+                for k, v in cache_headers_no_store.items():
+                    response.headers[k] = v
+            # /assets/ — immutable 长期缓存
+            elif path.startswith('assets/') or path.startswith('static/assets/'):
+                for k, v in cache_headers_immutable.items():
+                    response.headers[k] = v
+
+            # 安全头（通用）
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+
+            return response
+
+        # Vue Router history 模式：对于所有未匹配的路由，回退到 index.html
+        index_html = os.path.join(dist_path, 'index.html')
+        if os.path.isfile(index_html):
+            response = send_from_directory(dist_path, 'index.html', mimetype='text/html')
+
+            # index.html — 完全禁止缓存，确保每次都从服务器获取最新入口页
+            for k, v in cache_headers_no_store.items():
+                response.headers[k] = v
+
+            # 安全头（防止点击劫持等攻击）
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+
+            return response
+
+        # 都找不到则返回 404
+        abort(404)
+
+    print(f'[Static Serving] ✓ Frontend dist path: {dist_path}')
+    print('[Static Serving] ✓ Static file serving configured')
+    _static_serving_initialized = True
+    return True
+
+
+def _get_mimetype(filepath):
+    """
+    根据文件扩展名获取 MIME 类型
+    
+    Args:
+        filepath: 文件路径
+        
+    Returns:
+        str: MIME 类型字符串
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    
+    mime_types = {
+        # HTML
+        '.html': 'text/html',
+        '.htm': 'text/html',
+        
+        # CSS
+        '.css': 'text/css',
+        
+        # JavaScript
+        '.js': 'application/javascript',
+        '.mjs': 'application/javascript',
+        '.cjs': 'application/javascript',
+        
+        # JSON
+        '.json': 'application/json',
+        '.map': 'application/json',
+        
+        # 图片
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
+        '.ico': 'image/x-icon',
+        '.bmp': 'image/bmp',
+        
+        # 字体
+        '.woff': 'font/woff',
+        '.woff2': 'font/woff2',
+        '.ttf': 'font/ttf',
+        '.otf': 'font/otf',
+        '.eot': 'application/vnd.ms-fontobject',
+        
+        # 音频/视频
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.mp4': 'video/mp4',
+        '.webm': 'video/webm',
+        
+        # 文档
+        '.pdf': 'application/pdf',
+        '.xml': 'application/xml',
+        
+        # 其他常见类型
+        '.txt': 'text/plain',
+        '.wasm': 'application/wasm',
+    }
+    
+    return mime_types.get(ext, 'application/octet-stream')
+
+
+def is_dist_available():
+    """
+    检查前端构建产物是否可用
+    
+    Returns:
+        bool: 如果 dist 目录存在且包含 index.html 则返回 True
+    """
+    dist_path = get_dist_path()
+    if not dist_path:
+        return False
+    
+    index_html = os.path.join(dist_path, 'index.html')
+    return os.path.isfile(index_html)

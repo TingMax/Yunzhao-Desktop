@@ -1,0 +1,186 @@
+import { describe, expect, it, vi } from 'vitest'
+import { ViewVisibilityShortcutService } from '../src/main/services/view-visibility-shortcut.js'
+
+function createHarness({ rejected = [] } = {}) {
+  const callbacks = new Map()
+  const globalShortcut = {
+    register: vi.fn((accelerator, callback) => {
+      if (rejected.includes(accelerator) || callbacks.has(accelerator)) return false
+      callbacks.set(accelerator, callback)
+      return true
+    }),
+    unregister: vi.fn((accelerator) => callbacks.delete(accelerator))
+  }
+  const onTrigger = vi.fn()
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  const service = new ViewVisibilityShortcutService({ globalShortcut, onTrigger, logger })
+  return { callbacks, globalShortcut, logger, onTrigger, service }
+}
+
+describe('ViewVisibilityShortcutService', () => {
+  it('recovers a released startup conflict without rewriting settings or replacing a working binding', () => {
+    const rejected = ['F2']
+    const { service, globalShortcut, callbacks } = createHarness({ rejected })
+    expect(service.initialize('F2').error.code).toBe('conflict')
+    expect(service.retryRegistration().registered).toBe(false)
+    rejected.length = 0
+    expect(service.retryRegistration()).toMatchObject({
+      configured: 'F2',
+      registered: true,
+      error: null
+    })
+    const binding = callbacks.get('F2')
+    globalShortcut.register.mockClear()
+    expect(service.retryRegistration().registered).toBe(true)
+    expect(globalShortcut.register).not.toHaveBeenCalled()
+    expect(callbacks.get('F2')).toBe(binding)
+  })
+
+  it('does not enable disabled or cleared shortcuts or end an active recording during retry', () => {
+    const { service, globalShortcut } = createHarness()
+    service.initialize('F2', { enabled: false })
+    service.retryRegistration()
+    expect(globalShortcut.register).not.toHaveBeenCalled()
+    service.setEnabled(true)
+    service.beginCapture(7)
+    globalShortcut.register.mockClear()
+    expect(service.retryRegistration()).toMatchObject({ capturing: true, registered: false })
+    expect(globalShortcut.register).not.toHaveBeenCalled()
+    service.endCapture(7)
+    service.initialize('')
+    globalShortcut.register.mockClear()
+    service.retryRegistration()
+    expect(globalShortcut.register).not.toHaveBeenCalled()
+  })
+
+  it('restores the saved shortcut at startup and invokes the visibility callback', () => {
+    const { callbacks, onTrigger, service } = createHarness()
+
+    expect(service.initialize('Control+Alt+N')).toMatchObject({
+      configured: 'Control+Alt+N',
+      registered: true,
+      capturing: false
+    })
+    callbacks.get('Control+Alt+N')()
+    expect(onTrigger).toHaveBeenCalledTimes(1)
+  })
+
+  it('temporarily unregisters during recording and restores on cancellation', () => {
+    const { callbacks, globalShortcut, service } = createHarness()
+    service.initialize('Control+Alt+N')
+
+    expect(service.beginCapture(7)).toMatchObject({ registered: false, capturing: true })
+    expect(callbacks.has('Control+Alt+N')).toBe(false)
+    expect(service.endCapture(7)).toMatchObject({ registered: true, capturing: false })
+    expect(globalShortcut.register).toHaveBeenLastCalledWith('Control+Alt+N', expect.any(Function))
+  })
+
+  it('cancels recording and unregisters the old shortcut when defaults are reapplied', () => {
+    const { callbacks, service } = createHarness()
+    service.initialize('Control+Alt+N')
+    service.beginCapture(7)
+
+    expect(service.initialize('')).toMatchObject({
+      configured: '',
+      registered: false,
+      capturing: false
+    })
+    expect(callbacks.size).toBe(0)
+  })
+
+  it('records a stale trigger callback that arrives while shortcut capture is active', () => {
+    const { logger, onTrigger, service } = createHarness()
+    service.initialize('Control+Alt+N')
+    service.beginCapture(7)
+
+    service.handleTrigger()
+
+    expect(onTrigger).not.toHaveBeenCalled()
+    expect(logger.info).toHaveBeenCalledWith(
+      'shortcut.view-visibility-trigger',
+      '显示/隐藏快捷键触发被忽略',
+      { action: 'ignored', reason: 'capture' }
+    )
+  })
+
+  it('keeps recording and preserves the old value when a candidate conflicts', () => {
+    const { callbacks, service } = createHarness({ rejected: ['Control+Alt+M'] })
+    service.initialize('Control+Alt+N')
+    service.beginCapture(7)
+
+    const result = service.update('Control+Alt+M', { ownerId: 7, persist: vi.fn() })
+
+    expect(result).toMatchObject({ status: 'conflict', accelerator: 'Control+Alt+M' })
+    expect(result.runtime).toMatchObject({ configured: 'Control+Alt+N', capturing: true })
+    expect(callbacks.size).toBe(0)
+    expect(service.endCapture(7).registered).toBe(true)
+    expect(callbacks.has('Control+Alt+N')).toBe(true)
+  })
+
+  it('revalidates an unchanged saved shortcut when startup registration had failed', () => {
+    const { service } = createHarness({ rejected: ['Control+Alt+N'] })
+    expect(service.initialize('Control+Alt+N')).toMatchObject({ registered: false })
+    service.beginCapture(7)
+
+    expect(
+      service.update('Control+Alt+N', {
+        ownerId: 7,
+        persist: vi.fn()
+      })
+    ).toMatchObject({
+      status: 'conflict',
+      runtime: { configured: 'Control+Alt+N', registered: false, capturing: true }
+    })
+  })
+
+  it('replaces and persists a valid shortcut transactionally', () => {
+    const { callbacks, globalShortcut, service } = createHarness()
+    const persist = vi.fn()
+    service.initialize('Control+Alt+N')
+    service.beginCapture(7)
+
+    expect(service.update('Control+Shift+F11', { ownerId: 7, persist })).toMatchObject({
+      status: 'saved',
+      accelerator: 'Control+Shift+F11',
+      runtime: { configured: 'Control+Shift+F11', registered: true, capturing: false }
+    })
+    expect(persist).toHaveBeenCalledWith('Control+Shift+F11')
+    expect(globalShortcut.unregister).toHaveBeenCalledWith('Control+Alt+N')
+    expect(callbacks.has('Control+Shift+F11')).toBe(true)
+  })
+
+  it('rolls back a candidate if persistence fails and restores the old shortcut', () => {
+    const { callbacks, service } = createHarness()
+    service.initialize('Control+Alt+N')
+    service.beginCapture(7)
+
+    const result = service.update('Control+Alt+M', {
+      ownerId: 7,
+      persist: () => {
+        throw new Error('database unavailable')
+      }
+    })
+
+    expect(result).toMatchObject({ status: 'failed', accelerator: 'Control+Alt+N' })
+    expect(callbacks.has('Control+Alt+M')).toBe(false)
+    expect(service.endCapture(7)).toMatchObject({
+      configured: 'Control+Alt+N',
+      registered: true,
+      capturing: false
+    })
+  })
+
+  it('clears the configured shortcut and unregisters it', () => {
+    const { callbacks, service } = createHarness()
+    const persist = vi.fn()
+    service.initialize('F11')
+
+    expect(service.update('', { ownerId: 7, persist })).toMatchObject({
+      status: 'cleared',
+      accelerator: '',
+      runtime: { configured: '', registered: false }
+    })
+    expect(persist).toHaveBeenCalledWith('')
+    expect(callbacks.size).toBe(0)
+  })
+})

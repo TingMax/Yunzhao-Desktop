@@ -1,0 +1,158 @@
+import { app, BrowserWindow } from 'electron'
+import { resolve } from 'node:path'
+import koffi from 'koffi'
+import { createElectronGuiResultLifecycle } from './helpers/electron-gui-result-lifecycle.mjs'
+
+const lifecycle = createElectronGuiResultLifecycle({
+  app,
+  BrowserWindow,
+  suite: 'tests/window-frame-electron.mjs',
+  mode: 'electron-legacy-window-fixture',
+  prefix: 'yunzhao-window-frame-',
+  metadata: { realWindows: true, nativeMotion: true, productMainProcess: false }
+})
+const { assert } = lifecycle
+app.setPath('userData', lifecycle.root)
+
+const GWL_STYLE = -16
+const WS_THICKFRAME = 0x00040000
+
+function readNativeHandle(window) {
+  const buffer = window.getNativeWindowHandle()
+  return process.arch === 'x64' ? buffer.readBigUInt64LE(0) : BigInt(buffer.readUInt32LE(0))
+}
+
+app.once('ready', async () => {
+  let window = null
+  let completed = false
+  let failure = null
+
+  try {
+    const user32 = koffi.load('user32.dll')
+    const getWindowLongPtr = user32.func('intptr_t GetWindowLongPtrW(void *hWnd, int nIndex)')
+    const motionLibrary = koffi.load(
+      process.env.YUNZHAO_NATIVE_DLL_PATH ||
+        resolve('native_blur', 'build', 'bin', 'blur_engine.dll')
+    )
+    const getMotionSnapshot = motionLibrary.func('WindowMotion_GetSnapshotJson', 'str', [
+      'intptr_t'
+    ])
+    const moveWindowPhysical = motionLibrary.func('WindowMotion_MoveWindow', 'int', [
+      'intptr_t',
+      'int',
+      'int'
+    ])
+    const isEdgeExposed = motionLibrary.func('WindowMotion_IsEdgeExposed', 'int', [
+      'intptr_t',
+      'int'
+    ])
+
+    window = new BrowserWindow({
+      show: true,
+      frame: false,
+      transparent: true,
+      thickFrame: false,
+      width: 367,
+      height: 734
+    })
+    await window.loadURL('data:text/html,<body style="margin:0"></body>')
+
+    const style = BigInt.asUintN(64, BigInt(getWindowLongPtr(readNativeHandle(window), GWL_STYLE)))
+    assert.equal(
+      style & BigInt(WS_THICKFRAME),
+      0n,
+      `thickFrame:false must omit WS_THICKFRAME; actual style=0x${style.toString(16)}`
+    )
+
+    const hwnd = readNativeHandle(window)
+    const initialBounds = window.getBounds()
+    const initialContentBounds = window.getContentBounds()
+    const initialNative = JSON.parse(getMotionSnapshot(hwnd))
+    assert.equal(initialNative.window.valid, true)
+    assert.equal(initialNative.monitor.valid, true)
+    assert.ok([0, 1].includes(isEdgeExposed(hwnd, -1)))
+    assert.ok([0, 1].includes(isEdgeExposed(hwnd, 1)))
+    assert.ok([0, 1].includes(isEdgeExposed(hwnd, -2)))
+    assert.ok([0, 1].includes(isEdgeExposed(hwnd, 2)))
+    assert.equal(isEdgeExposed(hwnd, 0), 0)
+
+    const assertSizeInvariant = () => {
+      const currentBounds = window.getBounds()
+      const currentContentBounds = window.getContentBounds()
+      const currentNative = JSON.parse(getMotionSnapshot(hwnd))
+      assert.equal(currentBounds.width, initialBounds.width)
+      assert.equal(currentBounds.height, initialBounds.height)
+      assert.equal(currentContentBounds.width, initialContentBounds.width)
+      assert.equal(currentContentBounds.height, initialContentBounds.height)
+      assert.equal(currentNative.window.width, initialNative.window.width)
+      assert.equal(currentNative.window.height, initialNative.window.height)
+      return currentNative
+    }
+
+    for (const side of ['left', 'right', 'top', 'bottom']) {
+      for (let cycle = 0; cycle < 50; cycle += 1) {
+        const vertical = side === 'top' || side === 'bottom'
+        const hiddenX = vertical
+          ? initialNative.window.left
+          : side === 'left'
+            ? initialNative.monitor.workLeft - initialNative.window.width - 5
+            : initialNative.monitor.workRight + 5
+        const hiddenY = !vertical
+          ? initialNative.window.top
+          : side === 'top'
+            ? initialNative.monitor.workTop - initialNative.window.height - 5
+            : initialNative.monitor.workBottom + 5
+        const visibleX = vertical
+          ? initialNative.window.left
+          : side === 'left'
+            ? initialNative.monitor.workLeft
+            : initialNative.monitor.workRight - initialNative.window.width
+        const visibleY = !vertical
+          ? initialNative.window.top
+          : side === 'top'
+            ? initialNative.monitor.workTop
+            : initialNative.monitor.workBottom - initialNative.window.height
+
+        assert.equal(moveWindowPhysical(hwnd, hiddenX, hiddenY), 1)
+        await new Promise((resolveFrame) => setTimeout(resolveFrame, 0))
+        const hidden = assertSizeInvariant()
+        if (side === 'left') {
+          assert.ok(
+            hidden.window.right <= initialNative.monitor.workLeft,
+            `left-hidden window leaked ${hidden.window.right - initialNative.monitor.workLeft}px`
+          )
+        } else {
+          if (side === 'right') {
+            assert.ok(
+              hidden.window.left >= initialNative.monitor.workRight,
+              `right-hidden window leaked ${initialNative.monitor.workRight - hidden.window.left}px`
+            )
+          } else if (side === 'top') {
+            assert.ok(
+              hidden.window.bottom <= initialNative.monitor.workTop,
+              `top-hidden window leaked ${hidden.window.bottom - initialNative.monitor.workTop}px`
+            )
+          } else {
+            assert.ok(
+              hidden.window.top >= initialNative.monitor.workBottom,
+              `bottom-hidden window leaked ${initialNative.monitor.workBottom - hidden.window.top}px`
+            )
+          }
+        }
+
+        assert.equal(moveWindowPhysical(hwnd, visibleX, visibleY), 1)
+        await new Promise((resolveFrame) => setTimeout(resolveFrame, 0))
+        const visible = assertSizeInvariant()
+        assert.equal(visible.window.left, visibleX)
+        assert.equal(visible.window.top, visibleY)
+      }
+    }
+    console.log('frameless window style and four-sided motion integration test passed')
+    completed = true
+  } catch (error) {
+    console.error(error)
+    failure = error
+  } finally {
+    await lifecycle.finish({ completed, error: failure, window })
+  }
+})

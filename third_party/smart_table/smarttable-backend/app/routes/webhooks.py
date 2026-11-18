@@ -1,0 +1,629 @@
+"""
+Webhook 路由模块
+处理 Webhook 配置的 CRUD 操作、测试发送和投递日志查询
+"""
+import secrets
+from urllib.parse import urlparse
+
+from flask import Blueprint, request, g
+
+from app.i18n import translate
+from app.models.base import MemberRole
+from app.models.webhook import WebhookConfig, WebhookDeliveryLog, WebhookMethod
+from app.services.permission_service import PermissionService
+from app.services.webhook_service import WebhookService
+from app.utils.decorators import jwt_required
+from app.utils.response import (
+    success_response, error_response, not_found_response,
+    forbidden_response, paginated_response
+)
+
+webhooks_bp = Blueprint('webhooks', __name__)
+# 禁用严格斜杠，允许带或不带斜杠的 URL
+webhooks_bp.strict_slashes = False
+
+
+def _get_webhook_or_404(webhook_id):
+    """获取 Webhook 配置，不存在时返回 None"""
+    return WebhookConfig.query.get(webhook_id)
+
+
+def _check_base_permission(base_id, min_role=MemberRole.VIEWER):
+    """检查当前用户对 Base 的权限"""
+    return PermissionService.check_permission(
+        str(base_id), str(g.current_user_id), min_role
+    )
+
+
+def _get_webhook_references(webhook_id):
+    """查询 Webhook 在未删除工作流中的引用关系
+
+    扫描所有未软删除工作流的 WEBHOOK 类型节点，匹配 config.webhook_id
+    或 config.webhook_config_id 等于目标 webhook_id 的节点。
+
+    Returns:
+        list: 引用信息列表，结构为
+        [{"workflow_id", "workflow_name", "workflow_status", "node_id", "node_name"}]
+    """
+    from app.models.workflow import (
+        Workflow, WorkflowNode, WorkflowNodeType, WorkflowStatus
+    )
+
+    references = []
+    nodes = (
+        WorkflowNode.query
+        .join(Workflow, WorkflowNode.workflow_id == Workflow.id)
+        .filter(
+            Workflow.is_deleted == False,  # noqa: E712
+            WorkflowNode.node_type == WorkflowNodeType.WEBHOOK,
+        )
+        .all()
+    )
+
+    target_id_str = str(webhook_id)
+    for node in nodes:
+        config = node.config or {}
+        ref_id = config.get('webhook_id') or config.get('webhook_config_id')
+        if ref_id is None:
+            continue
+        if str(ref_id) == target_id_str:
+            workflow = node.workflow
+            status_value = (
+                workflow.status.value
+                if isinstance(workflow.status, WorkflowStatus)
+                else workflow.status
+            )
+            references.append({
+                'workflow_id': str(workflow.id),
+                'workflow_name': workflow.name,
+                'workflow_status': status_value,
+                'node_id': str(node.id),
+                'node_name': node.name,
+            })
+    return references
+
+
+def _normalize_method(method):
+    """将请求方法字符串转换为 WebhookMethod 枚举"""
+    if isinstance(method, WebhookMethod):
+        return method
+    method_str = str(method).upper() if method else 'POST'
+    try:
+        return WebhookMethod(method_str)
+    except ValueError:
+        return None
+
+
+@webhooks_bp.route('/bases/<uuid:base_id>/webhooks', methods=['GET'])
+@jwt_required
+def get_webhooks(base_id):
+    """
+    获取 Base 下的 Webhook 配置列表
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: base_id
+        in: path
+        type: string
+        required: true
+        description: 基础数据 ID
+    responses:
+      200:
+        description: Webhook 配置列表
+    """
+    if not _check_base_permission(base_id, MemberRole.VIEWER):
+        return forbidden_response('no_permission_access_base')
+
+    webhooks = WebhookConfig.query.filter_by(base_id=base_id).order_by(
+        WebhookConfig.created_at.desc()
+    ).all()
+
+    return success_response(
+        data=[webhook.to_dict() for webhook in webhooks],
+        message='fetched_webhook_list_successfully'
+    )
+
+
+@webhooks_bp.route('/bases/<uuid:base_id>/webhooks', methods=['POST'])
+@jwt_required
+def create_webhook(base_id):
+    """
+    在 Base 下创建 Webhook 配置
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: base_id
+        in: path
+        type: string
+        required: true
+        description: 基础数据 ID
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          required:
+            - name
+            - url
+          properties:
+            name:
+              type: string
+              description: Webhook 名称
+            url:
+              type: string
+              description: 请求地址
+            method:
+              type: string
+              enum: ['GET', 'POST', 'PUT']
+              default: 'POST'
+              description: 请求方法
+            headers:
+              type: object
+              description: 自定义请求头
+            body_template:
+              type: string
+              description: 请求体模板
+            secret:
+              type: string
+              description: 签名密钥（不填则自动生成）
+            retry_policy:
+              type: object
+              description: 重试策略
+    responses:
+      201:
+        description: 创建的 Webhook 配置详情
+    """
+    if not _check_base_permission(base_id, MemberRole.EDITOR):
+        return forbidden_response('do_not_permission_create_webhook_base')
+
+    data = request.get_json() or {}
+
+    # 验证必填字段
+    name = (data.get('name') or '').strip()
+    if not name:
+        return error_response('webhook_name_empty', code=400)
+    if len(name) > 200:
+        return error_response('webhook_name_exceed_characters', code=400)
+
+    url = (data.get('url') or '').strip()
+    if not url:
+        return error_response('webhook_url_empty', code=400)
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return error_response('invalid_webhook_url_format', code=400)
+
+    method = _normalize_method(data.get('method', 'POST'))
+    if method is None:
+        return error_response('request_method_get_post_put', code=400)
+
+    headers = data.get('headers', {})
+    if not isinstance(headers, dict):
+        return error_response('headers_object', code=400)
+
+    retry_policy = data.get('retry_policy', {})
+    if not isinstance(retry_policy, dict):
+        return error_response('retry_policy_object', code=400)
+
+    secret = data.get('secret')
+    if secret is None or secret == '':
+        secret = secrets.token_hex(32)
+
+    webhook = WebhookConfig(
+        base_id=base_id,
+        name=name,
+        url=url,
+        method=method,
+        headers=headers,
+        body_template=data.get('body_template'),
+        secret=secret,
+        retry_policy=retry_policy,
+        is_active=data.get('is_active', True),
+        created_by=g.current_user_id
+    )
+
+    from app.extensions import db
+    db.session.add(webhook)
+    db.session.commit()
+
+    return success_response(
+        data=webhook.to_dict(),
+        message='webhook_created_successfully',
+        code=201
+    )
+
+
+@webhooks_bp.route('/webhooks/<uuid:webhook_id>', methods=['GET'])
+@jwt_required
+def get_webhook(webhook_id):
+    """
+    获取 Webhook 配置详情
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: webhook_id
+        in: path
+        type: string
+        required: true
+        description: Webhook 配置 ID
+    responses:
+      200:
+        description: Webhook 配置详情
+      404:
+        description: Webhook 配置不存在
+    """
+    webhook = _get_webhook_or_404(webhook_id)
+    if not webhook:
+        return not_found_response('webhook_configuration')
+
+    if not _check_base_permission(webhook.base_id, MemberRole.VIEWER):
+        return forbidden_response('no_permission_access_webhook')
+
+    return success_response(
+        data=webhook.to_dict(),
+        message='fetched_webhook_details_successfully'
+    )
+
+
+@webhooks_bp.route('/webhooks/<uuid:webhook_id>', methods=['PUT'])
+@jwt_required
+def update_webhook(webhook_id):
+    """
+    更新 Webhook 配置
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: webhook_id
+        in: path
+        type: string
+        required: true
+        description: Webhook 配置 ID
+      - name: body
+        in: body
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+              description: Webhook 名称
+            url:
+              type: string
+              description: 请求地址
+            method:
+              type: string
+              enum: ['GET', 'POST', 'PUT']
+              description: 请求方法
+            headers:
+              type: object
+              description: 自定义请求头
+            body_template:
+              type: string
+              description: 请求体模板
+            secret:
+              type: string
+              description: 签名密钥
+            retry_policy:
+              type: object
+              description: 重试策略
+            is_active:
+              type: boolean
+              description: 是否启用
+    responses:
+      200:
+        description: 更新后的 Webhook 配置详情
+    """
+    webhook = _get_webhook_or_404(webhook_id)
+    if not webhook:
+        return not_found_response('webhook_configuration')
+
+    if not _check_base_permission(webhook.base_id, MemberRole.EDITOR):
+        return forbidden_response('do_not_permission_modify_webhook')
+
+    data = request.get_json() or {}
+
+    if 'name' in data:
+        name = (data['name'] or '').strip()
+        if not name:
+            return error_response('webhook_name_empty', code=400)
+        if len(name) > 200:
+            return error_response('webhook_name_exceed_characters', code=400)
+        webhook.name = name
+
+    if 'url' in data:
+        url = (data['url'] or '').strip()
+        if not url:
+            return error_response('webhook_url_empty', code=400)
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return error_response('invalid_webhook_url_format', code=400)
+        webhook.url = url
+
+    if 'method' in data:
+        method = _normalize_method(data['method'])
+        if method is None:
+            return error_response('request_method_get_post_put', code=400)
+        webhook.method = method
+
+    if 'headers' in data:
+        headers = data['headers']
+        if not isinstance(headers, dict):
+            return error_response('headers_object', code=400)
+        webhook.headers = headers
+
+    if 'body_template' in data:
+        webhook.body_template = data['body_template']
+
+    if 'secret' in data:
+        secret = data['secret']
+        if secret is None or secret == '':
+            secret = secrets.token_hex(32)
+        webhook.secret = secret
+
+    if 'retry_policy' in data:
+        retry_policy = data['retry_policy']
+        if not isinstance(retry_policy, dict):
+            return error_response('retry_policy_object', code=400)
+        webhook.retry_policy = retry_policy
+
+    if 'is_active' in data:
+        webhook.is_active = bool(data['is_active'])
+
+    from app.extensions import db
+    db.session.commit()
+
+    return success_response(
+        data=webhook.to_dict(),
+        message='webhook_updated_successfully'
+    )
+
+
+@webhooks_bp.route('/webhooks/<uuid:webhook_id>/references', methods=['GET'])
+@jwt_required
+def get_webhook_references(webhook_id):
+    """
+    查询 Webhook 在工作流中的引用关系
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: webhook_id
+        in: path
+        type: string
+        required: true
+        description: Webhook 配置 ID
+    responses:
+      200:
+        description: 引用信息列表
+      404:
+        description: Webhook 配置不存在
+    """
+    webhook = _get_webhook_or_404(webhook_id)
+    if not webhook:
+        return not_found_response('webhook_configuration')
+
+    if not _check_base_permission(webhook.base_id, MemberRole.VIEWER):
+        return forbidden_response('do_not_permission_view_reference_information_webhook')
+
+    references = _get_webhook_references(webhook_id)
+    return success_response(
+        data={'references': references, 'count': len(references)},
+        message='fetched_webhook_reference_information_successfully'
+    )
+
+
+@webhooks_bp.route('/webhooks/<uuid:webhook_id>', methods=['DELETE'])
+@jwt_required
+def delete_webhook(webhook_id):
+    """
+    删除 Webhook 配置
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: webhook_id
+        in: path
+        type: string
+        required: true
+        description: Webhook 配置 ID
+    responses:
+      200:
+        description: 删除成功
+      409:
+        description: Webhook 已被引用，无法删除
+    """
+    webhook = _get_webhook_or_404(webhook_id)
+    if not webhook:
+        return not_found_response('webhook_configuration')
+
+    if not _check_base_permission(webhook.base_id, MemberRole.EDITOR):
+        return forbidden_response('do_not_permission_delete_webhook')
+
+    # 引用校验：被工作流引用时阻止删除
+    references = _get_webhook_references(webhook_id)
+    if references:
+        return error_response(
+            message=translate('webhook_referenced_cannot_delete', len(references)),
+            code=409,
+            error='webhook_in_use',
+            details=[{
+                'workflow_id': ref['workflow_id'],
+                'workflow_name': ref['workflow_name'],
+                'node_name': ref['node_name'],
+            } for ref in references]
+        )
+
+    from app.extensions import db
+    db.session.delete(webhook)
+    db.session.commit()
+
+    return success_response(message='webhook_deleted_successfully')
+
+
+@webhooks_bp.route('/webhooks/<uuid:webhook_id>/test', methods=['POST'])
+@jwt_required
+def test_webhook(webhook_id):
+    """
+    测试发送 Webhook
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: webhook_id
+        in: path
+        type: string
+        required: true
+        description: Webhook 配置 ID
+    responses:
+      200:
+        description: 测试结果
+    """
+    webhook = _get_webhook_or_404(webhook_id)
+    if not webhook:
+        return not_found_response('webhook_configuration')
+
+    if not _check_base_permission(webhook.base_id, MemberRole.EDITOR):
+        return forbidden_response('do_not_permission_test_webhook')
+
+    result = WebhookService.test_webhook(webhook)
+
+    if result.get('success'):
+        return success_response(
+            data=result,
+            message='webhook_test_sent_successfully'
+        )
+
+    return error_response(
+        message=result.get('error_message', 'webhook_test_send_failed'),
+        code=400,
+        error='webhook_test_failed',
+        details=[{
+            'field': 'delivery',
+            'message': result.get('error_message', 'unknown_error')
+        }]
+    )
+
+
+@webhooks_bp.route('/webhooks/<uuid:webhook_id>/deliveries', methods=['GET'])
+@jwt_required
+def get_webhook_deliveries(webhook_id):
+    """
+    获取 Webhook 投递日志
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: webhook_id
+        in: path
+        type: string
+        required: true
+        description: Webhook 配置 ID
+      - name: page
+        in: query
+        type: integer
+        default: 1
+        description: 页码
+      - name: per_page
+        in: query
+        type: integer
+        default: 20
+        description: 每页数量
+    responses:
+      200:
+        description: 投递日志列表
+    """
+    webhook = _get_webhook_or_404(webhook_id)
+    if not webhook:
+        return not_found_response('webhook_configuration')
+
+    if not _check_base_permission(webhook.base_id, MemberRole.VIEWER):
+        return forbidden_response('do_not_permission_view_delivery_logs_webhook')
+
+    try:
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+    except ValueError:
+        return error_response('pagination_parameters_integers', code=400)
+
+    if page < 1:
+        page = 1
+    if per_page < 1:
+        per_page = 1
+    if per_page > 100:
+        per_page = 100
+
+    query = WebhookDeliveryLog.query.filter_by(webhook_config_id=webhook_id).order_by(
+        WebhookDeliveryLog.created_at.desc()
+    )
+    total = query.count()
+    logs = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    return paginated_response(
+        items=[log.to_dict() for log in logs],
+        total=total,
+        page=page,
+        per_page=per_page,
+        message='fetched_delivery_logs_successfully'
+    )
+
+
+@webhooks_bp.route('/webhooks/deliveries/<uuid:delivery_id>/redeliver', methods=['POST'])
+@jwt_required
+def redeliver_webhook(delivery_id):
+    """
+    重新投递 Webhook
+    ---
+    tags:
+      - Webhooks
+    security:
+      - Bearer: []
+    parameters:
+      - name: delivery_id
+        in: path
+        type: string
+        required: true
+        description: 投递记录 ID
+    responses:
+      200:
+        description: 重新投递成功
+      403:
+        description: 无权限
+      404:
+        description: 投递记录或 Webhook 配置不存在
+    """
+    delivery_log = WebhookDeliveryLog.query.get(delivery_id)
+    if not delivery_log:
+        return not_found_response('delivery_log')
+
+    webhook_config = WebhookConfig.query.get(delivery_log.webhook_config_id) if delivery_log.webhook_config_id else None
+    if not webhook_config:
+        if delivery_log.webhook_config_id is None:
+            return error_response('inline_webhook_does_not_support_redelivery', code=400)
+        return not_found_response('webhook_configuration')
+
+    if not _check_base_permission(webhook_config.base_id, MemberRole.EDITOR):
+        return forbidden_response('do_not_permission_redeliver_webhook')
+
+    try:
+        result = WebhookService.redeliver(delivery_log)
+        return success_response(data=result, message='redelivered_successfully')
+    except Exception as e:
+        return error_response(translate('redelivery_failed', e), code=500)

@@ -1,0 +1,519 @@
+<template>
+  <div class="communications-container">
+    <el-card shadow="never">
+      <template #header>
+        <div class="header-actions">
+          <el-input
+            v-model="searchQuery"
+            placeholder="搜索学生或内容"
+            style="width: 250px"
+            clearable
+            @input="filterList"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <div class="action-buttons">
+            <el-button
+              v-if="selectedRows.length"
+              type="danger"
+              plain
+              @click="handleBatchDelete"
+            >
+              <el-icon><Delete /></el-icon>批量删除（{{ selectedRows.length }}）
+            </el-button>
+            <el-button type="primary" @click="openCreate">
+              <el-icon><Plus /></el-icon>登记沟通
+            </el-button>
+          </div>
+        </div>
+      </template>
+
+      <el-table :data="pagedData" style="width: 100%" v-loading="loading" @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="55" />
+        <el-table-column prop="id" label="ID" width="70" />
+        <el-table-column prop="student_name" label="学生" width="110" />
+        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="method" label="方式" width="100">
+          <template #default="scope">
+            <el-tag>{{ scope.row.method }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="content" label="沟通内容" show-overflow-tooltip />
+        <el-table-column prop="feedback" label="家长反馈" show-overflow-tooltip />
+        <el-table-column label="附件" width="100">
+          <template #default="scope">
+            <el-button
+              v-if="scope.row.attachments"
+              link
+              type="primary"
+              size="small"
+              @click="viewAttachments(scope.row)"
+            >
+              查看附件
+            </el-button>
+            <span v-else class="text-muted">无</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" fixed="right">
+          <template #default="scope">
+            <el-button link type="info" size="small" @click="openDetail(scope.row)">详情</el-button>
+            <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+            <el-popconfirm title="确定删除该沟通记录吗？" @confirm="handleDelete(scope.row.id)">
+              <template #reference>
+                <el-button link type="danger" size="small">删除</el-button>
+              </template>
+            </el-popconfirm>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[20, 50, 100]"
+        :total="filtered.length"
+        layout="total, sizes, prev, pager, next"
+        style="margin-top: 16px; justify-content: flex-end;"
+      />
+    </el-card>
+
+    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑沟通记录' : '登记沟通记录'" width="560px">
+      <el-form ref="formRef" :model="form" :rules="communicationRules" label-width="90px">
+        <el-form-item label="学生" prop="student_id" required>
+          <el-select v-model="form.student_id" placeholder="请选择学生" filterable style="width: 100%">
+            <el-option v-for="s in students" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="日期" prop="date">
+          <el-date-picker
+            v-model="form.date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择日期"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="沟通方式" prop="method">
+          <el-select v-model="form.method" style="width: 100%">
+            <el-option label="电话" value="电话" />
+            <el-option label="微信" value="微信" />
+            <el-option label="QQ" value="QQ" />
+            <el-option label="家访" value="家访" />
+            <el-option label="到校面谈" value="到校面谈" />
+            <el-option label="其他" value="其他" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="沟通内容" prop="content">
+          <el-input type="textarea" :rows="3" v-model="form.content" placeholder="沟通的主要内容" />
+        </el-form-item>
+        <el-form-item label="家长反馈">
+          <el-input type="textarea" :rows="3" v-model="form.feedback" placeholder="家长的反馈意见" />
+        </el-form-item>
+        <el-form-item label="附件">
+          <el-upload
+            v-model:file-list="form.attachments"
+            :auto-upload="false"
+            :limit="5"
+            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx"
+            multiple
+          >
+            <el-button type="primary" plain>
+              <el-icon><Upload /></el-icon>选择文件
+            </el-button>
+            <template #tip>
+              <div class="el-upload__tip">
+                支持图片、PDF、Word、Excel，最多5个文件
+                <span v-if="form.id && existingAttachments.length" class="existing-tip">
+                  （已有 {{ existingAttachments.length }} 个附件，新上传将追加）
+                </span>
+              </div>
+            </template>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="saving" @click="handleSave">确定</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 详情查看对话框 -->
+    <el-dialog v-model="detailVisible" title="沟通记录详情" width="600px">
+      <el-descriptions :column="1" border v-if="detailData">
+        <el-descriptions-item label="学生">{{ detailData.student_name }}</el-descriptions-item>
+        <el-descriptions-item label="日期">{{ detailData.date }}</el-descriptions-item>
+        <el-descriptions-item label="沟通方式">
+          <el-tag size="small">{{ detailData.method }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="沟通内容">
+          <div class="detail-text">{{ detailData.content }}</div>
+        </el-descriptions-item>
+        <el-descriptions-item label="家长反馈">
+          <div class="detail-text">{{ detailData.feedback || '无' }}</div>
+        </el-descriptions-item>
+        <el-descriptions-item label="附件">
+          <div v-if="detailData.attachments" class="detail-attachments">
+            <template v-for="(file, index) in detailData.attachments.split(',').filter(f => f.trim())" :key="index">
+              <el-image
+                v-if="isImageFile(file)"
+                :src="`/uploads/${file.trim()}`"
+                :preview-src-list="detailImageList"
+                :initial-index="detailImageIndex(file)"
+                :preview-teleported="true"
+                fit="cover"
+                style="width: 80px; height: 80px; border-radius: 4px; margin-right: 8px; margin-bottom: 8px;"
+                :z-index="3000"
+              />
+              <el-button v-else link type="primary" size="small" @click="downloadFile({ path: file.trim(), name: file.trim() })">
+                <el-icon><Document /></el-icon>{{ file.trim() }}
+              </el-button>
+            </template>
+          </div>
+          <span v-else class="text-muted">无附件</span>
+        </el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="detailVisible = false">关闭</el-button>
+        <el-button type="primary" @click="openEdit(detailData); detailVisible = false">编辑</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 查看附件对话框 -->
+    <el-dialog v-model="attachmentsVisible" title="附件列表" width="600px">
+      <div class="attachments-list">
+        <!-- 图片附件预览区 -->
+        <div v-if="attachmentImages.length" class="attachment-images">
+          <el-image
+            v-for="(img, index) in attachmentImages"
+            :key="'img-' + index"
+            :src="img.url"
+            :preview-src-list="attachmentImages.map(i => i.url)"
+            :initial-index="index"
+            :preview-teleported="true"
+            fit="cover"
+            style="width: 100px; height: 100px; border-radius: 4px; margin-right: 8px; margin-bottom: 8px;"
+            :z-index="3000"
+          />
+        </div>
+        <!-- 非图片附件列表 -->
+        <div v-for="(file, index) in attachmentFiles" :key="'file-' + index" class="attachment-item">
+          <el-icon><Document /></el-icon>
+          <span class="file-name">{{ file.name }}</span>
+          <el-button link type="primary" size="small" @click="downloadFile(file)">
+            下载
+          </el-button>
+        </div>
+        <div v-if="attachmentFiles.length === 0 && attachmentImages.length === 0" class="text-muted">
+          暂无附件
+        </div>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, nextTick, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  getCommunications,
+  createCommunication,
+  updateCommunication,
+  deleteCommunication,
+  batchDeleteCommunications,
+  getStudents
+} from '../../api'
+
+const loading = ref(false)
+const saving = ref(false)
+const dialogVisible = ref(false)
+const searchQuery = ref('')
+const allList = ref([])
+const filtered = ref([])
+const students = ref([])
+const formRef = ref()
+
+const form = ref({ id: null, student_id: null, date: '', method: '电话', content: '', feedback: '', attachments: [] })
+
+// 编辑模式下已有的附件（用于提示用户）
+const existingAttachments = ref([])
+
+// 附件查看相关
+const attachmentsVisible = ref(false)
+const attachmentFiles = ref([])
+const attachmentImages = ref([])
+
+// 详情查看相关
+const detailVisible = ref(false)
+const detailData = ref(null)
+
+// 图片扩展名判断
+const isImageFile = (filename) => {
+  if (!filename) return false
+  const ext = filename.toLowerCase().split('.').pop()
+  return ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)
+}
+
+// 详情对话框中的图片预览列表
+const detailImageList = computed(() => {
+  if (!detailData.value || !detailData.value.attachments) return []
+  return detailData.value.attachments
+    .split(',')
+    .filter(f => f.trim() && isImageFile(f))
+    .map(f => `/uploads/${f.trim()}`)
+})
+
+// 详情对话框中某个图片的索引（用于 el-image initial-index）
+const detailImageIndex = (filename) => {
+  return detailImageList.value.indexOf(`/uploads/${filename.trim()}`)
+}
+
+// 沟通表单校验规则
+const communicationRules = {
+  student_id: [{ required: true, message: '请选择学生', trigger: 'change' }],
+  date: [{ required: true, message: '请选择日期', trigger: 'change' }],
+  method: [{ required: true, message: '请选择沟通方式', trigger: 'change' }],
+  content: [{ required: true, message: '请输入沟通内容', trigger: 'blur' }]
+}
+
+// 批量操作：选中行
+const selectedRows = ref([])
+const handleSelectionChange = (val) => { selectedRows.value = val }
+
+// 分页：当前页与每页条数（基于过滤后的数据切片）
+const currentPage = ref(1)
+const pageSize = ref(20)
+const pagedData = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filtered.value.slice(start, start + pageSize.value)
+})
+
+const filterList = () => {
+  if (!searchQuery.value) {
+    filtered.value = allList.value
+  } else {
+    const q = searchQuery.value
+    filtered.value = allList.value.filter(
+      (c) =>
+        (c.student_name || '').includes(q) ||
+        (c.content || '').includes(q) ||
+        (c.feedback || '').includes(q)
+    )
+  }
+  // 搜索后重置到第一页
+  currentPage.value = 1
+}
+
+const openCreate = () => {
+  const today = new Date().toISOString().slice(0, 10)
+  form.value = { id: null, student_id: null, date: today, method: '电话', content: '', feedback: '', attachments: [] }
+  existingAttachments.value = []
+  dialogVisible.value = true
+  nextTick(() => {
+    formRef.value?.clearValidate()
+  })
+}
+
+// 打开编辑对话框：回填已有数据，附件列表置空（新上传将追加到已有附件后）
+const openEdit = (row) => {
+  form.value = {
+    id: row.id,
+    student_id: row.student_id,
+    date: row.date,
+    method: row.method,
+    content: row.content || '',
+    feedback: row.feedback || '',
+    attachments: []
+  }
+  // 记录已有附件（仅用于提示）
+  existingAttachments.value = row.attachments
+    ? row.attachments.split(',').filter(f => f.trim())
+    : []
+  dialogVisible.value = true
+  nextTick(() => {
+    formRef.value?.clearValidate()
+  })
+}
+
+// 打开详情对话框
+const openDetail = (row) => {
+  detailData.value = row
+  detailVisible.value = true
+}
+
+const loadData = async () => {
+  loading.value = true
+  try {
+    const [commRows, studentRows] = await Promise.all([getCommunications(), getStudents()])
+    allList.value = commRows
+    students.value = studentRows
+    filterList()
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleSave = async () => {
+  if (!formRef.value) return
+  try {
+    // 校验通过再提交，失败时不弹 ElMessage（Element Plus 自动标红）
+    await formRef.value.validate()
+  } catch (e) {
+    return
+  }
+  saving.value = true
+  try {
+    // 构建 FormData 以支持文件上传
+    const formData = new FormData()
+    formData.append('student_id', form.value.student_id)
+    formData.append('date', form.value.date)
+    formData.append('method', form.value.method)
+    formData.append('content', form.value.content)
+    formData.append('feedback', form.value.feedback || '')
+
+    // 添加附件文件
+    if (form.value.attachments && form.value.attachments.length > 0) {
+      form.value.attachments.forEach(file => {
+        if (file.raw) {
+          formData.append('attachments', file.raw)
+        }
+      })
+    }
+
+    if (form.value.id) {
+      // 编辑模式：调用更新接口（新附件将追加到已有附件后）
+      await updateCommunication(form.value.id, formData)
+      ElMessage.success('更新成功')
+    } else {
+      // 创建模式
+      await createCommunication(formData)
+      ElMessage.success('登记成功')
+    }
+    dialogVisible.value = false
+    loadData()
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    saving.value = false
+  }
+}
+
+const handleDelete = async (id) => {
+  try {
+    await deleteCommunication(id)
+    ElMessage.success('删除成功')
+    loadData()
+  } catch (e) {
+    // 拦截器已提示
+  }
+}
+
+// 批量删除沟通记录
+const handleBatchDelete = async () => {
+  if (!selectedRows.value.length) {
+    ElMessage.warning('请先选择记录')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认删除选中的 ${selectedRows.value.length} 条沟通记录？`,
+      '提示',
+      { type: 'warning' }
+    )
+  } catch (e) {
+    // 用户取消
+    return
+  }
+  try {
+    const ids = selectedRows.value.map((r) => r.id)
+    await batchDeleteCommunications(ids)
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    loadData()
+  } catch (e) {
+    // 拦截器已提示
+  }
+}
+
+// 查看附件：区分图片和非图片，图片用 el-image 预览，非图片显示下载链接
+const viewAttachments = (row) => {
+  if (!row.attachments) {
+    ElMessage.warning('该记录没有附件')
+    return
+  }
+  const files = row.attachments.split(',').filter(f => f.trim())
+  attachmentImages.value = files
+    .filter(f => isImageFile(f))
+    .map(filename => ({ name: filename, url: `/uploads/${filename.trim()}` }))
+  attachmentFiles.value = files
+    .filter(f => !isImageFile(f))
+    .map(filename => ({ name: filename, path: filename.trim() }))
+  attachmentsVisible.value = true
+}
+
+// 下载附件
+const downloadFile = (file) => {
+  const url = `/uploads/${file.path}`
+  window.open(url, '_blank')
+}
+
+onMounted(loadData)
+</script>
+
+<style scoped>
+.header-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.action-buttons {
+  display: flex;
+  gap: 10px;
+}
+.text-muted {
+  color: #c0c4cc;
+  font-size: 13px;
+}
+/* 详情对话框内容文本 */
+.detail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+.detail-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+/* 附件查看对话框中的图片预览区 */
+.attachment-images {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.attachment-item:last-child {
+  border-bottom: none;
+}
+.file-name {
+  flex: 1;
+  font-size: 13px;
+  color: #606266;
+  word-break: break-all;
+}
+.existing-tip {
+  color: #e6a23c;
+  font-size: 12px;
+}
+</style>

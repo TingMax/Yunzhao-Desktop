@@ -1,0 +1,353 @@
+import { app, BrowserWindow } from 'electron'
+import { resolve } from 'node:path'
+import koffi from 'koffi'
+import { spawn } from 'node:child_process'
+import { createElectronGuiResultLifecycle } from './helpers/electron-gui-result-lifecycle.mjs'
+
+const lifecycle = createElectronGuiResultLifecycle({
+  app,
+  BrowserWindow,
+  suite: 'tests/window-z-order-electron.mjs',
+  mode: 'electron-legacy-window-fixture',
+  prefix: 'yunzhao-window-z-order-',
+  metadata: { realWindows: true, nativeZOrder: true, externalEventProcess: true }
+})
+const { assert } = lifecycle
+app.setPath('userData', lifecycle.root)
+
+const GW_HWNDNEXT = 2
+const SWP_NOSIZE = 0x0001
+const SWP_NOMOVE = 0x0002
+const SWP_NOACTIVATE = 0x0010
+
+function nativeHandle(window) {
+  const buffer = window.getNativeWindowHandle()
+  return process.arch === 'x64' ? buffer.readBigUInt64LE(0) : BigInt(buffer.readUInt32LE(0))
+}
+
+function wait(ms) {
+  return new Promise((resolveWait) => setTimeout(resolveWait, ms))
+}
+
+function emitterMessage(child, key) {
+  return new Promise((done, reject) => {
+    const finish = (error, value) => {
+      clearTimeout(timer)
+      child.off('message', onMessage)
+      child.off('error', onError)
+      child.off('exit', onExit)
+      if (error) reject(error)
+      else done(value)
+    }
+    const onMessage = (value) => {
+      if (value[key]) finish(null, value)
+    }
+    const onError = (error) => finish(error)
+    const onExit = (code) => finish(new Error(`Event emitter exited early: ${code}`))
+    const timer = setTimeout(() => finish(new Error(`Event emitter timed out: ${key}`)), 5000)
+    child.on('message', onMessage)
+    child.once('error', onError)
+    child.once('exit', onExit)
+  })
+}
+
+async function waitUntil(predicate, timeoutMs = 2500) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await wait(20)
+  }
+  return false
+}
+
+async function stopEmitter(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  await new Promise((done, reject) => {
+    const finish = (error) => {
+      clearTimeout(timer)
+      child.off('exit', onExit)
+      child.off('error', onError)
+      if (error) reject(error)
+      else done()
+    }
+    const onExit = () => finish()
+    const onError = (error) => finish(error)
+    const timer = setTimeout(() => finish(new Error('Event emitter did not stop')), 5000)
+    child.once('exit', onExit)
+    child.once('error', onError)
+    if (child.connected) child.disconnect()
+    child.kill()
+  })
+}
+
+app.once('ready', async () => {
+  const windows = []
+  let blurInitialized = false
+  let destroyBlur = null
+  let completed = false
+  let failure = null
+  let emitter = null
+
+  try {
+    const user32 = koffi.load('user32.dll')
+    const setWindowPos = user32.func(
+      'int SetWindowPos(intptr_t hWnd, intptr_t hWndInsertAfter, int X, int Y, int cx, int cy, uint32_t uFlags)'
+    )
+    const getWindow = user32.func('intptr_t GetWindow(intptr_t hWnd, uint32_t command)')
+    const getShellWindow = user32.func('intptr_t GetShellWindow()')
+    const isAbove = (upper, lower) => {
+      let candidate = getWindow(upper, GW_HWNDNEXT)
+      while (candidate) {
+        if (BigInt(candidate) === BigInt(lower)) return true
+        candidate = getWindow(candidate, GW_HWNDNEXT)
+      }
+      return false
+    }
+
+    const dllPath =
+      process.env.YUNZHAO_INTEGRATION_NATIVE_DLL ||
+      resolve('native_blur', 'build', 'bin', 'blur_engine.dll')
+    const native = koffi.load(dllPath)
+    const setBottom = native.func('WindowZOrder_SetBottom', 'int', ['intptr_t', 'int'])
+    const reassert = native.func('WindowZOrder_Reassert', 'int', ['intptr_t'])
+    const getStatusJson = native.func('WindowZOrder_GetStatusJson', 'str', ['intptr_t'])
+    const getLastFailureJson = native.func('WindowZOrder_GetLastFailureJson', 'str', [])
+    const getFailures = () => JSON.parse(getLastFailureJson())
+    const blurInit = native.func('Blur_Init', 'int', ['intptr_t'])
+    destroyBlur = native.func('Blur_Destroy', 'void', [])
+    const blurApplyConfig = native.func('Blur_ApplyConfig', 'int', [
+      'int',
+      'float',
+      'float',
+      'float',
+      'int',
+      'int',
+      'int',
+      'float'
+    ])
+
+    const mainWindow = new BrowserWindow({
+      show: true,
+      frame: false,
+      transparent: true,
+      thickFrame: false,
+      x: 260,
+      y: 180,
+      width: 360,
+      height: 460
+    })
+    const ordinaryWindow = new BrowserWindow({
+      show: true,
+      x: 300,
+      y: 220,
+      width: 320,
+      height: 360
+    })
+    windows.push(mainWindow, ordinaryWindow)
+    await Promise.all([
+      mainWindow.loadURL('data:text/html,<body style="background:#dbeafe">bottom target</body>'),
+      ordinaryWindow.loadURL('data:text/html,<body>ordinary window</body>')
+    ])
+
+    const mainHwnd = nativeHandle(mainWindow)
+    const ordinaryHwnd = nativeHandle(ordinaryWindow)
+    const getStatus = () => JSON.parse(getStatusJson(mainHwnd))
+
+    assert.deepEqual(getFailures(), {
+      schemaVersion: 1,
+      failureCount: 0,
+      firstFailure: null,
+      lastFailure: null
+    })
+    assert.equal(setBottom(0, 1), -1, 'invalid HWND must fail without enabling controller')
+    const invalidFailure = getFailures().firstFailure
+    assert.equal(invalidFailure.operation, 'enable')
+    assert.equal(invalidFailure.stage, 'invalid-requested-window')
+    assert.equal(invalidFailure.resultCode, -1)
+    assert.equal(invalidFailure.win32Error, null, 'logical failure must not report stale LastError')
+    assert.equal(invalidFailure.win32ErrorSource, 'not-applicable')
+    assert.equal(invalidFailure.windows.requested.valid, false)
+    const shellHwnd = getShellWindow()
+    assert.ok(shellHwnd, 'real desktop shell window is required for wrong-thread verification')
+    assert.equal(
+      setBottom(shellHwnd, 1),
+      -2,
+      'foreign shell window must fail on owner thread check'
+    )
+    let nativeFailures = getFailures()
+    assert.equal(nativeFailures.lastFailure.stage, 'wrong-window-thread')
+    assert.equal(nativeFailures.lastFailure.windows.requested.valid, true)
+    assert.notEqual(
+      nativeFailures.lastFailure.windows.requested.threadId,
+      nativeFailures.lastFailure.currentThreadId
+    )
+    assert.equal(nativeFailures.lastFailure.win32Error, null)
+    assert.equal(reassert(mainHwnd), -6, 'disabled controller must reject reassert')
+    nativeFailures = getFailures()
+    assert.equal(nativeFailures.failureCount, 3)
+    assert.equal(nativeFailures.lastFailure.operation, 'reassert')
+    assert.equal(nativeFailures.lastFailure.stage, 'controller-not-enabled')
+    assert.equal(nativeFailures.lastFailure.resultCode, -6)
+    assert.equal(nativeFailures.lastFailure.win32Error, null)
+    assert.deepEqual(nativeFailures.firstFailure, invalidFailure)
+    const expectedFailureHistory = nativeFailures
+
+    assert.equal(setBottom(mainHwnd, 1), 1, 'native bottom mode must attach on Electron UI thread')
+    const initiallyAnchored = await waitUntil(
+      () => getStatus().anchored && isAbove(ordinaryHwnd, mainHwnd)
+    )
+    if (!initiallyAnchored) {
+      console.error('initial always-bottom diagnostics', {
+        status: getStatus(),
+        mainHwnd: String(mainHwnd),
+        ordinaryHwnd: String(ordinaryHwnd),
+        ordinaryAboveMain: isAbove(ordinaryHwnd, mainHwnd)
+      })
+    }
+    assert.equal(
+      initiallyAnchored,
+      true,
+      'ordinary windows must remain above the bottom-anchored main window'
+    )
+    assert.equal(
+      getStatus().desktopWindowsAbove,
+      0,
+      'desktop hosts must stay below the main window'
+    )
+    assert.ok(getStatus().desktopWindowsBelow > 0, 'the test must observe a Windows desktop host')
+    assert.equal(typeof getStatus().lastSyncReason, 'string')
+    assert.equal(Number.isInteger(getStatus().syncRequestCount), true)
+    assert.equal(Number.isInteger(getStatus().syncPostCount), true)
+    assert.equal(Number.isInteger(getStatus().anchorCheckCount), true)
+    assert.equal(Number.isInteger(getStatus().anchorNoopCount), true)
+    assert.equal(Number.isInteger(getStatus().anchorApplyCount), true)
+
+    // 模拟 Electron focus()/moveTop() 或快速双击触发的主动提层。Subclass 必须在
+    // WINDOWPOSCHANGING 阶段阻止前移，而不是等 JS focus 事件后再补救。
+    assert.equal(setWindowPos(mainHwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE), 1)
+    mainWindow.focus()
+    assert.equal(
+      await waitUntil(() => getStatus().anchored && isAbove(ordinaryHwnd, mainHwnd)),
+      true,
+      'focus and explicit HWND_TOP requests must not raise an always-bottom window'
+    )
+    assert.ok(
+      getStatus().syncRequestCount > 0,
+      'bottom diagnostics must count z-order sync requests'
+    )
+    assert.ok(getStatus().anchorCheckCount > 0, 'bottom diagnostics must count anchor checks')
+
+    assert.equal(blurInit(mainHwnd), 1)
+    blurInitialized = true
+    assert.equal(blurApplyConfig(1, 18, 1.5, 12, 255, 255, 255, 0.3), 1)
+    assert.equal(reassert(mainHwnd), 1)
+    assert.equal(
+      await waitUntil(() => {
+        const status = getStatus()
+        return status.anchored && status.overlayValid && status.overlayBehind
+      }),
+      true,
+      'BlurOverlay must stay behind the bottom-anchored Electron window'
+    )
+
+    // Request HWND_BOTTOM only for this fixture's own HWND. Explorer may keep
+    // it in the application band despite returning success, so record its real
+    // relation instead of assuming the API placed it behind the shell. The
+    // isolated controller suite covers the exact behind-desktop regression.
+    const backgroundWindow = new BrowserWindow({
+      show: true,
+      x: 700,
+      y: 220,
+      width: 240,
+      height: 180
+    })
+    windows.push(backgroundWindow)
+    await backgroundWindow.loadURL('data:text/html,<body>owned desktop-background fixture</body>')
+    const backgroundHwnd = nativeHandle(backgroundWindow)
+    assert.equal(
+      setWindowPos(backgroundHwnd, 1, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE),
+      1,
+      'owned background window must accept HWND_BOTTOM'
+    )
+    const backgroundBehindShell = isAbove(shellHwnd, backgroundHwnd)
+    console.log('owned HWND_BOTTOM fixture observation', { backgroundBehindShell })
+    assert.equal(reassert(mainHwnd), 1)
+    assert.equal(await waitUntil(() => getStatus().anchored), true)
+    assert.equal(getStatus().ordinaryWindowsBelow, 0)
+    assert.equal(getStatus().desktopWindowsAbove, 0)
+    assert.ok(isAbove(ordinaryHwnd, mainHwnd), 'foreground application must remain above the note')
+    assert.ok(getStatus().overlayBehind, 'background window must not disturb BlurOverlay')
+    assert.equal(setBottom(mainHwnd, 0), 1)
+    assert.equal(setBottom(mainHwnd, 1), 1)
+    assert.equal(await waitUntil(() => getStatus().anchored), true)
+    assert.equal(
+      isAbove(shellHwnd, backgroundHwnd),
+      backgroundBehindShell,
+      'reenabling bottom must preserve the observed background/shell relation'
+    )
+
+    emitter = spawn(
+      process.env.YUNZHAO_TEST_NODE || process.execPath,
+      [resolve('tests/helpers/z-order-event-emitter.cjs')],
+      {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc']
+      }
+    )
+    emitter.stderr.on('data', (data) => process.stderr.write(data))
+    await emitterMessage(emitter, 'ready')
+    await wait(200)
+    const emitEvents = async (objectId, childId) => {
+      const before = getStatus().anchorCheckCount
+      const done = emitterMessage(emitter, 'done')
+      emitter.send({ objectId, childId, count: 60 })
+      await done
+      await wait(100)
+      return getStatus().anchorCheckCount - before
+    }
+    const irrelevantChecks = await emitEvents(-4, 42) // OBJID_CLIENT / child control
+    assert.ok(irrelevantChecks < 15, `unrelated controls triggered ${irrelevantChecks} checks`)
+    const relevantChecks = await emitEvents(0, 0) // OBJID_WINDOW / CHILDID_SELF
+    assert.ok(relevantChecks >= 45, `real window events were lost: ${relevantChecks}`)
+    mainWindow.hide()
+    await wait(200)
+    const hiddenChecks = await emitEvents(0, 0)
+    assert.ok(hiddenChecks < 15, `hidden window still processed ${hiddenChecks} checks`)
+    mainWindow.showInactive()
+    assert.equal(await waitUntil(() => getStatus().anchored), true)
+    console.log('event filtering checks', { irrelevantChecks, relevantChecks, hiddenChecks })
+
+    assert.equal(setBottom(mainHwnd, 0), 1)
+    assert.equal(
+      await waitUntil(() => isAbove(mainHwnd, ordinaryHwnd)),
+      true,
+      'disabling bottom mode must immediately restore normal Electron z-order control'
+    )
+    assert.equal(getStatus().enabled, false)
+    assert.deepEqual(
+      getFailures(),
+      expectedFailureHistory,
+      'successful real window control must preserve history without manufacturing current failures'
+    )
+
+    console.log('always-bottom focus guard and blur adjacency integration test passed')
+    completed = true
+  } catch (error) {
+    console.error(error)
+    failure = error
+  } finally {
+    await lifecycle.finish({
+      completed,
+      error: failure,
+      window: windows[0],
+      restore: async () => {
+        try {
+          await stopEmitter(emitter)
+        } finally {
+          if (blurInitialized) destroyBlur?.()
+        }
+      }
+    })
+  }
+})

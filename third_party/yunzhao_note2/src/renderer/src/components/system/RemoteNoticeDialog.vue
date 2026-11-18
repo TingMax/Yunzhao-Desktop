@@ -1,0 +1,174 @@
+<script setup>
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import AppModalShell from '../ui/AppModalShell.vue'
+import BaseButton from '../ui/BaseButton.vue'
+import MarkdownContent from '../markdown/MarkdownContent.vue'
+
+const props = defineProps({
+  queue: { type: Object, default: null },
+  notices: {
+    type: Array,
+    default: () => []
+  },
+  historyMode: {
+    type: Boolean,
+    default: false
+  }
+})
+
+const emit = defineEmits(['close', 'acknowledged'])
+const currentIndex = ref(0)
+const acknowledging = ref(false)
+let disposed = false
+onBeforeUnmount(() => {
+  disposed = true
+})
+
+const current = computed(() => props.notices[currentIndex.value] || null)
+const hasMultiple = computed(() => props.notices.length > 1)
+const alreadyAcknowledged = computed(
+  () => props.historyMode && Boolean(current.value?.acknowledgedAt)
+)
+
+watch(
+  () => props.notices,
+  (notices) => {
+    if (!notices.length) currentIndex.value = 0
+    else if (currentIndex.value >= notices.length) currentIndex.value = notices.length - 1
+  }
+)
+
+async function acknowledge() {
+  if (disposed || !current.value || acknowledging.value) return
+  if (alreadyAcknowledged.value) {
+    emit('close')
+    return
+  }
+  // Paging or a fresh pending-notice snapshot may replace current while the
+  // acknowledgement is being saved. Its response still belongs to this ID.
+  const noticeId = current.value.id
+  acknowledging.value = true
+  try {
+    const changed = await window.api.acknowledgeRemoteNotice(noticeId)
+    if (disposed) return
+    if (changed) emit('acknowledged', noticeId)
+    else if (current.value?.id === noticeId) emit('close')
+  } finally {
+    if (!disposed) acknowledging.value = false
+  }
+}
+</script>
+
+<template>
+  <AppModalShell
+    :queue="queue"
+    :child-modal="historyMode"
+    :visible="Boolean(current)"
+    :title="current?.title || '软件通知'"
+    :subtitle="
+      historyMode && current?.publishedAt
+        ? new Date(current.publishedAt).toLocaleString('zh-CN')
+        : ''
+    "
+    aria-label="软件通知"
+    width="min(540rem, calc(100vw - 40rem))"
+    max-height="min(620rem, calc(100vh - 40rem))"
+    :close-on-backdrop="false"
+    :close-on-escape="false"
+    @update:visible="emit('close')"
+  >
+    <MarkdownContent class="notice-body" :content="current?.body || ''" />
+    <button
+      v-if="current?.link"
+      type="button"
+      class="notice-link"
+      @click="window.api.openRemoteNoticeLink(current.id)"
+    >
+      打开通知链接
+      <span aria-hidden="true">↗</span>
+    </button>
+
+    <template #footer>
+      <div class="notice-footer-info">
+        <template v-if="hasMultiple">
+          <button
+            type="button"
+            aria-label="上一条通知"
+            :disabled="currentIndex === 0"
+            @click="currentIndex -= 1"
+          >
+            ←
+          </button>
+          <span>{{ currentIndex + 1 }} / {{ notices.length }}</span>
+          <button
+            type="button"
+            aria-label="下一条通知"
+            :disabled="currentIndex >= notices.length - 1"
+            @click="currentIndex += 1"
+          >
+            →
+          </button>
+          <span>共 {{ notices.length }} 条未确认通知</span>
+        </template>
+        <span v-else-if="historyMode">
+          {{ alreadyAcknowledged ? '已确认通知' : '未确认通知' }}
+        </span>
+        <span v-else>1 条未确认通知</span>
+      </div>
+      <BaseButton variant="primary" size="md" :disabled="acknowledging" @click="acknowledge">
+        {{ acknowledging ? '正在保存…' : alreadyAcknowledged ? '关闭' : '知道了' }}
+      </BaseButton>
+    </template>
+  </AppModalShell>
+</template>
+
+<style scoped>
+.notice-body {
+  min-height: 150rem;
+  color: var(--text-color);
+  font-size: var(--fs-body);
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+}
+
+.notice-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4rem;
+  padding: 0;
+  margin-top: 18rem;
+  border: 0;
+  color: #0071e3;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-secondary);
+  cursor: pointer;
+}
+
+.notice-footer-info {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8rem;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+}
+
+.notice-footer-info button {
+  display: grid;
+  place-items: center;
+  width: 28rem;
+  height: 28rem;
+  padding: 0;
+  border: 1px solid var(--surface-float-border);
+  border-radius: 8rem;
+  color: var(--text-color);
+  background: color-mix(in srgb, var(--surface-float) 94%, var(--text-color) 6%);
+  cursor: pointer;
+}
+
+.notice-footer-info button:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+</style>

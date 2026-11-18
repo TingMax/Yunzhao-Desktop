@@ -1,0 +1,1033 @@
+<script setup lang="ts">
+import { ref, computed, watch, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus";
+import { useI18n } from "vue-i18n";
+import {
+  Collection,
+  EditPen,
+  Timer,
+  Link,
+  Refresh,
+  Delete,
+  QuestionFilled,
+} from "@element-plus/icons-vue";
+import { useWorkflowStore } from "@/stores/workflowStore";
+import { useTableStore } from "@/stores/tableStore";
+import { apiClient } from "@/api/client";
+import { fieldService } from "@/db/services/fieldService";
+import { formatDateTime } from "@/utils/timezone";
+import { normalizeWorkflowNodes, rebuildWorkflowNodeChain } from "@/utils/workflow";
+import WorkflowListPanel from "@/components/workflow/WorkflowListPanel.vue";
+import WorkflowDesigner from "@/components/workflow/WorkflowDesigner.vue";
+import WorkflowExecutionLogPanel from "@/components/workflow/WorkflowExecutionLog.vue";
+import WebhookConfigPanel from "@/components/workflow/WebhookConfigPanel.vue";
+import WebhookDeliveryList from "@/components/workflow/WebhookDeliveryList.vue";
+import WorkflowTemplateGallery from "@/components/workflow/WorkflowTemplateGallery.vue";
+import WorkflowVersionNodeSnapshot from "@/components/workflow/WorkflowVersionNodeSnapshot.vue";
+import type {
+  Workflow,
+  WorkflowNode,
+  WorkflowTrigger,
+  TriggerType,
+  WorkflowInstance,
+  WorkflowExecutionLog,
+  WebhookConfig,
+  WorkflowVersion,
+} from "@/types/workflow";
+import type { FieldEntity } from "@/db/schema";
+
+const route = useRoute();
+const router = useRouter();
+const { t } = useI18n();
+const baseId = route.params.id as string;
+
+const workflowStore = useWorkflowStore();
+const tableStore = useTableStore();
+
+type TabType = "editor" | "history" | "webhook";
+
+const activeTab = ref<TabType>("editor");
+const galleryVisible = ref(false);
+
+const currentWorkflow = computed(() => workflowStore.currentWorkflow);
+const workflows = computed(() => workflowStore.workflows);
+const tables = computed(() => tableStore.tables);
+
+const nodes = ref<WorkflowNode[]>([]);
+const trigger = ref<WorkflowTrigger | null>(null);
+const fields = ref<FieldEntity[]>([]);
+const instances = ref<WorkflowInstance[]>([]);
+const selectedInstanceId = ref<string>("");
+const executionLogs = ref<WorkflowExecutionLog[]>([]);
+const selectedWebhookId = ref<string>("");
+const detailLoading = ref(false);
+
+// 编辑工作流弹窗
+const editDialogVisible = ref(false);
+const editFormRef = ref<FormInstance>();
+const deliveryListRef = ref<any>(null);
+const editForm = ref({
+  id: "",
+  name: "",
+  description: "",
+  table_id: "",
+});
+const editFormRules = computed<FormRules>(() => {
+  const rules: FormRules = {
+    name: [
+      { required: true, message: t('workflow.manager.namePlaceholder'), trigger: "blur" },
+      { max: 200, message: t('workflow.manager.nameMax'), trigger: "blur" },
+    ],
+    description: [
+      { max: 500, message: t('workflow.manager.descMax'), trigger: "blur" },
+    ],
+  };
+
+  if (!editForm.value.id) {
+    rules.table_id = [
+      { required: true, message: t('workflow.manager.tableRequired'), trigger: "change" },
+    ];
+  }
+
+  return rules;
+});
+const editDescCharCount = computed(() => editForm.value.description.length);
+
+const selectedInstance = computed(() =>
+  instances.value.find((item) => item.id === selectedInstanceId.value),
+);
+
+const selectedWebhook = computed(() =>
+  workflowStore.webhooks.find((item) => item.id === selectedWebhookId.value) ??
+  null,
+);
+
+const designerTrigger = computed<WorkflowTrigger>(() => {
+  return (
+    trigger.value ?? {
+      id: "",
+      workflow_id: currentWorkflow.value?.id || "",
+      trigger_type: "" as TriggerType,
+      filter_config: {},
+      field_ids: [],
+    }
+  );
+});
+
+onMounted(() => {
+  init();
+});
+
+// 打开工作流帮助文档
+function openWorkflowDocs() {
+  window.open(
+    "https://my-smart-table.github.io/smart-table-docs/zh-CN/user-guide/workflow.html",
+    "_blank",
+    "noopener",
+  );
+}
+
+watch(
+  () => baseId,
+  () => {
+    init();
+  },
+);
+
+watch(
+  currentWorkflow,
+  async (workflow) => {
+    if (!workflow) {
+      resetDetailState();
+      return;
+    }
+    activeTab.value = "editor";
+    await loadWorkflowDetail(workflow);
+  },
+  { immediate: false },
+);
+
+async function init() {
+  if (!baseId) return;
+
+  workflowStore.$reset();
+  resetDetailState();
+
+  await tableStore.loadTables(baseId);
+  await workflowStore.loadWorkflows(baseId);
+
+  if (workflows.value.length > 0) {
+    workflowStore.currentWorkflow = workflows.value[0];
+  }
+
+  await workflowStore.loadWebhooks(baseId);
+  selectedWebhookId.value = workflowStore.webhooks[0]?.id || "";
+}
+
+function resetDetailState() {
+  nodes.value = [];
+  trigger.value = null;
+  fields.value = [];
+  instances.value = [];
+  selectedInstanceId.value = "";
+  executionLogs.value = [];
+}
+
+async function loadWorkflowDetail(workflow: Workflow) {
+  detailLoading.value = true;
+  try {
+    const [nodesData, triggerData] = await Promise.all([
+      apiClient.get<WorkflowNode[]>(`/workflows/${workflow.id}/nodes`),
+      apiClient.get<WorkflowTrigger>(`/workflows/${workflow.id}/trigger`),
+    ]);
+    nodes.value = normalizeWorkflowNodes(nodesData);
+    trigger.value = triggerData;
+  } catch (error) {
+    console.error("加载工作流详情失败:", error);
+    nodes.value = [];
+    trigger.value = null;
+  }
+
+  if (workflow.table_id) {
+    try {
+      fields.value = await fieldService.getFieldsByTable(workflow.table_id);
+    } catch (error) {
+      console.error("加载字段失败:", error);
+      fields.value = [];
+    }
+  } else {
+    fields.value = [];
+  }
+
+  try {
+    instances.value = await workflowStore.loadInstances(workflow.id);
+  } catch (error) {
+    console.error("加载执行实例失败:", error);
+    instances.value = [];
+  }
+
+  selectedInstanceId.value = instances.value[0]?.id || "";
+  if (selectedInstanceId.value) {
+    await loadExecutionLogs(workflow.id, selectedInstanceId.value);
+  } else {
+    executionLogs.value = [];
+  }
+
+  detailLoading.value = false;
+}
+
+async function loadExecutionLogs(workflowId: string, instanceId: string) {
+  try {
+    const data = await apiClient.get<{
+      instance: WorkflowInstance;
+      execution_logs: WorkflowExecutionLog[];
+    }>(`/workflows/${workflowId}/instances/${instanceId}`);
+    executionLogs.value = data.execution_logs;
+  } catch (error) {
+    console.error("加载执行日志失败:", error);
+    executionLogs.value = [];
+  }
+}
+
+async function refreshInstances() {
+  if (!currentWorkflow.value) return;
+  try {
+    instances.value = await workflowStore.loadInstances(currentWorkflow.value.id);
+    if (selectedInstanceId.value) {
+      await loadExecutionLogs(currentWorkflow.value.id, selectedInstanceId.value);
+    }
+  } catch (error) {
+    console.error("刷新执行实例失败:", error);
+  }
+}
+
+function handleSelectWorkflow(workflow: Workflow) {
+  workflowStore.currentWorkflow = workflow;
+}
+
+function handleEditWorkflow(workflow: Workflow) {
+  editForm.value = {
+    id: workflow.id,
+    name: workflow.name,
+    description: workflow.description || "",
+    table_id: workflow.table_id || "",
+  };
+  editDialogVisible.value = true;
+}
+
+async function handleUpdateWorkflowInfo() {
+  if (!editFormRef.value) return;
+  await editFormRef.value.validate(async (valid) => {
+    if (!valid) return;
+    try {
+      await workflowStore.updateWorkflow(editForm.value.id, {
+        name: editForm.value.name.trim(),
+        description: editForm.value.description.trim(),
+      });
+      editDialogVisible.value = false;
+    } catch (error: unknown) {
+      console.error("更新工作流信息失败:", error);
+    }
+  });
+}
+
+async function handleDeleteWorkflow(workflow: Workflow) {
+  await workflowStore.deleteWorkflow(workflow.id);
+  if (currentWorkflow.value?.id === workflow.id) {
+    workflowStore.currentWorkflow = workflows.value[0] || null;
+  }
+}
+
+async function handlePublishWorkflow(workflow: Workflow) {
+  await workflowStore.publishWorkflow(workflow.id);
+}
+
+async function handlePauseWorkflow(workflow: Workflow) {
+  await workflowStore.pauseWorkflow(workflow.id);
+}
+
+async function handleResumeWorkflow(workflow: Workflow) {
+  await workflowStore.resumeWorkflow(workflow.id);
+}
+
+function openCreateDialog() {
+  // 左侧列表的新建按钮通过此函数打开编辑弹窗，复用编辑表单作为新建
+  editForm.value = {
+    id: "",
+    name: "",
+    description: "",
+    table_id: "",
+  };
+  editDialogVisible.value = true;
+}
+
+async function handleCreateWorkflow() {
+  if (!editFormRef.value) return;
+  await editFormRef.value.validate(async (valid) => {
+    if (!valid) return;
+    try {
+      const created = await workflowStore.createWorkflow(baseId, {
+        name: editForm.value.name.trim(),
+        description: editForm.value.description.trim(),
+        table_id: editForm.value.table_id,
+      });
+      editDialogVisible.value = false;
+      await workflowStore.loadWorkflows(baseId);
+      workflowStore.currentWorkflow = created;
+    } catch (error: unknown) {
+      console.error("新建工作流失败:", error);
+    }
+  });
+}
+
+function handleBackToBase() {
+  router.push(`/base/${baseId}`);
+}
+
+async function handleUpdateTable(workflow: Workflow, tableId: string) {
+  try {
+    await workflowStore.updateWorkflow(workflow.id, { table_id: tableId });
+    if (currentWorkflow.value?.id === workflow.id) {
+      await loadWorkflowDetail(currentWorkflow.value);
+    }
+  } catch (error: unknown) {
+    console.error("变更数据表失败:", error);
+  }
+}
+
+function handleOpenGallery() {
+  galleryVisible.value = true;
+}
+
+function handleGalleryCreated(workflow: Workflow) {
+  galleryVisible.value = false;
+  workflowStore.currentWorkflow = workflow;
+}
+
+async function handleSaveWorkflow(
+  updatedNodes: WorkflowNode[],
+  updatedTrigger: WorkflowTrigger,
+) {
+  if (!currentWorkflow.value) return;
+
+  // 保存前按 order 重建 next_nodes，确保多节点按顺序执行
+  const nodesToSave = rebuildWorkflowNodeChain(updatedNodes);
+
+  try {
+    await Promise.all([
+      apiClient.put(`/workflows/${currentWorkflow.value.id}/nodes`, {
+        nodes: nodesToSave,
+      }),
+      apiClient.put(`/workflows/${currentWorkflow.value.id}/trigger`, {
+        ...updatedTrigger,
+      }),
+    ]);
+
+    // 暂停状态保存后，创建版本快照（后端会自动检测是否有变更）
+    if (currentWorkflow.value.status === "paused") {
+      await apiClient.post(`/workflows/${currentWorkflow.value.id}/snapshot`);
+    }
+
+    // 刷新左侧列表和当前工作流详情（版本号等字段可能已变更）
+    const workflowId = currentWorkflow.value.id;
+    await workflowStore.loadWorkflows(baseId);
+    // 从刷新后的列表中找到当前工作流并重新加载详情
+    const refreshed = workflowStore.workflows.find((w: Workflow) => w.id === workflowId);
+    if (refreshed) {
+      await loadWorkflowDetail(refreshed);
+    }
+
+    ElMessage.success(t('workflow.manager.saveSuccess'));
+  } catch (error) {
+    console.error("保存工作流失败:", error);
+    ElMessage.error(t('workflow.manager.saveFailed'));
+  }
+}
+
+async function handlePublishFromDesigner() {
+  if (!currentWorkflow.value) return;
+  // 先保存当前编辑的节点和触发器
+  await handleSaveWorkflow(nodes.value, designerTrigger.value);
+  // 再发布
+  await workflowStore.publishWorkflow(currentWorkflow.value.id);
+}
+
+async function handleCloneWorkflow() {
+  if (!currentWorkflow.value) return;
+  try {
+    await ElMessageBox.confirm(
+      t('workflow.manager.cloneConfirm', { name: currentWorkflow.value.name }),
+      t('workflow.manager.cloneTitle'),
+      {
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel'),
+        type: 'info',
+      }
+    );
+    await workflowStore.cloneWorkflow(currentWorkflow.value.id);
+    await workflowStore.loadWorkflows(baseId);
+    activeTab.value = "editor";
+  } catch (error: unknown) {
+    if (error !== 'cancel') {
+      console.error("克隆工作流失败:", error);
+    }
+  }
+}
+
+const versionDialogVisible = ref(false);
+const versionLoading = ref(false);
+
+async function handleViewVersions() {
+  if (!currentWorkflow.value) return;
+  versionDialogVisible.value = true;
+  versionLoading.value = true;
+  try {
+    await workflowStore.loadWorkflowVersions(currentWorkflow.value.id);
+  } catch (error: unknown) {
+    console.error("加载版本历史失败:", error);
+  } finally {
+    versionLoading.value = false;
+  }
+}
+
+async function handleInstanceChange(instanceId: string) {
+  selectedInstanceId.value = instanceId;
+  if (currentWorkflow.value && instanceId) {
+    await loadExecutionLogs(currentWorkflow.value.id, instanceId);
+  }
+}
+
+function handleWebhookRowClick(row: WebhookConfig) {
+  selectedWebhookId.value = row.id;
+}
+
+function handleWebhookSaved(webhook: WebhookConfig) {
+  const idx = workflowStore.webhooks.findIndex((item) => item.id === webhook.id);
+  if (idx !== -1) {
+    workflowStore.webhooks[idx] = webhook;
+  } else {
+    workflowStore.webhooks.push(webhook);
+  }
+  selectedWebhookId.value = webhook.id;
+}
+
+async function handleDeleteWebhook(row: WebhookConfig) {
+  try {
+    await ElMessageBox.confirm(
+      t('workflow.manager.deleteWebhookConfirm', { name: row.name }),
+      t('workflow.manager.deleteWebhookTitle'),
+      {
+        confirmButtonText: t('workflow.manager.delete'),
+        cancelButtonText: t('common.cancel'),
+        type: "warning",
+      },
+    );
+  } catch {
+    return;
+  }
+
+  try {
+    await workflowStore.deleteWebhook(row.id);
+    if (selectedWebhookId.value === row.id) {
+      selectedWebhookId.value = "";
+    }
+  } catch (error) {
+    console.error("删除 Webhook 失败:", error);
+  }
+}
+
+async function handleToggleWebhookActive(row: WebhookConfig, newVal: boolean) {
+  if (!newVal) {
+    const { references, count } =
+      await workflowStore.checkWebhookReferences(row.id);
+    if (count > 0) {
+      const refList = references
+        .map(
+          (r) =>
+            `• ${t('workflow.manager.refWorkflow')}「${r.workflow_name}」（${r.workflow_status}）- ${t('workflow.manager.refNode')}「${r.node_name}」`,
+        )
+        .join("\n");
+      try {
+        await ElMessageBox.confirm(
+          t('workflow.manager.disableWebhookConfirm', { count, refList }),
+          t('workflow.manager.disableWebhookTitle'),
+          {
+            confirmButtonText: t('workflow.manager.continueDisable'),
+            cancelButtonText: t('common.cancel'),
+            type: "warning",
+          },
+        );
+      } catch {
+        return;
+      }
+    }
+  }
+
+  try {
+    await workflowStore.updateWebhook(row.id, { is_active: newVal });
+  } catch (error) {
+    console.error("切换 Webhook 状态失败:", error);
+  }
+}
+
+function refreshDeliveryList() {
+  deliveryListRef.value?.fetchDeliveries();
+}
+
+function getWebhookStatusType(isActive: boolean): "success" | "info" {
+  return isActive ? "success" : "info";
+}
+
+function getVersionNodes(version: WorkflowVersion): WorkflowNode[] {
+  const nodes = version.config_snapshot?.nodes;
+  if (!Array.isArray(nodes)) {
+    return [];
+  }
+  return normalizeWorkflowNodes(nodes as WorkflowNode[]);
+}
+</script>
+
+<template>
+  <div v-loading="workflowStore.loading" class="workflow-manager">
+    <div class="workflow-sidebar">
+      <WorkflowListPanel
+        :base-id="baseId"
+        :workflows="workflows"
+        :loading="workflowStore.loading"
+        :current-workflow-id="currentWorkflow?.id"
+        :tables="tables"
+        @create="openCreateDialog"
+        @select="handleSelectWorkflow"
+        @back="handleBackToBase"
+        @edit="handleEditWorkflow"
+        @delete="handleDeleteWorkflow"
+        @publish="handlePublishWorkflow"
+        @pause="handlePauseWorkflow"
+        @resume="handleResumeWorkflow"
+        @update-table="handleUpdateTable" />
+    </div>
+
+    <div class="workflow-main">
+      <div class="workflow-header">
+        <div class="header-tabs">
+          <el-radio-group v-model="activeTab" size="small">
+            <el-radio-button value="editor">
+              <el-icon><EditPen /></el-icon>
+              <span>{{ t('workflow.manager.radioEditor') }}</span>
+            </el-radio-button>
+            <el-radio-button value="history">
+              <el-icon><Timer /></el-icon>
+              <span>{{ t('workflow.manager.radioHistory') }}</span>
+            </el-radio-button>
+            <el-radio-button value="webhook">
+              <el-icon><Link /></el-icon>
+              <span>{{ t('workflow.manager.radioWebhook') }}</span>
+            </el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <div class="header-actions" style="display: none;">
+          <el-button :icon="Collection" @click="handleOpenGallery">
+            {{ t('workflow.manager.gallery') }}
+          </el-button>
+        </div>
+
+        <el-tooltip :content="t('workflow.manager.helpDocs')" placement="bottom">
+          <el-icon class="workflow-help-icon" @click="openWorkflowDocs">
+            <QuestionFilled />
+          </el-icon>
+        </el-tooltip>
+      </div>
+
+      <div class="workflow-content">
+        <div v-if="!currentWorkflow" class="empty-container">
+          <el-empty :description="t('workflow.manager.emptyCreate')" />
+        </div>
+
+        <template v-else>
+          <div
+            v-show="activeTab === 'editor'"
+            v-loading="detailLoading"
+            class="tab-panel">
+            <WorkflowDesigner
+              :workflow="currentWorkflow"
+              :nodes="nodes"
+              :trigger="designerTrigger"
+              :fields="fields"
+              :tables="tables"
+              :webhooks="workflowStore.webhooks"
+              @update:nodes="nodes = $event"
+              @update:trigger="trigger = $event"
+              @save="handleSaveWorkflow(nodes, designerTrigger)"
+              @publish="handlePublishFromDesigner"
+              @clone="handleCloneWorkflow"
+              @view-versions="handleViewVersions" />
+          </div>
+
+          <div v-show="activeTab === 'history'" class="tab-panel history-panel">
+            <div class="instance-selector">
+              <span class="selector-label">{{ t('workflow.manager.instanceLabel') }}</span>
+              <el-select
+                v-model="selectedInstanceId"
+                :placeholder="t('workflow.manager.instancePlaceholder')"
+                style="width: 320px"
+                @change="handleInstanceChange">
+                <el-option
+                  v-for="instance in instances"
+                  :key="instance.id"
+                  :label="`#${instance.id.slice(0, 8)} - ${instance.status}`"
+                  :value="instance.id" />
+              </el-select>
+              <el-button :icon="Refresh" text type="primary" @click="refreshInstances">{{ t('workflow.manager.refresh') }}</el-button>
+            </div>
+
+            <div class="log-container">
+              <WorkflowExecutionLogPanel
+                v-if="selectedInstance"
+                :instance="selectedInstance"
+                :logs="executionLogs"
+                :workflow-id="currentWorkflow?.id || ''" />
+              <el-empty v-else :description="t('workflow.manager.noInstance')" />
+            </div>
+          </div>
+
+          <div v-show="activeTab === 'webhook'" class="tab-panel webhook-panel">
+            <div class="webhook-layout">
+              <div class="webhook-list">
+                <div class="webhook-list-header">
+                  <span class="list-title">{{ t('workflow.manager.webhookList') }}</span>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    @click="selectedWebhookId = ''">
+                    {{ t('workflow.manager.webhookNew') }}
+                  </el-button>
+                </div>
+                <el-table
+                  :data="workflowStore.webhooks"
+                  highlight-current-row
+                  style="width: 100%"
+                  @row-click="handleWebhookRowClick">
+                  <el-table-column prop="name" :label="t('workflow.manager.colName')" min-width="140" />
+                  <el-table-column prop="method" :label="t('workflow.manager.colMethod')" width="80" />
+                  <el-table-column prop="url" :label="t('workflow.manager.colUrl')" min-width="200" show-overflow-tooltip />
+                  <el-table-column :label="t('workflow.manager.colStatus')" width="65" fixed="right">
+                    <template #default="{ row }">
+                      <el-tag :type="getWebhookStatusType(row.is_active)" size="small">
+                        {{ row.is_active ? t('workflow.manager.statusEnabled') : t('workflow.manager.statusDisabled') }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column :label="t('workflow.manager.colActions')" width="118" fixed="right">
+                    <template #default="{ row }">
+                      <el-tooltip
+                        :content="row.is_active ? t('workflow.manager.clickDisable') : t('workflow.manager.clickEnable')"
+                        placement="top">
+                        <el-switch
+                          :model-value="row.is_active"
+                          size="small"
+                          @change="(val) => handleToggleWebhookActive(row as WebhookConfig, val as boolean)" />
+                      </el-tooltip>
+                      <el-button
+                        type="danger"
+                        size="small"
+                        text
+                        :icon="Delete"
+                        @click.stop="handleDeleteWebhook(row as WebhookConfig)">
+                        {{ t('workflow.manager.delete') }}
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+
+              <div class="webhook-detail">
+                <WebhookConfigPanel
+                  :webhook="selectedWebhook"
+                  :base-id="baseId"
+                  @saved="handleWebhookSaved"
+                  @cancel="selectedWebhookId = ''" />
+
+                <div
+                  v-if="selectedWebhook"
+                  class="webhook-deliveries">
+                  <div class="section-title" style="display: flex; align-items: center; justify-content: space-between;">
+                    <span>{{ t('workflow.manager.deliveriesTitle') }}</span>
+                    <el-button :icon="Refresh" text size="small" type="primary" @click="refreshDeliveryList">{{ t('workflow.manager.refresh') }}</el-button>
+                  </div>
+                  <WebhookDeliveryList ref="deliveryListRef" :webhook-id="selectedWebhook.id" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 编辑/新建工作流弹窗 -->
+    <el-dialog
+      v-model="editDialogVisible"
+      :title="editForm.id ? t('workflow.manager.editTitleEdit') : t('workflow.manager.editTitleCreate')"
+      width="520px"
+      destroy-on-close>
+      <el-form
+        ref="editFormRef"
+        :model="editForm"
+        :rules="editFormRules"
+        label-position="top">
+        <el-form-item :label="t('workflow.manager.nameLabel')" prop="name">
+          <el-input
+            v-model="editForm.name"
+            :placeholder="t('workflow.manager.namePlaceholder')"
+            maxlength="200"
+            show-word-limit
+            clearable />
+        </el-form-item>
+
+        <el-form-item :label="t('workflow.manager.tableLabel')" prop="table_id">
+          <el-select
+            v-model="editForm.table_id"
+            :placeholder="t('workflow.manager.tablePlaceholder')"
+            style="width: 100%"
+            clearable
+            :disabled="!!editForm.id"
+            data-testid="workflow-table-select">
+            <el-option
+              v-for="table in tables"
+              :key="table.id"
+              :label="table.name"
+              :value="table.id" />
+          </el-select>
+          <div v-if="tables.length === 0" class="form-help-text">
+            {{ t('workflow.manager.noTableHint') }}
+          </div>
+        </el-form-item>
+
+        <el-form-item :label="t('workflow.manager.descLabel')" prop="description">
+          <el-input
+            v-model="editForm.description"
+            type="textarea"
+            :rows="4"
+            :placeholder="t('workflow.manager.descPlaceholder')"
+            maxlength="500"
+            show-word-limit
+            resize="none" />
+          <div class="form-char-count">
+            {{ editDescCharCount }} / 500
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">{{ t('workflow.manager.cancel') }}</el-button>
+        <el-button type="primary" @click="editForm.id ? handleUpdateWorkflowInfo() : handleCreateWorkflow()">
+          {{ editForm.id ? t('workflow.manager.save') : t('workflow.manager.create') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 版本历史弹窗 -->
+    <el-dialog
+      v-model="versionDialogVisible"
+      :title="t('workflow.manager.versionHistory')"
+      width="680px"
+      destroy-on-close>
+      <el-table
+        v-loading="versionLoading"
+        :data="workflowStore.versions"
+        row-key="id"
+        height="60vh"
+        style="width: 100%">
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="version-snapshot">
+              <div class="snapshot-section">
+                <div class="snapshot-label">{{ t('workflow.manager.nodeList') }}</div>
+                <el-empty
+                  v-if="getVersionNodes(row as WorkflowVersion).length === 0"
+                  :description="t('workflow.manager.noNodeInfo')"
+                  :image-size="60" />
+                <el-collapse v-else>
+                  <el-collapse-item
+                    v-for="(node, index) in getVersionNodes(row as WorkflowVersion)"
+                    :key="node.id || index"
+                    :title="`${node.name || t('workflow.manager.unnamedNode')} (#${node.order + 1 || index + 1})`">
+                    <WorkflowVersionNodeSnapshot
+                      :node="node"
+                      :fields="fields"
+                      :tables="tables"
+                      :webhooks="workflowStore.webhooks" />
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('workflow.manager.versionNumber')" width="100">
+          <template #default="{ row }">
+            <el-tag type="primary" size="small">v{{ row.version_number }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('workflow.manager.createdTime')" min-width="180">
+          <template #default="{ row }">
+            {{ row.created_at ? formatDateTime(row.created_at) : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('workflow.manager.createdBy')" min-width="140">
+          <template #default="{ row }">
+            {{ row.created_by_name || row.created_by || '-' }}
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="versionDialogVisible = false">{{ t('workflow.manager.versionClose') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <WorkflowTemplateGallery
+      v-model:visible="galleryVisible"
+      :base-id="baseId"
+      :tables="tables"
+      @created="handleGalleryCreated" />
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.workflow-manager {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: $bg-color;
+}
+
+.workflow-sidebar {
+  flex-shrink: 0;
+  height: 100%;
+  border-right: 1px solid $border-color;
+  background-color: white;
+  overflow: hidden;
+}
+
+.workflow-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.workflow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: $spacing-md;
+  border-bottom: 1px solid $border-color;
+  background-color: white;
+}
+
+.workflow-help-icon {
+  font-size: 18px;
+  color: $text-secondary;
+  cursor: pointer;
+  transition: color 0.2s ease;
+
+  &:hover {
+    color: $primary-color;
+  }
+}
+
+.header-tabs {
+  :deep(.el-radio-button__inner) {
+    display: inline-flex;
+    align-items: center;
+    gap: $spacing-xs;
+  }
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+}
+
+.workflow-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.tab-panel {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.empty-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  padding: $spacing-md;
+  gap: $spacing-md;
+}
+
+.instance-selector {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+}
+
+.selector-label {
+  font-size: $font-size-sm;
+  color: $text-secondary;
+  white-space: nowrap;
+}
+
+.log-container {
+  flex: 1;
+  overflow-y: auto;
+  background-color: white;
+  border-radius: $border-radius-md;
+  padding: $spacing-md;
+}
+
+.webhook-panel {
+  display: flex;
+  flex-direction: column;
+  padding: $spacing-md;
+}
+
+.webhook-layout {
+  display: flex;
+  gap: $spacing-md;
+  height: 100%;
+  overflow: hidden;
+}
+
+.webhook-list {
+  width: 45%;
+  min-width: 360px;
+  background-color: white;
+  border-radius: $border-radius-md;
+  padding: $spacing-md;
+  overflow-y: auto;
+}
+
+.webhook-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: $spacing-md;
+  border-bottom: 1px solid $border-color;
+}
+
+.list-title {
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.webhook-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  overflow-y: auto;
+}
+
+.webhook-detail > * {
+  background-color: white;
+  border-radius: $border-radius-md;
+  padding: $spacing-md;
+}
+
+.webhook-deliveries {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+}
+
+.section-title {
+  font-weight: 600;
+  color: $text-primary;
+  padding-bottom: $spacing-sm;
+  border-bottom: 1px solid $border-color;
+}
+
+.form-help-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: $text-secondary;
+  line-height: 1.5;
+}
+
+.form-char-count {
+  margin-top: 4px;
+  font-size: 12px;
+  color: $text-disabled;
+  text-align: right;
+}
+
+.version-snapshot {
+  padding: $spacing-sm $spacing-md;
+  background-color: $bg-color;
+  border-radius: $border-radius-md;
+}
+
+.snapshot-section {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.snapshot-label {
+  font-size: $font-size-sm;
+  font-weight: 500;
+  color: $text-secondary;
+}
+</style>

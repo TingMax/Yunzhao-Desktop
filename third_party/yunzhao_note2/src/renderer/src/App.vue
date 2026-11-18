@@ -1,0 +1,754 @@
+<script setup>
+import { useWorkspaceRuntime } from './composables/useWorkspaceRuntime.js'
+import { useWorkspaceWallpaper } from './composables/useWorkspaceWallpaper.js'
+import { useWorkspaceNotices } from './composables/useWorkspaceNotices.js'
+import { useUpdateCheck } from './composables/useUpdateCheck.js'
+import EditingDraftDialog from './components/system/EditingDraftDialog.vue'
+import CaptureDelivery from './components/capture/CaptureDelivery.vue'
+import { editingDataGeneration } from './composables/useDraftProtection.js'
+import { defineAsyncComponent } from 'vue'
+/**
+ * App.vue — 应用根组件
+ *
+ * 职责：
+ *   1. 在组件挂载时从数据库加载持久化的用户设置（字体缩放、玻璃态参数等）
+ *   2. 将设置值应用为 CSS 自定义属性，驱动全局玻璃态样式
+ *   3. 渲染完成后通知主进程显示窗口（避免白屏闪烁）
+ *
+ * 组件结构：
+ *   .app-root（根容器，flex 纵向布局，充满视口）
+ *     ├── ResizeHandles（八方向缩放手柄，覆盖在最上层）
+ *     ├── AppTitlebar（可切换 Apple / Microsoft 视觉的自定义标题栏）
+ *     └── main.content（主内容区域，可滚动）
+ */
+
+import { computed, nextTick, ref, watch } from 'vue'
+import AlmanacLauncher from './components/almanac/AlmanacLauncher.vue'
+import AppTitlebar from './components/system/AppTitlebar.vue'
+import TitlebarActions from './components/system/TitlebarActions.vue'
+import ViewSwitcher from './components/system/ViewSwitcher.vue'
+import ResizeHandles from './components/system/ResizeHandles.vue' // 自定义窗口缩放手柄
+import WindowPresentation from './components/system/WindowPresentation.vue'
+const SettingsPanel = defineAsyncComponent(() => import('./components/system/SettingsPanel.vue'))
+import MessageToast from './components/system/MessageToast.vue'
+import UpdateDialog from './components/system/UpdateDialog.vue'
+import RemoteNoticeDialog from './components/system/RemoteNoticeDialog.vue'
+import FirstUseNoticeDialog from './components/system/FirstUseNoticeDialog.vue'
+import HolidayDataNoticeDialog from './components/system/HolidayDataNoticeDialog.vue'
+import ShortcutConflictDialog from './components/system/ShortcutConflictDialog.vue'
+import DailyReportDialog from './components/report/DailyReportDialog.vue'
+import DailyReportButton from './components/report/DailyReportButton.vue'
+import AppIcon from './components/ui/AppIcon.vue'
+import NoteList from './components/list/NoteList.vue'
+import NoteEditor from './components/note/NoteEditor.vue'
+import ActionBar from './components/list/ActionBar.vue'
+import TemplatePage from './components/template/TemplatePage.vue'
+import HelpPage from './components/help/HelpPage.vue'
+import { useSlidingWorkspace } from './composables/useSlidingWorkspace.js'
+import { useQueuedModal, useModalRequest } from './composables/useQueuedModal.js'
+import {
+  captureFocusedElement,
+  focusModal,
+  restoreFocusedElement,
+  trapModalTab
+} from './utils/modalFocus.js'
+import { DEFAULT_SETTINGS, VIEW_MODES } from '../../shared/settings-schema.js'
+
+// 注册全局应用内消息通知能力（子孙组件通过 useMessage() 获取）
+const workspaceRuntime = useWorkspaceRuntime({
+  defaults: DEFAULT_SETTINGS,
+  getViewMode: () => VIEW_MODES.LIST,
+  label: 'App',
+  hoverPhase: 'setup',
+  windowFallback: false,
+  waitForContent: false,
+  onSnapshot: (snapshot) => {
+    void wallpaper.sync(snapshot)
+  },
+  onInitialSnapshot: (snapshot) => notices.applyInitialSnapshot(snapshot),
+  onSettingsChanged: (snapshot) => notices.revealFirstUseNoticeFromSnapshot(snapshot),
+  onNotesChanged: (event) => {
+    if (event?.reason === 'note-data-cleared') selectedNote.value = null
+  },
+  onRemoteNoticesChanged: () => {
+    void notices.loadPendingRemoteNotices({ show: true })
+  },
+  beforeReady: async () => {
+    await notices.loadPendingRemoteNotices({ show: true })
+    await notices.loadHolidayDataNotice()
+  },
+  afterReady: () => updateCheck.scheduleStartup()
+})
+const { showMessage, presentationMode, locked, zOrderMode } = workspaceRuntime
+const wallpaper = useWorkspaceWallpaper({
+  defaults: DEFAULT_SETTINGS,
+  cacheLoads: true,
+  label: 'App'
+})
+const { wallpaperUrl, wallpaperVisible, wallpaperBlurRadius, wallpaperRenderKey } = wallpaper
+const updateCheck = useUpdateCheck({ policy: 'list', label: 'App' })
+const { updateQueue, showUpdateDialog, updateChecking, updateResult, checkForUpdates } = updateCheck
+const notices = useWorkspaceNotices({ showMessage, openSettings, label: 'App' })
+const {
+  noticeQueue,
+  firstUseQueue,
+  holidayQueue,
+  showRemoteNoticeDialog,
+  showFirstUseNotice,
+  showHolidayDataNoticeDialog,
+  pendingRemoteNotices,
+  pendingHolidayDataNotice,
+  dismissHolidayDataNotice,
+  closeRemoteNoticeDialog,
+  onRemoteNoticeAcknowledged,
+  onFirstUseCompleted
+} = notices
+
+/** 设置面板显隐状态 */
+const showSettings = ref(false)
+const reportQueue = useModalRequest()
+const showDailyReportDialog = reportQueue.requested
+const almanacQueue = useModalRequest()
+const showAlmanac = almanacQueue.requested
+const showShortcutNotice = ref(false)
+const templatePanelRef = ref(null)
+const helpPanelRef = ref(null)
+const templateWorkspace = useSlidingWorkspace({ getElement: () => templatePanelRef.value })
+const helpWorkspace = useSlidingWorkspace({ getElement: () => helpPanelRef.value })
+const {
+  rendered: templatesRendered,
+  active: templatePanelActive,
+  phase: templatePhase,
+  interactive: templateInteractive,
+  close: closeTemplateWorkspace,
+  onTransitionEnd: onTemplateTransitionEnd,
+  onTransitionCancel: onTemplateTransitionCancel
+} = templateWorkspace
+const {
+  rendered: helpRendered,
+  active: helpPanelActive,
+  phase: helpPhase,
+  interactive: helpInteractive,
+  close: closeHelpWorkspace,
+  onTransitionEnd: onHelpTransitionEnd,
+  onTransitionCancel: onHelpTransitionCancel
+} = helpWorkspace
+
+function openSettings() {
+  workspaceRuntime.retainBlur('settings')
+  showSettings.value = true
+}
+
+function openDailyReport() {
+  closeTemplates()
+  closeHelp()
+  showDailyReportDialog.value = true
+}
+
+function releaseSettingsBlur() {
+  workspaceRuntime.releaseBlur('settings')
+}
+
+function openUpdateDialog() {
+  void checkForUpdates({ showResult: true })
+}
+
+function openTemplates() {
+  closeHelp()
+  void templateWorkspace.open()
+}
+
+function closeTemplates() {
+  closeTemplateWorkspace()
+}
+
+function toggleTemplates() {
+  if (templatePhase.value === 'closed' || templatePhase.value === 'closing') openTemplates()
+  else closeTemplates()
+}
+
+function openHelp() {
+  closeTemplates()
+  void helpWorkspace.open()
+}
+
+function closeHelp() {
+  closeHelpWorkspace()
+}
+
+function toggleHelp() {
+  if (helpPhase.value === 'closed' || helpPhase.value === 'closing') openHelp()
+  else closeHelpWorkspace()
+}
+
+/** 当前选中的待办 */
+const selectedNote = ref(null)
+const { visible: editorDisplayed, finishLeave: finishEditorQueue } = useQueuedModal(selectedNote)
+const noteEditorRef = ref(null)
+const noteEditorOverlayRef = ref(null)
+let noteEditorPreviousFocus = null
+
+/** NoteList 引用 */
+const noteListRef = ref(null)
+/** ActionBar 引用：编辑保存后同步刷新仍处于会话中的搜索结果。 */
+const actionBarRef = ref(null)
+
+const compactBlocked = computed(
+  () =>
+    showSettings.value ||
+    Boolean(selectedNote.value) ||
+    showFirstUseNotice.value ||
+    showUpdateDialog.value ||
+    showRemoteNoticeDialog.value ||
+    showHolidayDataNoticeDialog.value ||
+    showShortcutNotice.value ||
+    showDailyReportDialog.value ||
+    showAlmanac.value ||
+    templateInteractive.value ||
+    helpInteractive.value
+)
+
+async function requestCompactPresentation(anchor) {
+  if (locked.value) {
+    showMessage('warning', '窗口已锁定：切换为灵动岛会改变窗口位置和尺寸，请先解锁')
+    return
+  }
+  if (compactBlocked.value) {
+    showMessage('warning', '请先完成或关闭当前操作，再收起为灵动岛')
+    return
+  }
+  try {
+    await presentationMode.enter(anchor)
+  } catch (error) {
+    showMessage('error', `收起为灵动岛失败：${error.message}`)
+  }
+}
+
+// ---- 待办交互 ----
+async function onEditNote(note) {
+  if (!note?.id) return
+  const openingFresh = !selectedNote.value
+  if (openingFresh) noteEditorPreviousFocus = captureFocusedElement()
+  // 列表项是摘要数据；打开编辑器前重新读取完整记录，避免编辑旧标签或附件数据。
+  try {
+    const fullNote = await window.api.getNote(note.id)
+    if (!fullNote) throw new Error('待办不存在或已删除')
+    selectedNote.value = fullNote
+  } catch (error) {
+    if (openingFresh) {
+      restoreFocusedElement(noteEditorPreviousFocus)
+      noteEditorPreviousFocus = null
+    }
+    showMessage('error', error.message || '无法打开待办')
+  }
+}
+
+function onCloseEditor() {
+  selectedNote.value = null
+}
+
+function releaseEditorBlur() {
+  workspaceRuntime.releaseBlur('editor')
+}
+
+function finishEditorClose() {
+  releaseEditorBlur()
+  restoreFocusedElement(noteEditorPreviousFocus)
+  noteEditorPreviousFocus = null
+  finishEditorQueue()
+}
+
+watch(editorDisplayed, async (visible) => {
+  if (!visible) return
+  noteEditorPreviousFocus = captureFocusedElement()
+  workspaceRuntime.retainBlur('editor')
+  await nextTick()
+  if (editorDisplayed.value) focusModal(noteEditorOverlayRef.value)
+})
+
+function onEditorKeydown(event) {
+  if (event.key === 'Escape') {
+    event.stopPropagation()
+    requestCloseEditor()
+    return
+  }
+  trapModalTab(event, noteEditorOverlayRef.value)
+}
+
+function requestCloseEditor() {
+  noteEditorRef.value?.requestClose?.()
+}
+
+async function onNoteSaved(updated) {
+  if (updated?.id) await noteListRef.value?.refreshOne(updated)
+  actionBarRef.value?.refreshSearch?.()
+  onCloseEditor()
+}
+
+async function onNoteUpdated(updated) {
+  if (updated) selectedNote.value = updated
+  if (updated?.id) await noteListRef.value?.refreshOne(updated)
+  actionBarRef.value?.refreshSearch?.()
+}
+
+async function onCreateNote() {
+  noteListRef.value?.refresh()
+  actionBarRef.value?.refreshSearch?.()
+}
+</script>
+
+<template>
+  <!-- 应用根容器：同时承载背景样式（.app-bg）和布局（.app-root） -->
+  <div class="app-root app-bg">
+    <Transition name="app-wallpaper" v-bind="wallpaper.transitionHooks()">
+      <div
+        v-if="wallpaperVisible"
+        :key="wallpaperRenderKey"
+        class="app-wallpaper"
+        aria-hidden="true"
+      >
+        <div
+          class="app-wallpaper-image"
+          :style="{
+            backgroundImage: `url(${wallpaperUrl})`,
+            '--wallpaper-blur': `${wallpaperBlurRadius}px`
+          }"
+        />
+      </div>
+    </Transition>
+    <ResizeHandles :locked="locked" :mode="presentationMode.displayMode.value" />
+    <WindowPresentation
+      :mode="presentationMode.mode.value"
+      :operation="presentationMode.operation.value"
+      :locked="locked"
+    >
+      <!-- 设置打开时，底层场景不可点击且不可获取键盘焦点。 -->
+      <div
+        class="app-scene"
+        :inert="
+          showSettings ||
+          !!selectedNote ||
+          showFirstUseNotice ||
+          showUpdateDialog ||
+          showRemoteNoticeDialog ||
+          showHolidayDataNoticeDialog ||
+          showShortcutNotice ||
+          showDailyReportDialog ||
+          showAlmanac
+        "
+      >
+        <AppTitlebar
+          v-model:locked="locked"
+          v-model:z-order-mode="zOrderMode"
+          @request:compact="requestCompactPresentation"
+        >
+          <!-- 设置和帮助按钮组 -->
+          <TitlebarActions>
+            <ViewSwitcher :active-view="VIEW_MODES.LIST" />
+            <AlmanacLauncher v-model:visible="showAlmanac" :queue="almanacQueue" />
+            <DailyReportButton @open="openDailyReport" />
+            <button
+              class="titlebar-btn titlebar-btn-template"
+              :class="{ 'is-active': templatePanelActive }"
+              :title="templatePanelActive ? '关闭循环模板' : '打开循环模板'"
+              aria-controls="template-workspace"
+              :aria-expanded="templatePanelActive"
+              @click="toggleTemplates"
+            >
+              <AppIcon class="btn-icon" name="recurrence" alt="循环模板" />
+            </button>
+            <!-- 设置按钮 -->
+            <button class="titlebar-btn titlebar-btn-settings" title="设置" @click="openSettings">
+              <AppIcon class="btn-icon" name="settings" alt="设置" />
+            </button>
+            <!-- 帮助按钮：从右滑入帮助中心（与循环模版互斥） -->
+            <button
+              class="titlebar-btn titlebar-btn-help"
+              :class="{ 'is-active': helpPanelActive }"
+              :title="helpPanelActive ? '关闭帮助' : '帮助'"
+              aria-controls="help-workspace"
+              :aria-expanded="helpPanelActive"
+              @click="toggleHelp"
+            >
+              <AppIcon class="btn-icon" name="help" alt="帮助" />
+            </button>
+          </TitlebarActions>
+        </AppTitlebar>
+        <div class="app-content-stage">
+          <!-- 主内容区域，flex:1 占据导航栏下方空间。 -->
+          <main
+            class="content"
+            :class="{ 'is-ui-background-blurred': templateInteractive || helpInteractive }"
+            :inert="templateInteractive || helpInteractive"
+          >
+            <ActionBar
+              :key="'create:' + editingDataGeneration"
+              ref="actionBarRef"
+              class="app-search"
+              @create="onCreateNote"
+              @edit="onEditNote"
+            />
+            <NoteList
+              :key="'list:' + editingDataGeneration"
+              ref="noteListRef"
+              class="app-list"
+              @edit="onEditNote"
+            />
+          </main>
+
+          <div
+            v-if="templatesRendered"
+            class="app-template-wrapper"
+            :class="{ 'is-interactive': templateInteractive }"
+          >
+            <div
+              id="template-workspace"
+              ref="templatePanelRef"
+              class="app-template-panel"
+              :class="{ active: templatePanelActive }"
+              role="region"
+              aria-label="循环待办模版设置"
+              @transitionend="onTemplateTransitionEnd"
+              @transitioncancel="onTemplateTransitionCancel"
+            >
+              <TemplatePage :key="editingDataGeneration" />
+            </div>
+          </div>
+
+          <div
+            v-if="helpRendered"
+            class="app-help-wrapper"
+            :class="{ 'is-interactive': helpInteractive }"
+          >
+            <div
+              id="help-workspace"
+              ref="helpPanelRef"
+              class="app-help-panel"
+              :class="{ active: helpPanelActive }"
+              role="region"
+              aria-label="帮助中心"
+              @transitionend="onHelpTransitionEnd"
+              @transitioncancel="onHelpTransitionCancel"
+            >
+              <HelpPage @close="closeHelp" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </WindowPresentation>
+    <!-- 待办编辑弹窗：复用 NoteEditor，底层列表保持可见但不可交互。 -->
+    <Transition name="app-editor-modal" appear @after-leave="finishEditorClose">
+      <div
+        v-if="editorDisplayed"
+        ref="noteEditorOverlayRef"
+        class="app-editor-overlay"
+        data-modal-layer="note-editor"
+        role="presentation"
+        tabindex="-1"
+        @keydown="onEditorKeydown"
+      >
+        <section class="app-editor-dialog" role="dialog" aria-modal="true" aria-label="修改待办">
+          <header class="app-editor-header">
+            <span>修改待办</span>
+            <button
+              class="app-editor-close"
+              aria-label="关闭编辑"
+              title="关闭"
+              @click="requestCloseEditor"
+            >
+              ×
+            </button>
+          </header>
+          <NoteEditor
+            ref="noteEditorRef"
+            :key="selectedNote.id"
+            :note="selectedNote"
+            class="app-editor"
+            @saved="onNoteSaved"
+            @updated="onNoteUpdated"
+            @cancel="onCloseEditor"
+          />
+        </section>
+      </div>
+    </Transition>
+
+    <!-- 设置面板关闭动画结束后将 visible 置为 false，随后真正卸载组件。 -->
+    <CaptureDelivery @created="onCreateNote" />
+    <ShortcutConflictDialog
+      v-model:visible="showShortcutNotice"
+      @open-settings="showSettings = true"
+    />
+    <SettingsPanel
+      v-if="showSettings"
+      v-model:visible="showSettings"
+      @blur-release="releaseSettingsBlur"
+      @check-update="openUpdateDialog"
+    />
+
+    <FirstUseNoticeDialog
+      v-if="showFirstUseNotice"
+      :queue="firstUseQueue"
+      :visible="showFirstUseNotice"
+      @completed="onFirstUseCompleted"
+    />
+
+    <UpdateDialog
+      v-model:visible="showUpdateDialog"
+      :queue="updateQueue"
+      :checking="updateChecking"
+      :result="updateResult"
+      @retry="checkForUpdates({ showResult: true })"
+    />
+
+    <RemoteNoticeDialog
+      v-if="showRemoteNoticeDialog && pendingRemoteNotices.length"
+      :queue="noticeQueue"
+      :notices="pendingRemoteNotices"
+      @close="closeRemoteNoticeDialog"
+      @acknowledged="onRemoteNoticeAcknowledged"
+    />
+
+    <HolidayDataNoticeDialog
+      v-if="pendingHolidayDataNotice"
+      :queue="holidayQueue"
+      :visible="showHolidayDataNoticeDialog"
+      :year="pendingHolidayDataNotice.year"
+      @dismiss="dismissHolidayDataNotice()"
+      @open-settings="dismissHolidayDataNotice({ openSettingsAfter: true })"
+    />
+
+    <DailyReportDialog v-model:visible="showDailyReportDialog" :queue="reportQueue" />
+
+    <!-- 应用内消息弹窗（Apple 风格 Toast，固定顶部居中） -->
+    <EditingDraftDialog />
+    <MessageToast />
+  </div>
+</template>
+
+<style scoped>
+/* 根容器：flex 纵向布局，充满整个视口高度 */
+.app-root {
+  position: relative; /* 为 ResizeHandles 的 absolute 定位提供参考 */
+  display: flex;
+  flex-direction: column; /* 纵向排列：标题栏 → 内容区 */
+  height: 100vh; /* 占满视口高度 */
+  border-radius: var(--window-radius); /* 用户可调的圆角 */
+  overflow: hidden; /* 裁剪超出圆角的内容 */
+  box-shadow: none; /* 主窗口主动取消阴影 */
+
+  /* 主窗口不使用 CSS 模糊（OS 已提供毛玻璃），覆写 .app-bg 的 backdrop-filter */
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+
+  /* 主窗口独立透明度（--window-opacity），与弹窗的 --popup-opacity 分离 */
+  background-color: rgb(var(--bg-color) / var(--window-opacity));
+}
+
+.app-wallpaper {
+  position: absolute;
+  z-index: var(--z-local-base);
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.app-wallpaper-image {
+  position: absolute;
+  inset: calc(var(--wallpaper-blur) * -2);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  filter: blur(var(--wallpaper-blur));
+  transition:
+    inset 180ms ease,
+    filter 180ms ease;
+  will-change: filter;
+}
+.app-wallpaper-enter-active,
+.app-wallpaper-leave-active {
+  transition: opacity 180ms ease;
+}
+.app-wallpaper-enter-from,
+.app-wallpaper-leave-to {
+  opacity: 0;
+}
+
+/* 主界面独立成场景，便于模态设置面板统一隔离交互。 */
+.app-scene {
+  position: relative;
+  z-index: var(--z-local-content);
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  transition: filter 100ms ease-out;
+}
+
+/* 主内容区域 */
+.app-content-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.content {
+  flex: 1; /* 占据标题栏之外的所有剩余空间 */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* 自身不滚动，滚动权交给内部的待办列表 */
+  padding: 16rem; /* 内边距，统一使用 rem 跟随窗口缩放 */
+  transition: filter 180ms ease-out;
+}
+.app-template-wrapper {
+  position: absolute;
+  z-index: var(--z-global-workspace);
+  inset: 0;
+  overflow: hidden;
+  border-radius: var(--window-radius);
+  pointer-events: none;
+}
+.app-template-wrapper.is-interactive {
+  pointer-events: auto;
+}
+.app-template-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background-color: var(--surface-panel);
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.16);
+  transform: translateX(100%);
+  transition: transform 360ms var(--ease-standard);
+  will-change: transform;
+}
+.app-template-panel.active {
+  transform: translateX(0);
+}
+
+/* 帮助面板与模版面板互斥，共用同一工作区层级。 */
+.app-help-wrapper {
+  position: absolute;
+  z-index: var(--z-global-workspace);
+  inset: 0;
+  overflow: hidden;
+  border-radius: var(--window-radius);
+  pointer-events: none;
+}
+.app-help-wrapper.is-interactive {
+  pointer-events: auto;
+}
+.app-help-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background-color: var(--surface-panel);
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.16);
+  transform: translateX(100%);
+  transition: transform 360ms var(--ease-standard);
+  will-change: transform;
+}
+.app-help-panel.active {
+  transform: translateX(0);
+}
+/* 搜索框间距 */
+.app-search {
+  flex-shrink: 0;
+}
+
+/* 列表弹性填充 */
+.app-list,
+.app-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.app-editor-overlay {
+  position: absolute;
+  z-index: var(--z-global-editor);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22rem;
+  background: var(--surface-modal-scrim);
+}
+.app-editor-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(620rem, 100%);
+  height: min(639rem, 100%);
+  min-height: 0;
+  overflow: hidden;
+  background-color: var(--surface-modal);
+  border: 1px solid var(--ui-border-control);
+  border-radius: 16rem;
+  box-shadow: 0 22rem 56rem rgba(0, 0, 0, 0.28);
+}
+.app-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  min-height: 42rem;
+  padding: 0 12rem 0 16rem;
+  border-bottom: 1px solid var(--ui-border-divider);
+  color: var(--text-color);
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+.app-editor-close {
+  display: grid;
+  place-items: center;
+  width: 26rem;
+  height: 26rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-color-secondary);
+  font: inherit;
+  font-size: 22rem;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 140ms var(--ease-standard);
+}
+.app-editor-close:hover {
+  background: var(--ui-fill-hover);
+  color: var(--text-color);
+}
+.app-editor-close:active {
+  transform: scale(0.98);
+}
+.app-editor-modal-enter-active,
+.app-editor-modal-leave-active {
+  transition: opacity 180ms ease;
+}
+.app-editor-modal-enter-active .app-editor-dialog,
+.app-editor-modal-leave-active .app-editor-dialog {
+  transition:
+    opacity 180ms ease,
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.app-editor-modal-enter-from,
+.app-editor-modal-leave-to {
+  opacity: 0;
+}
+.app-editor-modal-enter-from .app-editor-dialog,
+.app-editor-modal-leave-to .app-editor-dialog {
+  opacity: 0;
+  transform: translateY(10rem) scale(0.985);
+}
+</style>

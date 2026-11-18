@@ -1,0 +1,2979 @@
+<script setup>
+import { useModalRequest } from '../../composables/useQueuedModal.js'
+import { reportEvidence } from '../../utils/diagnosticEvidence.js'
+import { useSettingsWriteQueue } from '../../composables/useSettingsWriteQueue.js'
+import SettingsApplicationStatus from './settings/SettingsApplicationStatus.vue'
+import AttachmentRecoveryStatus from './settings/AttachmentRecoveryStatus.vue'
+import { registerPageLeaveParticipant } from '../../utils/pageLeave.js'
+import { useDockSettingsForm } from '../../composables/useDockSettingsForm.js'
+import { useStickySettingsForm } from '../../composables/useStickySettingsForm.js'
+import DockSettingsSection from './settings/DockSettingsSection.vue'
+import StickySettingsSection from './settings/StickySettingsSection.vue'
+import { useSettingsSearch } from '../../composables/useSettingsSearch.js'
+import { useHolidayDataSettings } from '../../composables/useHolidayDataSettings.js'
+import { useSettingsDiagnostics } from '../../composables/useSettingsDiagnostics.js'
+import { stopScrollInertia } from '../../utils/smoothScroll.js'
+import { ownedPopovers } from '../../utils/anchoredPopover.js'
+/**
+ * SettingsPanel.vue — 底部弹出式设置面板
+ *
+ * 职责：
+ *   1. 从主窗口底部向上滑入，占主窗口 70% 高度
+ *   2. 使用全局玻璃基准值渲染设置面板，并让其他浮层按比例派生
+ *   3. 展示并实时控制各类设置（基础样式、窗口、关于）
+ *   4. 所有设置修改立即生效（CSS变量 / IPC / 系统API）
+ *
+ * Props:
+ *   - visible {Boolean} 控制面板显隐，配合 v-model 使用
+ *
+ * Events:
+ *   - update:visible  关闭面板时触发
+ */
+
+import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import AppToggle from '../ui/AppToggle.vue'
+import BaseButton from '../ui/BaseButton.vue'
+import FontSizeInput from '../ui/FontSizeInput.vue'
+import StyledSelect from '../ui/StyledSelect.vue'
+import AppSlider from '../ui/AppSlider.vue'
+import ShortcutRecorder from '../ui/ShortcutRecorder.vue'
+import SettingsControlPopover from './SettingsControlPopover.vue'
+import { formatViewVisibilityShortcut } from '../../../../shared/view-visibility-shortcut.js'
+import { ACTION_SHORTCUTS } from '../../../../shared/capture-shortcuts.js'
+import ConfirmDialog from '../ui/ConfirmDialog.vue'
+import HelpButton from '../ui/HelpButton.vue'
+import WallpaperSettings from '../wallpaper/WallpaperSettings.vue'
+import LogViewerDialog from './LogViewerDialog.vue'
+import RemoteNoticeHistoryDialog from './RemoteNoticeHistoryDialog.vue'
+import WeatherSettings from '../weather/WeatherSettings.vue'
+import { useMessage } from '../../composables/useMessage.js' // 消息弹窗
+import { useDateContextSettings } from '../../composables/useDateContextSettings.js'
+import { weatherLocationKey } from '../../../../shared/weather-rules.js'
+import {
+  applyUiScale,
+  applyGlassBaseSettings,
+  applyIconColor,
+  applySettingsSnapshot,
+  applyTitlebarIconScale
+} from '../../utils/applySettingsSnapshot.js'
+import {
+  captureFocusedElement,
+  restoreFocusedElement,
+  trapModalTab
+} from '../../utils/modalFocus.js'
+import {
+  DEFAULT_SETTINGS,
+  createDefaultSettings,
+  ICON_COLORS,
+  TITLEBAR_ICON_SCALE_LIMITS,
+  UI_SCALES,
+  VIEW_MODES
+} from '../../../../shared/settings-schema.js'
+
+function shortcutSummary(value, runtime) {
+  const key = formatViewVisibilityShortcut(value) || '未设置'
+  if (runtime?.enabled === false) return '已禁用 · ' + key
+  if (runtime?.error && !runtime.registered) return '未启用 · ' + key
+  return key
+}
+
+const props = defineProps({
+  visible: {
+    type: Boolean,
+    default: false
+  },
+  viewMode: {
+    type: String,
+    default: VIEW_MODES.LIST,
+    validator: (value) => Object.values(VIEW_MODES).includes(value)
+  }
+})
+
+const emit = defineEmits(['update:visible', 'blur-release', 'check-update'])
+
+const el = document.documentElement
+const isCalendarView = computed(
+  () => props.viewMode === VIEW_MODES.MONTH || props.viewMode === VIEW_MODES.WEEK
+)
+const calendarViewLabel = computed(() => (props.viewMode === VIEW_MODES.WEEK ? '周视图' : '月视图'))
+const currentViewLabel = computed(() =>
+  props.viewMode === VIEW_MODES.LIST ? '列表视图' : calendarViewLabel.value
+)
+const viewDefaults = computed(() => createDefaultSettings(props.viewMode))
+// ---- 面板动画控制 ----
+const rendered = ref(props.visible)
+const panelActive = ref(false)
+const panelRef = ref(null)
+const panelBodyRef = ref(null)
+// sessionStorage 跨主视图导航保留，关闭本次软件窗口会话后清空，不写入用户设置。
+const scrollMemoryKey = `yunzhao-note:settings-scroll:${props.viewMode}`
+const diagnosticsMemoryKey = `${scrollMemoryKey}:diagnostics`
+const diagnosticsExpanded = ref(false)
+try {
+  diagnosticsExpanded.value = sessionStorage.getItem(diagnosticsMemoryKey) === 'true'
+} catch {
+  // 临时存储不可用时，诊断区默认收起。
+}
+watch(diagnosticsExpanded, (expanded) => {
+  try {
+    sessionStorage.setItem(diagnosticsMemoryKey, String(expanded))
+  } catch {
+    // 展开状态不写入持久设置，不影响诊断功能。
+  }
+})
+let scrollMemoryReady = false
+let scrollRestoreObserver = null
+
+function cancelScrollRestore() {
+  scrollRestoreObserver?.disconnect()
+  scrollRestoreObserver = null
+}
+
+function onManualScroll() {
+  cancelScrollRestore()
+  settingsSearch.cancel()
+}
+
+function rememberScrollPosition() {
+  if (!scrollMemoryReady || !panelBodyRef.value) return
+  try {
+    sessionStorage.setItem(scrollMemoryKey, String(panelBodyRef.value.scrollTop))
+  } catch {
+    // 临时存储不可用时仍允许正常打开、滚动和关闭设置。
+  }
+}
+
+function restoreScrollPosition() {
+  cancelScrollRestore()
+  const body = panelBodyRef.value
+  if (!body) return
+  let top = 0
+  try {
+    top = Number(sessionStorage.getItem(scrollMemoryKey))
+  } catch {
+    // 首次打开或存储不可用时从顶部开始。
+  }
+  const target = Number.isFinite(top) ? Math.max(0, top) : 0
+  stopScrollInertia(body)
+  const apply = () => {
+    const maximum = Math.max(0, body.scrollHeight - body.clientHeight)
+    body.scrollTop = Math.min(target, maximum)
+    if (maximum >= target) cancelScrollRestore()
+  }
+  // 页尾分区可能仍在读取本地数据；可滚动范围补齐后再恢复剩余距离。
+  // 用户主动滚动、拖拽或关闭时立即停止，不能与用户争夺位置。
+  scrollRestoreObserver = new ResizeObserver(apply)
+  scrollRestoreObserver.observe(body)
+  if (body.firstElementChild) scrollRestoreObserver.observe(body.firstElementChild)
+  apply()
+  scrollMemoryReady = true
+}
+
+function freezeScrollPosition() {
+  cancelScrollRestore()
+  settingsSearch.cancel()
+  stopScrollInertia(panelBodyRef.value)
+  rememberScrollPosition()
+  scrollMemoryReady = false
+}
+
+const closeButtonRef = ref(null)
+const settingsPreviousFocus = captureFocusedElement()
+const panelSize = ref(viewDefaults.value.ui.settingsPanelSize)
+const panelStyle = computed(() =>
+  isCalendarView.value ? { width: panelSize.value + '%' } : { height: panelSize.value + '%' }
+)
+const logQueue = useModalRequest()
+const showLogViewer = logQueue.requested
+const historyQueue = useModalRequest()
+const showNoticeHistory = historyQueue.requested
+const appVersion = ref('未知')
+
+/** 关闭动画定时器 ID，用于取消竞态关闭 */
+let closeTimer = null
+let blurReleaseTimer = null
+let openRaf = null
+let componentUnmounted = false
+const closeSaving = ref(false)
+const retryingSettingSaves = ref(false)
+
+// ---- 拖拽调整面板高度 ----
+let isDragging = false
+let dragPointerId = null
+let dragHandle = null
+let dragStartPoint = 0
+let dragStartSize = 0
+let dragLatestPoint = 0
+let dragRaf = null
+
+function onDragStart(e) {
+  if (isResetting.value || isLeaving.value || closeSaving.value || e.button !== 0 || isDragging)
+    return
+  cancelScrollRestore()
+
+  isDragging = true
+  dragPointerId = e.pointerId
+  dragHandle = e.currentTarget
+  dragStartPoint = isCalendarView.value ? e.clientX : e.clientY
+  dragLatestPoint = dragStartPoint
+  dragStartSize = panelSize.value
+  dragHandle.setPointerCapture(e.pointerId)
+  if (panelRef.value) {
+    panelRef.value.style.transition = 'none'
+  }
+  e.preventDefault()
+}
+
+function onDragMove(e) {
+  if (!isDragging || e.pointerId !== dragPointerId || !panelRef.value) return
+  dragLatestPoint = isCalendarView.value ? e.clientX : e.clientY
+  // RAF 节流：每帧只更新一次
+  if (dragRaf) return
+  dragRaf = requestAnimationFrame(() => {
+    dragRaf = null
+    const panel = panelRef.value
+    if (!panel) return
+    const wrapper = panel.parentElement
+    const wrapperBounds = wrapper?.getBoundingClientRect()
+    const extent = isCalendarView.value
+      ? wrapperBounds?.width || window.innerWidth
+      : wrapperBounds?.height || window.innerHeight
+    const delta = dragStartPoint - dragLatestPoint
+    const deltaPct = (delta / extent) * 100
+    let newSize = dragStartSize + deltaPct
+    newSize = Math.max(25, Math.min(95, newSize))
+    newSize = Math.round(newSize)
+    // 直接操作 DOM 绕过 Vue 响应式
+    if (isCalendarView.value) panel.style.width = newSize + '%'
+    else panel.style.height = newSize + '%'
+    panelSize.value = newSize
+  })
+}
+
+function onDragEnd(e) {
+  if (!isDragging || (e && e.pointerId !== dragPointerId)) return
+
+  const pointerId = dragPointerId
+  const handle = dragHandle
+  isDragging = false
+  dragPointerId = null
+  dragHandle = null
+  if (dragRaf) {
+    cancelAnimationFrame(dragRaf)
+    dragRaf = null
+  }
+  if (panelRef.value) {
+    panelRef.value.style.transition = ''
+    if (isCalendarView.value) panelRef.value.style.width = panelSize.value + '%'
+    else panelRef.value.style.height = panelSize.value + '%'
+  }
+  if (handle?.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId)
+  if (panelSize.value !== dragStartSize) {
+    persistSetting({ id: 'ui.settingsPanelSize', value: panelSize.value }).catch((error) =>
+      console.warn('[SettingsPanel] 保存设置面板尺寸失败:', error)
+    )
+  }
+}
+
+/** 点击面板外区域关闭（排除自身弹窗内的点击） */
+const onDocClick = (e) => {
+  if (!rendered.value || !panelActive.value) return
+  // 点击在设置面板内部 → 不关闭
+  if (panelRef.value && panelRef.value.contains(e.target)) return
+  if (panelRef.value && ownedPopovers(panelRef.value).some((panel) => panel.contains(e.target)))
+    return
+  // 设置页拥有的 Teleport 弹层不在 panelRef 内，但仍属于设置交互的一部分。
+  if (e.target.closest('[data-keep-settings-open], .confirm-overlay')) return
+  close()
+}
+
+onMounted(() => document.addEventListener('click', onDocClick, true))
+onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
+
+const close = async () => {
+  if (isResetting.value || isLeaving.value || closeTimer || closeSaving.value) return
+  closeSaving.value = true
+  onDragEnd()
+  try {
+    await settingsWrites.flush()
+  } catch (error) {
+    console.warn('[SettingsPanel] 关闭前保存设置失败:', error)
+    if (!componentUnmounted && failedSettings.value.length === 0)
+      showMessage('error', '设置尚未保存，请重试后关闭', 4000)
+    return
+  } finally {
+    closeSaving.value = false
+  }
+  if (componentUnmounted) return
+  freezeScrollPosition()
+  // 保持背景模糊到退场动画结束，避免半透明面板在最后一段动画中直接透出清晰内容。
+  blurReleaseTimer = setTimeout(() => {
+    blurReleaseTimer = null
+    emit('blur-release')
+  }, 350)
+  panelActive.value = false
+  closeTimer = setTimeout(() => {
+    closeTimer = null
+    rendered.value = false
+    emit('update:visible', false)
+  }, 350)
+}
+
+function onPanelKeydown(event) {
+  cancelScrollRestore()
+  if (event.key === 'Escape') {
+    event.stopPropagation()
+    close()
+    return
+  }
+  trapModalTab(event, panelRef.value)
+}
+
+watch(
+  () => props.visible,
+  async (val) => {
+    if (val) {
+      // 取消待执行的关闭动画，避免「关闭中重开」导致的闪现消失
+      if (closeTimer) {
+        clearTimeout(closeTimer)
+        closeTimer = null
+      }
+      if (blurReleaseTimer) {
+        clearTimeout(blurReleaseTimer)
+        blurReleaseTimer = null
+      }
+      rendered.value = true
+      await nextTick()
+      void panelRef.value?.offsetWidth
+      requestAnimationFrame(() => {
+        if (componentUnmounted || !props.visible) return
+        restoreScrollPosition()
+        panelActive.value = true
+      })
+    } else if (rendered.value) {
+      close()
+    }
+  }
+)
+
+// ---- 基础样式设置 ----
+const uiScale = ref(DEFAULT_SETTINGS.appearance.uiScale)
+const uiScaleOptions = UI_SCALES.map((value) => ({ value, label: `${Math.round(value * 100)}%` }))
+const titlebarIconScale = ref(DEFAULT_SETTINGS.appearance.titlebarIconScale)
+const iconColor = ref(DEFAULT_SETTINGS.appearance.iconColor)
+const viewVisibilityShortcut = ref(DEFAULT_SETTINGS.shortcuts.viewVisibility)
+const captureShortcuts = ref({ ...DEFAULT_SETTINGS.shortcuts })
+const captureShortcutRuntime = ref({})
+const viewVisibilityShortcutRuntime = ref({
+  configured: DEFAULT_SETTINGS.shortcuts.viewVisibility,
+  registered: false,
+  capturing: false,
+  error: null
+})
+const bgColor = ref(DEFAULT_SETTINGS.css.bgColor)
+const windowBorder = ref(DEFAULT_SETTINGS.css.windowBorder)
+const fontSizeBase = ref(viewDefaults.value.css.fontSizeBase)
+const noteRemarkFontSize = ref(viewDefaults.value.css.noteRemarkFontSize)
+const compactFontSize = ref(DEFAULT_SETTINGS.window.compactFontSize)
+const textColor = ref(DEFAULT_SETTINGS.css.textColor)
+const stickyForm = useStickySettingsForm({
+  defaults: DEFAULT_SETTINGS.sticky,
+  save: (id, value) => settingsWrites.debouncedSave(id, value),
+  showMessage: (...args) => showMessage(...args)
+})
+
+const doubleClickQuickEdit = ref(DEFAULT_SETTINGS.interaction.doubleClickQuickEdit)
+const tagColorEnabled = ref(DEFAULT_SETTINGS.notes.tagColorEnabled)
+const minimalMode = ref(DEFAULT_SETTINGS.listAppearance.minimalMode)
+const hideMainViewDuringScreenshot = ref(DEFAULT_SETTINGS.interaction.hideMainViewDuringScreenshot)
+const receiveRemoteNotices = ref(DEFAULT_SETTINGS.remote.receiveNotices)
+const uploadDeviceInfo = ref(DEFAULT_SETTINGS.remote.uploadDeviceInfo)
+
+/** 字体大小预设（datalist 选项） */
+const fontSizeMax = 40
+const fontSizePresets = Array.from({ length: 33 }, (_, index) => index + 8)
+const noteRemarkFontSizePresets = fontSizePresets
+/** 十六进制颜色预设（文字颜色 / 背景颜色共用） */
+const hexPresets = [
+  { label: '纯黑', value: '#000000' },
+  { label: '纯白', value: '#ffffff' }
+]
+
+// ---- 文字颜色输入校验 ----
+const textColorInput = ref(textColor.value)
+const textColorInputError = ref(false)
+
+// ---- 背景颜色 hex 显示与校验 ----
+const bgColorHex = computed(() => {
+  const parts = bgColor.value.split(' ').map(Number)
+  if (parts.length !== 3) return '#ffffff'
+  return (
+    '#' + parts.map((p) => Math.min(255, Math.max(0, p)).toString(16).padStart(2, '0')).join('')
+  )
+})
+const bgColorInput = ref(bgColorHex.value)
+const bgColorInputError = ref(false)
+
+/** 验证十六进制颜色格式 */
+function isValidHex(val) {
+  return /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(val.trim())
+}
+
+/** 标准化 hex（3 位 → 6 位，统一小写） */
+function normalizeHex(val) {
+  const trimmed = val.trim().toLowerCase()
+  if (trimmed.length === 4) {
+    return '#' + [...trimmed.slice(1)].map((c) => c + c).join('')
+  }
+  return trimmed
+}
+
+/** hex → RGB 对象 */
+function hexToRgb(hex) {
+  return {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16)
+  }
+}
+
+// ---- 文字颜色：输入变更（实时清除错误） ----
+function onTextColorInput(e) {
+  textColorInput.value = e.target.value
+  if (textColorInputError.value) textColorInputError.value = false
+}
+
+// ---- 文字颜色：提交校验（blur / Enter） ----
+function commitTextColor() {
+  const val = textColorInput.value.trim()
+  if (val === '') {
+    textColorInput.value = textColor.value
+    return
+  }
+  if (isValidHex(val)) {
+    const normalized = normalizeHex(val)
+    textColor.value = normalized
+    textColorInput.value = normalized
+    textColorInputError.value = false
+  } else {
+    textColorInput.value = textColor.value
+    showMessage('warning', '请输入有效的十六进制颜色值，如 #000000')
+    textColorInputError.value = true
+  }
+}
+
+// ---- 背景颜色：输入变更 ----
+function onBgColorInput(e) {
+  bgColorInput.value = e.target.value
+  if (bgColorInputError.value) bgColorInputError.value = false
+}
+
+// ---- 背景颜色：提交校验 ----
+function commitBgColor() {
+  const val = bgColorInput.value.trim()
+  if (val === '') {
+    bgColorInput.value = bgColorHex.value
+    return
+  }
+  if (isValidHex(val)) {
+    const normalized = normalizeHex(val)
+    const { r, g, b } = hexToRgb(normalized)
+    bgColor.value = `${r} ${g} ${b}`
+    bgColorInput.value = normalized
+    bgColorInputError.value = false
+  } else {
+    bgColorInput.value = bgColorHex.value
+    showMessage('warning', '请输入有效的十六进制颜色值，如 #FFFFFF')
+    bgColorInputError.value = true
+  }
+}
+
+// ---- 背景颜色预设点击 ----
+function setBgColorPreset(hex) {
+  const { r, g, b } = hexToRgb(hex)
+  bgColor.value = `${r} ${g} ${b}`
+}
+
+// ---- 窗口设置 ----
+const autoStart = ref(false)
+const autoStartError = ref(null) // 持久错误（null = 无错误），恒显示不自动消失
+const dockForm = useDockSettingsForm({
+  getDefaults: () => viewDefaults.value.dock,
+  canWrite: () => settingsWrites.canWrite('dock'),
+  write: (config) => settingsWrites.saveDockConfig(config)
+})
+
+// ---- 系统模糊设置 ----
+const blurCaps = ref({ supported: false, strategy: 'none' })
+const blurEnabled = ref(DEFAULT_SETTINGS.blur.enabled)
+const blurError = ref(null) // 持久错误（如 DLL 未加载），恒显示不自动消失
+const blurRadius = ref(DEFAULT_SETTINGS.blur.radius)
+const blurSaturation = ref(DEFAULT_SETTINGS.blur.saturation)
+const blurCornerRadius = ref(DEFAULT_SETTINGS.blur.cornerRadius)
+let hasAssignedSettingsSnapshot = false
+
+// ---- 窗口透明度（仅系统模糊关闭时显示） ----
+const windowOpacity = ref(DEFAULT_SETTINGS.css.windowOpacity)
+
+// ---- CSS 组件模糊设置 ----
+const cssBlur = ref(DEFAULT_SETTINGS.css.bgBlur)
+const cssOpacity = ref(DEFAULT_SETTINGS.css.popupOpacity)
+
+const { showMessage } = useMessage()
+const holidayData = useHolidayDataSettings({ showMessage })
+const {
+  currentHolidayYear,
+  holidayDataStatus,
+  holidayDataBusy,
+  holidayDataError,
+  holidayDataStatusLabel,
+  holidayDataSourceLabel,
+  holidayCoveredYearsLabel,
+  holidayDataSourceDetail,
+  importHolidayData,
+  downloadCurrentHolidayData,
+  openHolidayDataLink
+} = holidayData
+const diagnostics = useSettingsDiagnostics({ showMessage })
+const {
+  schedulerHealth,
+  blurDiagnostic,
+  blurDiagnosticMeta,
+  remoteHealthStatus,
+  remoteHealthError,
+  remoteHealthLabel,
+  loadSchedulerHealth,
+  retryScheduler,
+  schedulerTaskLabel,
+  formatTickTime,
+  tickTimeAgo
+} = diagnostics
+const { weatherRefreshing, refreshWeatherManually } = useManualWeatherRefresh(showMessage)
+
+function weatherRefreshTime(timestamp) {
+  if (!timestamp) return '未知时间'
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function weatherRefreshErrorMessage(error) {
+  return String(error?.message || '天气更新失败').replace(
+    /^Error invoking remote method '[^']+': (?:Error: )?/,
+    ''
+  )
+}
+
+function useManualWeatherRefresh(notify) {
+  const { captureWeatherContext, isWeatherContextCurrent } = useDateContextSettings()
+  const weatherRefreshing = ref(false)
+  let disposed = false
+  let requestSequence = 0
+  onBeforeUnmount(() => {
+    disposed = true
+    requestSequence += 1
+  })
+
+  async function refreshWeatherManually() {
+    if (disposed || weatherRefreshing.value) return
+    const context = captureWeatherContext()
+    if (!context) {
+      notify('warning', '请先开启天气显示并选择有效地区，再更新天气')
+      return
+    }
+    const sequence = ++requestSequence
+    const ownsRequest = () => !disposed && sequence === requestSequence
+    const currentContext = () => ownsRequest() && isWeatherContextCurrent(context)
+    weatherRefreshing.value = true
+    const startedAt = performance.now()
+    try {
+      const forecast = await window.api.refreshWeatherForecast()
+      if (!currentContext()) return
+      if (!forecast || weatherLocationKey(forecast.location) !== context.key) {
+        notify('warning', '天气更新尚未完成，请稍后重试', 4000)
+        return
+      }
+      const place = forecast.location.name
+      const updatedAt = weatherRefreshTime(forecast.fetchedAt)
+      const status = forecast.manualRefresh?.status
+      if (status === 'current') {
+        notify('success', `复用最近 5 分钟内获取的天气：${place}，获取于 ${updatedAt}`)
+      } else if (status === 'stale') {
+        notify(
+          'warning',
+          `天气更新失败，继续使用 ${updatedAt} 的缓存：${forecast.warning || '网络不可用'}`,
+          4000
+        )
+      } else {
+        notify(
+          'success',
+          `天气已更新：${place}，共 ${forecast.days?.length || 0} 天预报（${updatedAt}）`
+        )
+      }
+    } catch (error) {
+      if (currentContext()) notify('error', weatherRefreshErrorMessage(error), 4000)
+    } finally {
+      const remaining = 520 - (performance.now() - startedAt)
+      if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining))
+      // Shared context changes cancel feedback; this local request still owns its
+      // spinner. A disposed/replaced instance must never receive the delayed write.
+      if (ownsRequest()) weatherRefreshing.value = false
+    }
+  }
+  return { weatherRefreshing, refreshWeatherManually }
+}
+
+/**
+ * 使用元素的真实高度驱动原生模糊参数和诊断详情的展开动画。
+ * 相比 0fr/1fr CSS 插值，这在 Electron 当前布局中更稳定。
+ */
+function animateNativeBlurOptions(el, opening, done) {
+  const fullHeight = `${el.scrollHeight}px`
+  const collapsed = { height: '0px', opacity: 0, transform: 'translateY(-6rem)' }
+  const expanded = { height: fullHeight, opacity: 1, transform: 'translateY(0)' }
+  const animation = el.animate(opening ? [collapsed, expanded] : [expanded, collapsed], {
+    duration: 280,
+    easing: 'cubic-bezier(0.22, 1, 0.36, 1)'
+  })
+
+  animation.finished.then(done, done)
+}
+
+function onNativeBlurOptionsEnter(el, done) {
+  animateNativeBlurOptions(el, true, done)
+}
+
+function onNativeBlurOptionsLeave(el, done) {
+  animateNativeBlurOptions(el, false, done)
+}
+
+// ---- 确认弹窗状态 ----
+const showClearNoteDataDialog = ref(false)
+const showResetSettingsDialog = ref(false)
+
+const settingsWrites = useSettingsWriteQueue({
+  api: window.api,
+  blur: {
+    enabled: blurEnabled,
+    radius: blurRadius,
+    saturation: blurSaturation,
+    cornerRadius: blurCornerRadius,
+    error: blurError
+  },
+  autoStart: { enabled: autoStart, error: autoStartError },
+  dock: { assign: dockForm.assignConfig },
+  snapshot: {
+    assign: assignSettingsSnapshot,
+    fallback: () => ({
+      values: viewDefaults.value,
+      runtime: {
+        autoStart: { value: autoStart.value, error: '读取设置失败，当前显示共享默认值' },
+        blur: {
+          supported: false,
+          strategy: 'none',
+          error: '读取设置失败，当前显示共享默认值'
+        }
+      }
+    })
+  },
+  showMessage,
+  reportEvidence
+})
+const {
+  isResetting,
+  isLeaving,
+  snapshotUnavailable,
+  hasPendingWrites,
+  hasUnconfirmedWrites,
+  awaitingCanonical,
+  applicationState,
+  applicationAvailability,
+  applicationError,
+  applicationReading,
+  applicationBusy,
+  persistSetting,
+  debouncedSave,
+  loadSettingsSnapshot
+} = settingsWrites
+const unregisterPageLeave = registerPageLeaveParticipant({
+  prepare(operationId) {
+    onDragEnd()
+    // Editable controls commit local text on blur; tray navigation need not move
+    // DOM focus. Commit before the queue's nextTick captures the last intent.
+    const activeElement = document.activeElement
+    if (
+      panelRef.value?.contains(activeElement) ||
+      (panelRef.value &&
+        ownedPopovers(panelRef.value).some((panel) => panel.contains(activeElement)))
+    )
+      activeElement?.blur()
+    return settingsWrites.prepareToLeave(operationId)
+  },
+  resume: (operationId) => settingsWrites.resumeAfterLeave(operationId)
+})
+const { failedSettings } = settingsWrites
+const settingLabels = {
+  'appearance.uiScale': '界面缩放',
+  'appearance.titlebarIconScale': '导航图标大小',
+  'appearance.iconColor': '导航图标颜色',
+  'css.bgColor': '背景颜色',
+  'css.bgBlur': '组件模糊',
+  'css.popupOpacity': '组件透明度',
+  'css.windowOpacity': '窗口透明度',
+  'css.windowBorder': '窗口边框',
+  'css.fontSizeBase': '字体大小',
+  'css.noteRemarkFontSize': '备注字号',
+  'css.textColor': '文字颜色',
+  'window.compactFontSize': '灵动岛字号',
+  'sticky.fontSize': '便利贴默认字体大小',
+  'sticky.backgroundColor': '便利贴默认背景颜色',
+  'sticky.cornerRadius': '便利贴默认圆角',
+  'sticky.alwaysOnTop': '便利贴默认置顶',
+  'interaction.doubleClickQuickEdit': '双击快速编辑',
+  'interaction.hideMainViewDuringScreenshot': '截图时隐藏主视图',
+  'listAppearance.minimalMode': '极简模式',
+  'notes.tagColorEnabled': '标签颜色',
+  'remote.receiveNotices': '接收软件通知',
+  'remote.uploadDeviceInfo': '上传设备信息',
+  'ui.settingsPanelSize': '设置面板尺寸'
+}
+const settingLabel = (id) => settingLabels[id] || '设置修改'
+async function retrySettingSaves() {
+  if (retryingSettingSaves.value || isResetting.value) return
+  retryingSettingSaves.value = true
+  try {
+    await settingsWrites.retryFailedSettingSaves()
+  } catch (error) {
+    console.warn('[SettingsPanel] 重试保存设置失败:', error)
+  } finally {
+    if (!componentUnmounted) retryingSettingSaves.value = false
+  }
+}
+
+async function retrySettingsApplication(targets) {
+  try {
+    await settingsWrites.retrySettingsApplication(targets)
+  } catch (error) {
+    console.warn('[SettingsPanel] 重试应用设置失败:', error)
+  }
+}
+
+async function readSettingsApplicationState() {
+  try {
+    await settingsWrites.refreshSettingsApplicationState()
+  } catch (error) {
+    console.warn('[SettingsPanel] 读取应用状态失败:', error)
+  }
+}
+
+// ---- 实时生效 watchers ----
+
+watch(uiScale, (value) => {
+  applyUiScale(value, el)
+  if (!settingsWrites.canWrite()) return
+  persistSetting({ id: 'appearance.uiScale', value }).catch((error) =>
+    console.warn('[SettingsPanel] 保存界面缩放失败:', error)
+  )
+})
+
+watch(titlebarIconScale, (value) => {
+  applyTitlebarIconScale(value, el)
+  debouncedSave('appearance.titlebarIconScale', value)
+})
+
+watch(iconColor, (value) => {
+  applyIconColor(value, el)
+  if (!settingsWrites.canWrite()) return
+  persistSetting({ id: 'appearance.iconColor', value }).catch((error) =>
+    console.warn('[SettingsPanel] 保存图标颜色失败:', error)
+  )
+})
+
+watch(receiveRemoteNotices, (value) => {
+  if (!settingsWrites.canWrite()) return
+  persistSetting({ id: 'remote.receiveNotices', value }).catch((error) =>
+    console.warn('[SettingsPanel] 保存远程通知开关失败:', error)
+  )
+})
+
+watch(uploadDeviceInfo, (value) => {
+  if (!settingsWrites.canWrite()) return
+  persistSetting({ id: 'remote.uploadDeviceInfo', value }).catch((error) =>
+    console.warn('[SettingsPanel] 保存设备信息上传开关失败:', error)
+  )
+})
+
+// 背景颜色 → CSS --bg-color (基础样式，主窗口+组件共用)
+watch(bgColor, (v) => {
+  el.style.setProperty('--bg-color', v)
+  debouncedSave('css.bgColor', v)
+})
+
+// ---- CSS 玻璃基准：所有组件按预设比例派生 ----
+watch(cssBlur, (v) => {
+  applyGlassBaseSettings({ blur: v, opacity: cssOpacity.value }, el)
+  debouncedSave('css.bgBlur', v)
+})
+
+watch(cssOpacity, (v) => {
+  applyGlassBaseSettings({ blur: cssBlur.value, opacity: v }, el)
+  debouncedSave('css.popupOpacity', v)
+})
+
+// ---- 窗口透明度 ----
+watch(windowOpacity, (v) => {
+  el.style.setProperty('--window-opacity', v)
+  debouncedSave('css.windowOpacity', v)
+})
+
+// 窗口边框不改变 BrowserWindow 框架，只在根容器内侧绘制 1px 语义边线。
+watch(windowBorder, (v) => {
+  el.style.setProperty('--window-border-width', v ? '1px' : '0px')
+  debouncedSave('css.windowBorder', v)
+})
+
+// 字体大小 → CSS --font-size-base
+watch(fontSizeBase, (v) => {
+  el.style.setProperty('--font-size-base', v + 'rem')
+  debouncedSave('css.fontSizeBase', v)
+})
+
+// 备注字号独立于辅助文字字号，颜色仍由 --text-color-secondary 统一派生。
+watch(noteRemarkFontSize, (v) => {
+  el.style.setProperty('--note-remark-font-size', v + 'rem')
+  debouncedSave('css.noteRemarkFontSize', v)
+})
+
+// 灵动岛是三个主视图共用的展示模式，使用固定像素字号避免窄窗口缩放根 rem。
+watch(compactFontSize, (v) => {
+  el.style.setProperty('--compact-content-font-size', v + 'px')
+  debouncedSave('window.compactFontSize', v)
+})
+
+// 文字颜色 → CSS --text-color
+watch(textColor, (v) => {
+  el.style.setProperty('--text-color', v)
+  debouncedSave('css.textColor', v)
+})
+
+watch(doubleClickQuickEdit, (v) => {
+  debouncedSave('interaction.doubleClickQuickEdit', v)
+})
+
+watch(minimalMode, (v) => {
+  debouncedSave('listAppearance.minimalMode', v)
+})
+
+watch(tagColorEnabled, (v) => {
+  debouncedSave('notes.tagColorEnabled', v)
+})
+
+watch(hideMainViewDuringScreenshot, (v) => {
+  debouncedSave('interaction.hideMainViewDuringScreenshot', v)
+})
+
+// 同步文字颜色输入显示值
+watch(textColor, (v) => {
+  textColorInput.value = v
+  textColorInputError.value = false
+})
+
+// 同步背景颜色输入显示值
+watch(bgColorHex, (v) => {
+  bgColorInput.value = v
+  bgColorInputError.value = false
+})
+
+// blur/auto-start watchers and all write generations belong to settingsWrites.
+// 圆角 CSS 变量即时同步（不等防抖，视觉必须立即跟上）
+watch(blurCornerRadius, (v) => {
+  document.documentElement.style.setProperty('--window-radius', v + 'px')
+})
+
+function assignSettingsSnapshot(snapshot) {
+  if (!snapshot?.values) return
+  const appearance = snapshot.values.appearance || DEFAULT_SETTINGS.appearance
+  const css = snapshot.values.css
+  const blur = snapshot.values.blur
+  const sticky = snapshot.values.sticky
+  const remote = snapshot.values.remote || DEFAULT_SETTINGS.remote
+  const shortcuts = snapshot.values.shortcuts || DEFAULT_SETTINGS.shortcuts
+  const runtimeBlur = snapshot.runtime?.blur
+  const runtimeAutoStart = snapshot.runtime?.autoStart
+  panelSize.value = Number(
+    snapshot.values.ui?.settingsPanelSize ?? viewDefaults.value.ui.settingsPanelSize
+  )
+  if (!settingsWrites.isProtected('dock')) dockForm.assignConfig(snapshot.values.dock)
+  dockForm.assignRuntime(snapshot.runtime?.dock)
+
+  uiScale.value = appearance.uiScale
+  titlebarIconScale.value = appearance.titlebarIconScale
+  iconColor.value = appearance.iconColor
+  const capturingShortcut = viewVisibilityShortcutRuntime.value.capturing
+  if (!capturingShortcut) {
+    viewVisibilityShortcut.value = shortcuts.viewVisibility
+    captureShortcuts.value = { ...shortcuts }
+  }
+  captureShortcutRuntime.value = { ...snapshot.runtime?.shortcuts }
+  if (snapshot.runtime?.shortcuts?.viewVisibility) {
+    viewVisibilityShortcutRuntime.value = {
+      ...snapshot.runtime.shortcuts.viewVisibility,
+      ...(capturingShortcut ? { capturing: true } : {})
+    }
+  }
+  bgColor.value = css.bgColor
+  cssOpacity.value = css.popupOpacity
+  cssBlur.value = css.bgBlur
+  windowOpacity.value = css.windowOpacity
+  windowBorder.value = css.windowBorder
+  fontSizeBase.value = css.fontSizeBase
+  noteRemarkFontSize.value = css.noteRemarkFontSize
+  compactFontSize.value =
+    snapshot.values.window?.compactFontSize ?? DEFAULT_SETTINGS.window.compactFontSize
+  textColor.value = css.textColor
+  stickyForm.assign(sticky)
+  doubleClickQuickEdit.value =
+    snapshot.values.interaction?.doubleClickQuickEdit ??
+    DEFAULT_SETTINGS.interaction.doubleClickQuickEdit
+  minimalMode.value =
+    snapshot.values.listAppearance?.minimalMode ?? DEFAULT_SETTINGS.listAppearance.minimalMode
+  tagColorEnabled.value =
+    snapshot.values.notes?.tagColorEnabled ?? DEFAULT_SETTINGS.notes.tagColorEnabled
+  hideMainViewDuringScreenshot.value =
+    snapshot.values.interaction?.hideMainViewDuringScreenshot ??
+    DEFAULT_SETTINGS.interaction.hideMainViewDuringScreenshot
+  receiveRemoteNotices.value = remote.receiveNotices
+  uploadDeviceInfo.value = remote.uploadDeviceInfo
+  // “用户希望开启”与“当前确实生效”分开：支持平台初始化失败时，开关必须
+  // 显示为关闭，同时保留错误信息，让用户可以再次主动开启并触发重试。
+  if (!settingsWrites.isProtected('blur')) {
+    const wasEnabled = blurEnabled.value
+    blurEnabled.value = runtimeBlur?.supported
+      ? Boolean(blur.enabled && runtimeBlur.effectiveEnabled)
+      : false
+    blurRadius.value = blur.radius
+    blurSaturation.value = blur.saturation
+    blurCornerRadius.value = blur.cornerRadius
+    if (hasAssignedSettingsSnapshot && wasEnabled && !blurEnabled.value && runtimeBlur?.error) {
+      showMessage('error', `毛玻璃已停止：${runtimeBlur.error}`, 5000)
+    }
+  }
+
+  if (runtimeBlur) {
+    blurCaps.value = {
+      supported: runtimeBlur.supported,
+      strategy: runtimeBlur.strategy
+    }
+    blurError.value = runtimeBlur.error ?? null
+    diagnostics.acceptBlurSnapshot(runtimeBlur.diagnostic)
+  }
+
+  if (runtimeAutoStart && !settingsWrites.isProtected('autoStart')) {
+    autoStart.value = runtimeAutoStart.value
+    autoStartError.value = runtimeAutoStart.error ?? null
+  }
+
+  applySettingsSnapshot(snapshot)
+  hasAssignedSettingsSnapshot = true
+}
+
+// 每次父组件打开设置时都会重新挂载本组件，因此这里必定重新查询完整快照。
+onMounted(async () => {
+  // 视图切换为整页导航，pagehide 时仍可读取滚动容器。
+  window.addEventListener('pagehide', freezeScrollPosition)
+  // Remote/holiday owners subscribe before their initial local reads.
+  const secondaryLoads = Promise.all([diagnostics.start(), holidayData.start()])
+  window.api
+    .getAppInfo()
+    .then((info) => {
+      if (!componentUnmounted && info?.version) appVersion.value = info.version
+    })
+    .catch((error) => console.warn('[SettingsPanel] 获取应用版本失败:', error))
+  // 面板尺寸决定进场起点，必须先读取保存值再启动动画；否则月/周视图会先按
+  // 默认 40% 宽度出现，随后在动画途中瞬间跳到用户保存的宽度。
+  await loadSettingsSnapshot()
+  if (componentUnmounted) return
+  await nextTick()
+  void panelRef.value?.offsetWidth
+  openRaf = requestAnimationFrame(() => {
+    openRaf = null
+    if (!props.visible || componentUnmounted) return
+    restoreScrollPosition()
+    panelActive.value = true
+    closeButtonRef.value?.focus({ preventScroll: true })
+  })
+  // 两项都是本地 IPC；设置面板只在用户点击下载时访问网络。
+  await secondaryLoads
+  if (componentUnmounted) return
+  diagnostics.startBlurDiagnostics()
+})
+
+onBeforeUnmount(() => {
+  freezeScrollPosition()
+  window.removeEventListener('pagehide', freezeScrollPosition)
+  componentUnmounted = true
+  unregisterPageLeave()
+  diagnostics.dispose()
+  holidayData.dispose()
+  onDragEnd()
+  // 正常关闭时这里已完成 flush；强制卸载时也不能丢失最后一次修改。
+  settingsWrites.dispose().catch((e) => console.warn('[SettingsPanel] 卸载前保存设置失败:', e))
+  // 清理关闭动画定时器
+  if (closeTimer) {
+    clearTimeout(closeTimer)
+    closeTimer = null
+  }
+  if (blurReleaseTimer) {
+    clearTimeout(blurReleaseTimer)
+    blurReleaseTimer = null
+  }
+  if (openRaf) {
+    cancelAnimationFrame(openRaf)
+    openRaf = null
+  }
+  // 等父组件撤销底层 inert 后再恢复，否则浏览器会拒绝聚焦原触发按钮。
+  setTimeout(() => restoreFocusedElement(settingsPreviousFocus), 0)
+})
+
+/** 清空除设置外的业务数据（待办/模板/标签/附件），保留 app_settings。 */
+const onConfirmClearNoteData = async () => {
+  try {
+    await window.api.clearNoteData()
+    showMessage('success', '待办数据已清空，设置已保留')
+  } catch (e) {
+    console.warn('[SettingsPanel] 清空待办数据失败:', e)
+    showMessage('error', e.message || '清空待办数据失败，请重试', 4000)
+  }
+}
+
+/** 清空设置表，并使用主进程返回的共享默认快照同步运行时和控件。 */
+const onConfirmResetSettings = () => settingsWrites.resetSettings(onDragEnd)
+const settingsSearch = useSettingsSearch(panelRef, {
+  beforeNavigate: async (target) => {
+    cancelScrollRestore()
+    if (!target.closest('.settings-diagnostics')) return
+    diagnosticsExpanded.value = true
+    await nextTick()
+    const content = panelRef.value?.querySelector('.diagnostics-content')
+    await Promise.allSettled(
+      (content?.getAnimations() || []).map((animation) => animation.finished)
+    )
+  }
+})
+watch(
+  () => props.visible,
+  (visible) => {
+    if (!visible) settingsSearch.cancel()
+  }
+)
+</script>
+
+<template>
+  <Teleport to="body">
+    <div
+      v-if="rendered"
+      class="settings-wrapper"
+      :class="{ active: panelActive, 'settings-wrapper--month': isCalendarView }"
+      data-modal-layer="settings"
+    >
+      <!-- 遮罩层（已移除） -->
+
+      <!-- 面板主体：直接使用全局霜层基准，不参与底层场景失焦。 -->
+      <div
+        ref="panelRef"
+        class="settings-panel"
+        :class="{
+          active: panelActive,
+          'is-resetting': isResetting,
+          'settings-panel--month': isCalendarView
+        }"
+        :style="panelStyle"
+        :inert="isLeaving"
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
+        :aria-busy="isResetting || isLeaving || closeSaving"
+        @pointerdown.capture="cancelScrollRestore"
+        @keydown="onPanelKeydown"
+      >
+        <!-- 顶部拖拽指示条（拖拽调整面板高度） -->
+        <div
+          class="drag-indicator"
+          :class="{ 'is-disabled': isResetting }"
+          @pointerdown="onDragStart"
+          @pointermove="onDragMove"
+          @pointerup="onDragEnd"
+          @pointercancel="onDragEnd"
+          @lostpointercapture="onDragEnd"
+        >
+          <div class="drag-bar" />
+        </div>
+
+        <!-- 面板头部 -->
+        <div class="panel-header">
+          <h2 class="panel-title">设置</h2>
+          <span v-if="isResetting" class="panel-reset-status" role="status" aria-live="polite">
+            正在恢复默认设置…
+          </span>
+          <button
+            ref="closeButtonRef"
+            class="panel-close-btn"
+            title="关闭"
+            :disabled="isResetting || closeSaving"
+            @click="close"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path
+                d="M1 1L13 13M1 13L13 1"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <div v-if="failedSettings.length" class="settings-save-error scroll-y" role="alert">
+          <p>部分设置尚未保存，关闭前请重试。</p>
+          <p v-for="failure in failedSettings" :key="failure.id">
+            {{ settingLabel(failure.id) }}：未保存
+          </p>
+          <BaseButton
+            size="sm"
+            :disabled="isResetting || closeSaving || retryingSettingSaves"
+            data-settings-save-retry
+            @click="retrySettingSaves"
+          >
+            {{ retryingSettingSaves ? '正在重试…' : '重试保存' }}
+          </BaseButton>
+        </div>
+
+        <SettingsApplicationStatus
+          :state="applicationState"
+          :availability="applicationAvailability"
+          :state-error="applicationError"
+          :has-pending-writes="hasPendingWrites"
+          :has-unconfirmed-writes="hasUnconfirmedWrites"
+          :has-save-failures="failedSettings.length > 0"
+          :awaiting-canonical="awaitingCanonical"
+          :applying="applicationBusy"
+          :reading="applicationReading"
+          :disabled="isResetting || isLeaving || closeSaving"
+          @retry-application="retrySettingsApplication"
+          @read-state="readSettingsApplicationState"
+          @read-values="loadSettingsSnapshot"
+        />
+
+        <div class="settings-search">
+          <input
+            v-model="settingsSearch.query.value"
+            type="search"
+            aria-label="搜索设置"
+            placeholder="搜索设置：字号、提醒、窗口…"
+          />
+          <p>当前{{ currentViewLabel }}的窗口与外观独立保存；标注“所有”的项目由三个视图共用。</p>
+          <div
+            v-if="settingsSearch.query.value.trim()"
+            class="settings-search-results scroll-y"
+            role="status"
+          >
+            <button
+              v-for="result in settingsSearch.results.value"
+              :key="result.key"
+              type="button"
+              @click="settingsSearch.navigate(result)"
+            >
+              {{ result.title }}
+            </button>
+            <span v-if="!settingsSearch.results.value.length"
+              >没有匹配的设置，请换一个关键词。</span
+            >
+          </div>
+        </div>
+        <!-- 面板内容（可滚动） -->
+        <!-- fieldset 的匿名布局盒会在动态分区插入时重建；外层独立持有滚动位置。 -->
+        <div
+          ref="panelBodyRef"
+          class="panel-body scroll-y"
+          :class="{ 'is-resetting': isResetting }"
+          :inert="isResetting || isLeaving || closeSaving"
+          @wheel.passive="onManualScroll"
+          @pointerdown="onManualScroll"
+          @keydown="onManualScroll"
+        >
+          <div
+            v-if="snapshotUnavailable"
+            class="settings-save-unavailable"
+            role="status"
+            aria-live="polite"
+          >
+            <p>设置已保存，当前值尚待确认。重新读取后即可继续修改。</p>
+            <BaseButton size="sm" :disabled="isResetting" @click="loadSettingsSnapshot"
+              >重新读取设置</BaseButton
+            >
+          </div>
+          <fieldset
+            v-else
+            class="settings-controls"
+            :disabled="isResetting || isLeaving || closeSaving"
+          >
+            <!-- ========== 基础样式 ========== -->
+            <div
+              class="settings-category"
+              data-settings-category="appearance"
+              role="group"
+              aria-labelledby="settings-category-appearance"
+            >
+              <h3 id="settings-category-appearance" class="category-title">外观</h3>
+              <section class="settings-section">
+                <h4 class="section-title">基础样式</h4>
+
+                <div class="setting-item setting-item-slider">
+                  <span class="setting-label"
+                    >导航图标大小 <small>所有</small
+                    ><HelpButton
+                      text="此设置由列表、月视图和周视图共同使用。会同步调整窗口导航图标和日历工具栏操作图标。"
+                  /></span>
+                  <div class="setting-slider-control">
+                    <AppSlider
+                      v-model="titlebarIconScale"
+                      data-diagnostic-action="settings.titlebarIconScale"
+                      :min="TITLEBAR_ICON_SCALE_LIMITS.min"
+                      :max="TITLEBAR_ICON_SCALE_LIMITS.max"
+                      :step="TITLEBAR_ICON_SCALE_LIMITS.step"
+                      aria-label="导航图标大小"
+                    />
+                    <span class="setting-value">{{ titlebarIconScale }}%</span>
+                  </div>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >图标颜色 <small>所有</small
+                      ><HelpButton
+                        text="列表、月视图和周视图共同使用。控制窗口导航、日历工具栏操作，以及列表中的标签、太极刷新和三叶草筛选图标。"
+                    /></span>
+                  </div>
+                  <div class="titlebar-style-selector" role="radiogroup" aria-label="图标颜色">
+                    <button
+                      type="button"
+                      role="radio"
+                      :aria-checked="iconColor === ICON_COLORS.BLACK"
+                      :class="{ active: iconColor === ICON_COLORS.BLACK }"
+                      @click="iconColor = ICON_COLORS.BLACK"
+                    >
+                      黑色
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      :aria-checked="iconColor === ICON_COLORS.WHITE"
+                      :class="{ active: iconColor === ICON_COLORS.WHITE }"
+                      @click="iconColor = ICON_COLORS.WHITE"
+                    >
+                      白色
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 背景颜色 -->
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >背景颜色<HelpButton
+                        text="设置应用的基础背景色。它会参与主窗口玻璃着色、设置面板和浮动组件的背景计算；可选择预设色或输入十六进制颜色。"
+                    /></span>
+                  </div>
+                  <div class="setting-right settings-color-control">
+                    <SettingsControlPopover
+                      label="背景颜色"
+                      :summary="bgColorHex"
+                      :disabled="isResetting || isLeaving || !panelActive"
+                      :width="260"
+                    >
+                      <template #summary>
+                        <span
+                          class="settings-color-swatch"
+                          :style="{ backgroundColor: bgColorHex }"
+                        />
+                        <span class="settings-color-value">{{ bgColorHex.toUpperCase() }}</span>
+                      </template>
+                      <div class="settings-color-editor">
+                        <button
+                          v-for="c in hexPresets"
+                          :key="c.value"
+                          class="color-dot"
+                          :class="{ active: bgColorHex === c.value }"
+                          :style="{ backgroundColor: c.value }"
+                          :title="c.label"
+                          :aria-label="c.label"
+                          @click="setBgColorPreset(c.value)"
+                        />
+                        <input
+                          type="color"
+                          class="color-input"
+                          aria-label="自定义颜色"
+                          :value="bgColorHex"
+                          @input="
+                            (e) => {
+                              const h = e.target.value
+                              const r = parseInt(h.slice(1, 3), 16)
+                              const g = parseInt(h.slice(3, 5), 16)
+                              const b = parseInt(h.slice(5, 7), 16)
+                              bgColor = `${r} ${g} ${b}`
+                            }
+                          "
+                        />
+                        <div class="color-hex-input-wrap">
+                          <input
+                            type="text"
+                            class="color-hex-input"
+                            aria-label="十六进制颜色"
+                            spellcheck="false"
+                            :class="{ 'has-error': bgColorInputError }"
+                            :value="bgColorInput"
+                            placeholder="#FFFFFF"
+                            maxlength="7"
+                            @input="onBgColorInput"
+                            @blur="commitBgColor"
+                            @keydown.enter="commitBgColor"
+                          />
+                        </div>
+                      </div>
+                    </SettingsControlPopover>
+                  </div>
+                </div>
+
+                <!-- 主窗口内侧边框 -->
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >窗口边框<HelpButton
+                        text="在当前主视图窗口内侧显示 1px 边线。它不会启用 Windows 系统窗口框架，也不会影响圆角、自定义缩放、贴边隐藏或窗口层级。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="windowBorder"
+                      aria-label="窗口边框"
+                      size="sm"
+                      data-diagnostic-action="settings.windowBorder"
+                    />
+                  </div>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >界面缩放<HelpButton
+                        text="统一调整主视图和软件提醒窗口的文字、图标与控件。桌面待办、灵动岛字号和截图工具保持各自设置；导航栏图标缩放在此基础上叠加。窗口宽度只调整布局，不自动改变字号。"
+                    /></span>
+                  </div>
+                  <div class="setting-right ui-scale-controls">
+                    <StyledSelect
+                      v-model="uiScale"
+                      :options="uiScaleOptions"
+                      aria-label="界面缩放"
+                      size="sm"
+                      width="84rem"
+                    />
+                    <BaseButton
+                      size="sm"
+                      variant="text"
+                      :disabled="uiScale === 1"
+                      @click="uiScale = 1"
+                      >恢复 100%</BaseButton
+                    >
+                  </div>
+                </div>
+                <!-- 字体大小（输入 + 下拉预设） -->
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >字体大小<HelpButton
+                        text="调整应用的全局基础字号，列表、设置和编辑区域会按同一比例联动。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <FontSizeInput
+                      v-model="fontSizeBase"
+                      data-diagnostic-action="settings.fontSizeBase"
+                      :presets="fontSizePresets"
+                      :min="8"
+                      :max="fontSizeMax"
+                      width="max(76rem, 5.5em)"
+                    />
+                  </div>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >备注字号<HelpButton
+                        text="单独调整待办卡片中备注文字的大小；备注颜色仍跟随辅助文字颜色。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <FontSizeInput
+                      v-model="noteRemarkFontSize"
+                      data-diagnostic-action="settings.noteRemarkFontSize"
+                      :presets="noteRemarkFontSizePresets"
+                      :min="8"
+                      :max="40"
+                      width="max(76rem, 5.5em)"
+                    />
+                  </div>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >灵动岛字号 <small>所有</small
+                      ><HelpButton text="调整灵动岛中待办正文的字号，三个主视图共用。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <FontSizeInput
+                      v-model="compactFontSize"
+                      data-diagnostic-action="settings.compactFontSize"
+                      :presets="noteRemarkFontSizePresets"
+                      :min="8"
+                      :max="40"
+                      width="max(76rem, 5.5em)"
+                    />
+                  </div>
+                </div>
+
+                <!-- 文字颜色 -->
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >文字颜色<HelpButton
+                        text="设置应用的主要文字颜色，次要文字和边界颜色会基于它自动派生。"
+                    /></span>
+                  </div>
+                  <div class="setting-right settings-color-control">
+                    <SettingsControlPopover
+                      label="文字颜色"
+                      :summary="textColor"
+                      :disabled="isResetting || isLeaving || !panelActive"
+                      :width="260"
+                    >
+                      <template #summary>
+                        <span
+                          class="settings-color-swatch"
+                          :style="{ backgroundColor: textColor }"
+                        />
+                        <span class="settings-color-value">{{ textColor.toUpperCase() }}</span>
+                      </template>
+                      <div class="settings-color-editor">
+                        <button
+                          v-for="c in hexPresets"
+                          :key="c.value"
+                          class="color-dot"
+                          :class="{ active: textColor === c.value }"
+                          :style="{ backgroundColor: c.value }"
+                          :title="c.label"
+                          :aria-label="c.label"
+                          @click="textColor = c.value"
+                        />
+                        <input
+                          v-model="textColor"
+                          type="color"
+                          class="color-input"
+                          aria-label="自定义颜色"
+                        />
+                        <div class="color-hex-input-wrap">
+                          <input
+                            type="text"
+                            class="color-hex-input"
+                            aria-label="十六进制颜色"
+                            spellcheck="false"
+                            :class="{ 'has-error': textColorInputError }"
+                            :value="textColorInput"
+                            placeholder="#000000"
+                            maxlength="7"
+                            @input="onTextColorInput"
+                            @blur="commitTextColor"
+                            @keydown.enter="commitTextColor"
+                          />
+                        </div>
+                      </div>
+                    </SettingsControlPopover>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-section">
+                <h4 class="section-title">窗口背景与圆角</h4>
+
+                <!-- 原生毛玻璃不可用时保留透明背景回退。 -->
+                <div v-if="blurCaps.supported" class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >启用毛玻璃<HelpButton
+                        text="原生毛玻璃需要 Windows 10 1903（Build 18362）或更高版本，支持调节模糊半径和饱和度。玻璃浓度、背景颜色和窗口圆角可独立调节。关闭后不再渲染原生模糊层。"
+                    /></span>
+                    <span v-if="blurError" class="setting-error">
+                      <svg
+                        class="warn-icon"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        aria-hidden="true"
+                      >
+                        <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1" />
+                        <path
+                          d="M6 3.5v3"
+                          stroke="currentColor"
+                          stroke-width="1.2"
+                          stroke-linecap="round"
+                        />
+                        <circle cx="6" cy="9" r="0.7" fill="currentColor" />
+                      </svg>
+                      {{ blurError }}
+                    </span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="blurEnabled"
+                      aria-label="原生毛玻璃"
+                      size="sm"
+                      data-diagnostic-action="settings.blurEnabled"
+                    />
+                  </div>
+                </div>
+
+                <div v-else class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >系统毛玻璃不可用<HelpButton
+                        text="当前系统版本或运行环境无法创建原生模糊层，应用会自动回退到背景颜色、玻璃浓度和圆角效果。"
+                    /></span>
+                    <span class="setting-error">当前系统将使用透明背景颜色和圆角回退</span>
+                  </div>
+                </div>
+
+                <!-- 玻璃浓度始终显示；原生模糊不可用时也是主要回退控制。 -->
+                <div class="setting-item setting-item-slider">
+                  <span class="setting-label"
+                    >玻璃浓度<HelpButton
+                      text="控制主窗口背景颜色的覆盖强度。0=完全通透，1=不透明纯色底；不改变原生模糊强度。默认30%"
+                  /></span>
+                  <div class="setting-slider-control">
+                    <AppSlider
+                      v-model="windowOpacity"
+                      data-diagnostic-action="settings.windowOpacity"
+                      :min="0"
+                      :max="1"
+                      :step="0.01"
+                    />
+                    <span class="setting-value">{{ Math.round(windowOpacity * 100) }}%</span>
+                  </div>
+                </div>
+
+                <!-- 开启时显示原生模糊设置。 -->
+                <Transition
+                  :css="false"
+                  @enter="onNativeBlurOptionsEnter"
+                  @leave="onNativeBlurOptionsLeave"
+                >
+                  <div v-if="blurCaps.supported && blurEnabled" class="native-blur-options">
+                    <div class="native-blur-options-inner">
+                      <!-- 模糊半径 -->
+                      <div class="setting-item setting-item-slider">
+                        <span class="setting-label"
+                          >模糊半径<HelpButton text="控制背景被打散的程度。推荐值10–20"
+                        /></span>
+                        <div class="setting-slider-control">
+                          <AppSlider
+                            v-model="blurRadius"
+                            data-diagnostic-action="settings.blurRadius"
+                            :min="0"
+                            :max="40"
+                            :step="1"
+                          />
+                          <span class="setting-value">{{ blurRadius }} DIP</span>
+                        </div>
+                      </div>
+
+                      <!-- 饱和度 -->
+                      <div class="setting-item setting-item-slider">
+                        <span class="setting-label"
+                          >饱和度<HelpButton
+                            text="模糊会让颜色变灰，提高饱和度能把鲜艳度补回来。推荐1.6–2.0（苹果用1.8）"
+                        /></span>
+                        <div class="setting-slider-control">
+                          <AppSlider
+                            v-model="blurSaturation"
+                            data-diagnostic-action="settings.blurSaturation"
+                            :min="0"
+                            :max="2"
+                            :step="0.1"
+                          />
+                          <span class="setting-value">{{ blurSaturation.toFixed(1) }}x</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Transition>
+
+                <!-- 窗口圆角（所有平台通用，纯 CSS 控制） -->
+                <div class="setting-item setting-item-slider">
+                  <span class="setting-label"
+                    >窗口圆角<HelpButton
+                      text="四个角的圆润程度。0=直角，数值越大越圆。推荐8–16（苹果原生风格）"
+                  /></span>
+                  <div class="setting-slider-control">
+                    <AppSlider
+                      v-model="blurCornerRadius"
+                      data-diagnostic-action="settings.blurCornerRadius"
+                      :min="0"
+                      :max="30"
+                      :step="1"
+                    />
+                    <span class="setting-value">{{ blurCornerRadius }}px</span>
+                  </div>
+                </div>
+
+                <Transition name="wallpaper-panel">
+                  <WallpaperSettings v-if="!blurEnabled" />
+                </Transition>
+              </section>
+              <section class="settings-section" data-search-text="CSS 玻璃全局基准">
+                <h4 class="section-title">弹窗与浮层</h4>
+
+                <!-- 模糊半径 -->
+                <div class="setting-item setting-item-slider">
+                  <span class="setting-label"
+                    >模糊基准<HelpButton
+                      text="所有界面内毛玻璃和弹窗背景按此值失焦，最低5px；C++原生窗口毛玻璃不受影响。推荐10px"
+                  /></span>
+                  <div class="setting-slider-control">
+                    <AppSlider
+                      v-model="cssBlur"
+                      data-diagnostic-action="settings.cssBlur"
+                      :min="5"
+                      :max="30"
+                      :step="1"
+                    />
+                    <span class="setting-value">{{ cssBlur }}px</span>
+                  </div>
+                </div>
+
+                <!-- 组件透明度 -->
+                <div class="setting-item setting-item-slider">
+                  <span class="setting-label"
+                    >霜层基准<HelpButton
+                      text="设置面板按此浓度显示；使用玻璃材质的浮层会按组件类型成比例调整并限制最大值。推荐20%"
+                  /></span>
+                  <div class="setting-slider-control">
+                    <AppSlider
+                      v-model="cssOpacity"
+                      data-diagnostic-action="settings.cssOpacity"
+                      :min="0"
+                      :max="1"
+                      :step="0.01"
+                    />
+                    <span class="setting-value">{{ Math.round(cssOpacity * 100) }}%</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div
+              class="settings-category"
+              data-settings-category="window"
+              role="group"
+              aria-labelledby="settings-category-window"
+            >
+              <h3 id="settings-category-window" class="category-title">窗口与操作</h3>
+              <DockSettingsSection :model="dockForm" :current-view-label="currentViewLabel" />
+              <section class="settings-section">
+                <h4 class="section-title">显示与隐藏</h4>
+                <div class="setting-item shortcut-setting">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >视图显示快捷键 <small>所有</small
+                      ><HelpButton
+                        text="点击录制后直接按下组合键，无需输入或再次保存。用于显示或隐藏当前视图，窗口隐藏到托盘后仍可使用。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <SettingsControlPopover
+                      label="视图显示快捷键"
+                      :summary="
+                        shortcutSummary(viewVisibilityShortcut, viewVisibilityShortcutRuntime)
+                      "
+                      :disabled="isResetting || isLeaving || !panelActive"
+                      data-shortcut="viewVisibility"
+                    >
+                      <ShortcutRecorder
+                        v-model="viewVisibilityShortcut"
+                        :runtime="viewVisibilityShortcutRuntime"
+                        :disabled="isResetting || isLeaving"
+                        @update:runtime="viewVisibilityShortcutRuntime = $event"
+                        @feedback="showMessage($event.type, $event.message, $event.duration)"
+                      />
+                    </SettingsControlPopover>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div
+              class="settings-category"
+              data-settings-category="notes"
+              role="group"
+              aria-labelledby="settings-category-notes"
+            >
+              <h3 id="settings-category-notes" class="category-title">待办与截图</h3>
+              <section v-if="viewMode === VIEW_MODES.LIST" class="settings-section">
+                <h4 class="section-title">待办列表</h4>
+                <div class="setting-item has-hint">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >极简模式<HelpButton
+                        text="隐藏卡片的时间、标签、天气、备注和底部操作按钮，保留状态圆环、正文与图片。右键菜单仍可修改待办或展开内容。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="minimalMode"
+                      aria-label="极简模式"
+                      size="sm"
+                      data-diagnostic-action="settings.minimalMode"
+                      role="switch"
+                      :aria-checked="minimalMode"
+                    />
+                  </div>
+                </div>
+              </section>
+              <section class="settings-section">
+                <h4 class="section-title">待办交互 <small>所有</small></h4>
+
+                <div class="setting-item has-hint">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >标签颜色<HelpButton
+                        text="开启后，有标签的待办正文使用标签颜色，月视图和周视图横条也使用标签颜色；关闭后分别使用文字颜色和待办状态颜色。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="tagColorEnabled"
+                      aria-label="标签颜色"
+                      size="sm"
+                      data-diagnostic-action="settings.tagColorEnabled"
+                    />
+                  </div>
+                </div>
+
+                <div class="setting-item has-hint">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >双击快速编辑正文<HelpButton
+                        text="双击待办卡片或日历待办横条，只快速修改正文；失去焦点后自动保存。右键“修改”仍可打开完整编辑器。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="doubleClickQuickEdit"
+                      aria-label="双击快速编辑正文"
+                      size="sm"
+                      data-diagnostic-action="settings.doubleClickQuickEdit"
+                    />
+                  </div>
+                </div>
+              </section>
+              <StickySettingsSection
+                v-if="!isCalendarView"
+                :model="stickyForm"
+                :is-resetting="isResetting"
+                :panel-active="panelActive"
+              />
+              <section class="settings-section">
+                <h4 class="section-title">快捷键与截图 <small>所有</small></h4>
+                <div
+                  v-for="(definition, action) in ACTION_SHORTCUTS"
+                  :key="action"
+                  class="setting-item shortcut-setting"
+                >
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >{{ definition.label
+                      }}<HelpButton
+                        v-if="action === 'screenshotCopy'"
+                        text="按快捷键后拖动框选，松开鼠标即复制图像到剪贴板并退出；不展开标注工具栏。Esc 取消，复制失败时可按 Enter 或 Ctrl+C 重试。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <SettingsControlPopover
+                      :label="definition.label"
+                      :summary="
+                        shortcutSummary(captureShortcuts[action], captureShortcutRuntime[action])
+                      "
+                      :disabled="isResetting || isLeaving || !panelActive"
+                      :data-shortcut="action"
+                    >
+                      <ShortcutRecorder
+                        v-model="captureShortcuts[action]"
+                        :action="action"
+                        :runtime="captureShortcutRuntime[action]"
+                        :disabled="isResetting || isLeaving"
+                        @update:runtime="captureShortcutRuntime[action] = $event"
+                        @feedback="showMessage($event.type, $event.message, $event.duration)"
+                      />
+                    </SettingsControlPopover>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >截图时隐藏主视图<HelpButton
+                        text="开启后，进入截图选区前会暂时隐藏当前主视图，截图完成或取消后自动恢复；关闭后可以把主视图一并截入图片。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="hideMainViewDuringScreenshot"
+                      aria-label="截图时隐藏主视图"
+                      size="sm"
+                      data-diagnostic-action="settings.hideMainViewDuringScreenshot"
+                    />
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div
+              class="settings-category"
+              data-settings-category="weather"
+              role="group"
+              aria-labelledby="settings-category-weather"
+            >
+              <h3 id="settings-category-weather" class="category-title">天气与日历</h3>
+              <section class="settings-section">
+                <h4 class="section-title">
+                  <span>天气与宜忌 <small>所有</small></span>
+                  <button
+                    type="button"
+                    class="weather-refresh-btn"
+                    :class="{ 'is-refreshing': weatherRefreshing }"
+                    :disabled="weatherRefreshing"
+                    title="手动更新天气"
+                    aria-label="手动更新天气"
+                    @click="refreshWeatherManually"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </h4>
+                <WeatherSettings />
+              </section>
+              <section class="settings-section">
+                <h4 class="section-title">
+                  <span>日历与节假日数据</span>
+                  <span
+                    class="remote-health-badge sched-badge"
+                    :class="holidayDataStatus?.available ? 'sched-badge--ok' : 'sched-badge--warn'"
+                  >
+                    {{ holidayDataStatusLabel }}
+                  </span>
+                </h4>
+
+                <p
+                  v-if="holidayDataStatus && !holidayDataStatus.available"
+                  class="holiday-data-message"
+                >
+                  尚未安装 {{ currentHolidayYear }} 年节假日数据；日历视图将不显示“休 /
+                  班”标记，农历与节气不受影响。
+                </p>
+                <p v-if="holidayDataError" class="holiday-data-message is-error">
+                  {{ holidayDataError }}
+                </p>
+
+                <div class="setting-item holiday-summary-row">
+                  <div
+                    class="holiday-summary-item"
+                    :title="`可用年份 ${holidayCoveredYearsLabel}；农历与节气支持至 2100 年`"
+                  >
+                    <span class="setting-label"
+                      >当前年份<HelpButton
+                        text="程序检查当前年份最终生效的数据。用户导入或下载的数据优先，缺失时回退应用内置数据。"
+                    /></span>
+                    <span class="setting-value">{{ currentHolidayYear }}</span>
+                  </div>
+                  <div class="holiday-summary-item" :title="holidayDataSourceDetail">
+                    <span class="setting-label">当前数据源</span>
+                    <span class="setting-value">{{ holidayDataSourceLabel }}</span>
+                  </div>
+                </div>
+
+                <div class="setting-item setting-item-full setting-button-row holiday-action-row">
+                  <BaseButton
+                    variant="primary"
+                    :disabled="Boolean(holidayDataBusy)"
+                    @click="downloadCurrentHolidayData"
+                  >
+                    {{ holidayDataBusy === 'download' ? '正在下载…' : '下载并导入' }}
+                  </BaseButton>
+                  <BaseButton :disabled="Boolean(holidayDataBusy)" @click="importHolidayData">
+                    {{ holidayDataBusy === 'import' ? '正在导入…' : '导入 JSON' }}
+                  </BaseButton>
+                  <BaseButton
+                    variant="default"
+                    :disabled="Boolean(holidayDataBusy)"
+                    @click="openHolidayDataLink"
+                  >
+                    浏览器打开
+                  </BaseButton>
+                </div>
+              </section>
+            </div>
+            <div
+              class="settings-category"
+              data-settings-category="system"
+              role="group"
+              aria-labelledby="settings-category-system"
+            >
+              <h3 id="settings-category-system" class="category-title">系统与数据</h3>
+              <section class="settings-section">
+                <h4 class="section-title">系统设置</h4>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >开机自启 <small>所有</small
+                      ><HelpButton
+                        text="控制应用是否随系统登录自动启动。此状态直接读取并写入操作系统，不保存在应用数据库中。"
+                    /></span>
+                    <span v-if="autoStartError" class="setting-error">
+                      <svg
+                        class="warn-icon"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        aria-hidden="true"
+                      >
+                        <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1" />
+                        <path
+                          d="M6 3.5v3"
+                          stroke="currentColor"
+                          stroke-width="1.2"
+                          stroke-linecap="round"
+                        />
+                        <circle cx="6" cy="9" r="0.7" fill="currentColor" />
+                      </svg>
+                      {{ autoStartError }}
+                    </span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="autoStart"
+                      aria-label="开机自启"
+                      size="sm"
+                      data-diagnostic-action="settings.autoStart"
+                    />
+                  </div>
+                </div>
+              </section>
+              <section class="settings-section">
+                <h4 class="section-title">
+                  <span>远程服务与隐私 <small>所有</small></span>
+                  <span
+                    class="remote-health-badge sched-badge"
+                    :class="
+                      remoteHealthStatus === 'available'
+                        ? 'sched-badge--ok'
+                        : remoteHealthStatus === 'checking'
+                          ? ''
+                          : 'sched-badge--warn'
+                    "
+                    :title="remoteHealthError || '本次启动时检测到远程服务正常'"
+                  >
+                    {{ remoteHealthLabel }}
+                  </span>
+                </h4>
+                <p v-if="remoteHealthStatus === 'skipped'" class="remote-health-message">
+                  本次启动未连接远程服务器；这里的修改将在下次启动时按新设置执行。
+                </p>
+                <p v-else-if="remoteHealthStatus === 'retired'" class="remote-health-message">
+                  {{ remoteHealthError }}
+                </p>
+                <p v-else-if="remoteHealthStatus === 'unavailable'" class="remote-health-message">
+                  本次启动连接远程服务器失败；这里的修改将在下次启动时按新设置执行。
+                </p>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >接收软件通知<HelpButton
+                        text="启动时联系远程服务并获取适用于当前系统的软件通知。关闭后不会请求新通知，已经保存的历史通知仍可查看。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="receiveRemoteNotices"
+                      aria-label="接收软件通知"
+                      size="sm"
+                      data-diagnostic-action="settings.receiveRemoteNotices"
+                      :disabled="remoteHealthStatus === 'retired'"
+                    />
+                  </div>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >后续设备统计<HelpButton
+                        text="首次启动已经发送一次匿名基础设备统计，用于估算实际启动的安装数量。关闭后，下次启动起停止后续启动/退出统计；不会上传待办正文、标签、模板、附件或壁纸。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <AppToggle
+                      v-model="uploadDeviceInfo"
+                      aria-label="设备统计"
+                      size="sm"
+                      data-diagnostic-action="settings.uploadDeviceInfo"
+                      :disabled="remoteHealthStatus === 'retired'"
+                    />
+                  </div>
+                </div>
+
+                <div class="setting-item setting-item-full">
+                  <BaseButton
+                    variant="default"
+                    style="width: 100%"
+                    @click="showNoticeHistory = true"
+                  >
+                    查看全部通知
+                  </BaseButton>
+                </div>
+              </section>
+              <section class="settings-section">
+                <h4 class="section-title">关于</h4>
+
+                <div class="setting-item">
+                  <div class="setting-left">
+                    <span class="setting-label"
+                      >应用版本<HelpButton
+                        text="当前安装或运行的应用版本，用于确认功能版本和排查兼容性问题。"
+                    /></span>
+                  </div>
+                  <div class="setting-right">
+                    <span class="setting-value">v{{ appVersion }}</span>
+                  </div>
+                </div>
+
+                <div class="setting-item setting-item-full setting-button-row">
+                  <BaseButton variant="default" @click="emit('check-update')">检查更新</BaseButton>
+                  <BaseButton variant="default" @click="showLogViewer = true">查看日志</BaseButton>
+                </div>
+              </section>
+              <section class="settings-section settings-data">
+                <h4 class="section-title">数据管理</h4>
+                <div class="setting-item setting-item-full setting-button-row">
+                  <BaseButton variant="default" @click="showResetSettingsDialog = true">
+                    恢复默认设置
+                  </BaseButton>
+                  <BaseButton
+                    variant="default"
+                    class="clear-data-btn"
+                    @click="showClearNoteDataDialog = true"
+                  >
+                    清空待办数据
+                  </BaseButton>
+                </div>
+              </section>
+              <div class="settings-diagnostics">
+                <button
+                  type="button"
+                  class="diagnostics-toggle"
+                  :aria-expanded="diagnosticsExpanded"
+                  aria-controls="settings-diagnostics-content"
+                  @click="diagnosticsExpanded = !diagnosticsExpanded"
+                >
+                  <span>高级与诊断</span
+                  ><span class="diagnostics-chevron" aria-hidden="true">⌄</span>
+                </button>
+                <Transition
+                  :css="false"
+                  @enter="onNativeBlurOptionsEnter"
+                  @leave="onNativeBlurOptionsLeave"
+                >
+                  <div
+                    v-show="diagnosticsExpanded"
+                    id="settings-diagnostics-content"
+                    class="diagnostics-content"
+                  >
+                    <AttachmentRecoveryStatus
+                      :active="visible && diagnosticsExpanded"
+                      @show-logs="showLogViewer = true"
+                    />
+                    <section class="settings-section">
+                      <h4 class="section-title">窗口诊断</h4>
+                      <div class="setting-item">
+                        <div class="setting-left">
+                          <span class="setting-label"
+                            >运行诊断<HelpButton
+                              text="毛玻璃诊断已注册到应用统一调度器：启动时执行一次，之后每分钟检查原生效果链、Overlay 和窗口同步状态。"
+                          /></span>
+                          <span class="setting-hint-caption">
+                            {{ blurDiagnostic.message }}
+                            <template v-if="blurDiagnostic.lastCheckedAt">
+                              · {{ formatTickTime(blurDiagnostic.lastCheckedAt) }}
+                            </template>
+                          </span>
+                        </div>
+                        <div class="setting-right">
+                          <span class="sched-badge" :class="blurDiagnosticMeta.className">
+                            {{ blurDiagnosticMeta.label }}
+                          </span>
+                        </div>
+                      </div>
+                    </section>
+                    <section v-if="schedulerHealth" class="settings-section">
+                      <h4 class="section-title">
+                        调度器诊断 <small>所有</small>
+                        <BaseButton size="sm" @click="retryScheduler">重试核心任务</BaseButton>
+                        <button class="sched-refresh-btn" title="刷新" @click="loadSchedulerHealth">
+                          ↻
+                        </button>
+                      </h4>
+
+                      <div class="setting-item">
+                        <div class="setting-left">
+                          <span class="setting-label"
+                            >调度器状态<HelpButton
+                              text="显示后台定时任务调度器是否正在运行。调度器负责待办生效、提醒和循环模板等定时工作。"
+                          /></span>
+                        </div>
+                        <div class="setting-right">
+                          <span
+                            class="sched-badge"
+                            :class="
+                              schedulerHealth.status === 'running'
+                                ? 'sched-badge--ok'
+                                : 'sched-badge--warn'
+                            "
+                          >
+                            {{ schedulerHealth.status === 'running' ? '● 运行中' : '○ 已停止' }}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="setting-item">
+                        <div class="setting-left">
+                          <span class="setting-label"
+                            >最近执行<HelpButton
+                              text="后台调度器最近一次完成任务检查的时间；长时间不更新可能表示调度线程被阻塞。"
+                          /></span>
+                          <span class="setting-hint-caption">上次检查任务的时间</span>
+                        </div>
+                        <div class="setting-right">
+                          <span class="setting-value">
+                            {{ formatTickTime(schedulerHealth.lastTickAt) }}
+                            <span class="setting-hint-inline"
+                              >（{{ tickTimeAgo(schedulerHealth.lastTickAt) }}）</span
+                            >
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="setting-item">
+                        <div class="setting-left">
+                          <span class="setting-label"
+                            >故障监控<HelpButton
+                              text="独立看门狗会定期检查主调度器是否正常推进，并在检测到停滞时尝试恢复。"
+                          /></span>
+                          <span class="setting-hint-caption">独立计时器，检测调度器是否卡死</span>
+                        </div>
+                        <div class="setting-right">
+                          <span
+                            class="sched-badge"
+                            :class="
+                              schedulerHealth.watchdogRunning
+                                ? 'sched-badge--ok'
+                                : 'sched-badge--warn'
+                            "
+                          >
+                            {{ schedulerHealth.watchdogRunning ? '● 活跃' : '○ 休眠' }}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="setting-item">
+                        <div class="setting-left">
+                          <span class="setting-label"
+                            >执行保护<HelpButton
+                              text="防止上一轮任务尚未结束时再次进入调度流程，避免同一待办被重复处理或重复提醒。"
+                          /></span>
+                          <span class="setting-hint-caption">防止同一时刻重复执行</span>
+                        </div>
+                        <div class="setting-right">
+                          <span
+                            class="sched-badge"
+                            :class="
+                              !schedulerHealth.tickStuck ? 'sched-badge--ok' : 'sched-badge--danger'
+                            "
+                          >
+                            {{ schedulerHealth.tickStuck ? '⚠ 阻塞中' : '● 空闲' }}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="setting-item">
+                        <div class="setting-left">
+                          <span class="setting-label"
+                            >调度计数<HelpButton
+                              text="记录当前主调度器的运行代次；发生故障并重建调度循环后会进入下一轮。"
+                          /></span>
+                          <span class="setting-hint-caption">每发生一次故障恢复 +1</span>
+                        </div>
+                        <div class="setting-right">
+                          <span class="setting-value"
+                            >第 {{ schedulerHealth.mainGeneration }} 轮</span
+                          >
+                        </div>
+                      </div>
+
+                      <div class="setting-item">
+                        <div class="setting-left">
+                          <span class="setting-label"
+                            >自动恢复<HelpButton
+                              text="显示看门狗连续恢复失败的次数。数值持续增加时通常需要重启应用并检查错误日志。"
+                          /></span>
+                          <span class="setting-hint-caption">故障监控触发的恢复次数</span>
+                        </div>
+                        <div class="setting-right">
+                          <span
+                            class="setting-value"
+                            :class="{ 'sched-warn': schedulerHealth.recoveryFailures > 0 }"
+                          >
+                            {{ schedulerHealth.recoveryFailures }} 次
+                          </span>
+                        </div>
+                      </div>
+
+                      <!-- 任务列表 -->
+                      <div v-if="schedulerHealth.tasks?.length" class="sched-tasks">
+                        <div class="sched-tasks-title">
+                          注册任务（{{ schedulerHealth.tasks.length }} 个）
+                        </div>
+                        <div
+                          v-for="task in schedulerHealth.tasks"
+                          :key="task.name"
+                          class="sched-task-card"
+                          :class="{ 'sched-task-card--disabled': task.disabled }"
+                        >
+                          <div class="sched-task-header">
+                            <span class="sched-task-name" :title="task.name">
+                              {{ schedulerTaskLabel(task.name) }}
+                            </span>
+                            <span
+                              v-if="task.disabled"
+                              class="sched-badge sched-badge--danger"
+                              title="连续失败 10 次已自动禁用"
+                            >
+                              ⚠ 已熔断
+                            </span>
+                            <span v-else-if="task.nextRetryAt" class="sched-badge sched-badge--warn"
+                              >等待重试 {{ formatTickTime(task.nextRetryAt) }}</span
+                            >
+                            <span v-else class="sched-badge sched-badge--ok">正常</span>
+                          </div>
+                          <div class="sched-task-meta">失败次数：{{ task.failures }}</div>
+                          <div v-if="task.lastError" class="sched-task-error">
+                            {{ task.lastError }}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </Transition>
+              </div>
+            </div>
+          </fieldset>
+        </div>
+      </div>
+    </div>
+
+    <!-- 清空待办数据确认弹窗 -->
+    <ConfirmDialog
+      v-model:visible="showClearNoteDataDialog"
+      title="清空待办数据"
+      message="此操作将清空所有待办、模板、标签、附件和未保存草稿，设置不受影响。此操作不可撤销。"
+      confirm-text="清空"
+      cancel-text="取消"
+      variant="danger"
+      @confirm="onConfirmClearNoteData"
+    />
+
+    <!-- 恢复默认设置确认弹窗 -->
+    <ConfirmDialog
+      v-model:visible="showResetSettingsDialog"
+      title="恢复默认设置"
+      message="此操作会恢复当前视图的独立设置，以及图标颜色与大小、视图显示快捷键、天气、远程与隐私开关等所有视图共享设置。其他视图的独立设置、开机自启及待办数据不受影响。"
+      confirm-text="恢复"
+      cancel-text="取消"
+      variant="default"
+      @confirm="onConfirmResetSettings"
+    />
+    <LogViewerDialog v-model:visible="showLogViewer" :queue="logQueue" />
+    <RemoteNoticeHistoryDialog v-model:visible="showNoticeHistory" :queue="historyQueue" />
+  </Teleport>
+</template>
+
+<style scoped>
+.settings-save-error,
+.settings-save-unavailable {
+  flex: 0 0 auto;
+  max-height: 148px;
+  padding: 0 var(--settings-gutter) 8rem var(--settings-gutter-start);
+  font-size: var(--fs-secondary);
+  overflow-wrap: anywhere;
+}
+.settings-save-error {
+  color: var(--ui-danger);
+}
+.settings-save-unavailable {
+  color: var(--text-color-secondary);
+}
+.settings-save-error p,
+.settings-save-unavailable p {
+  margin: 0 0 4rem;
+}
+.settings-search {
+  padding: 0 var(--settings-gutter) 8rem var(--settings-gutter-start);
+  flex: 0 0 auto;
+}
+.settings-search input {
+  width: 100%;
+  padding: 6rem 9rem;
+  border: 1px solid var(--ui-border-control);
+  border-radius: 8rem;
+  background: var(--ui-surface-control);
+  color: var(--text-color);
+  font: inherit;
+}
+.settings-search p {
+  margin-top: 4rem;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+}
+.settings-search-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6rem;
+  max-height: 64px;
+  margin-top: 6rem;
+}
+.settings-search-results button {
+  padding: 5rem 8rem;
+  border: 0;
+  border-radius: 6rem;
+  background: var(--ui-fill-passive);
+  color: var(--text-color);
+  font: inherit;
+  cursor: pointer;
+}
+.settings-search-results button:hover {
+  background: var(--ui-fill-hover);
+}
+
+/* ---- 外层容器 ---- */
+.settings-wrapper {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-global-panel);
+  /* 透明模态层接住面板外点击；底层 .app-scene 同时由 inert 阻断交互。 */
+  pointer-events: auto;
+  border-radius: var(--window-radius); /* 同步窗口圆角，裁剪面板直角 */
+  overflow: hidden; /* 裁剪超出圆角的内容 */
+}
+
+/* 轻微压低底层对比度，避免待办文字透过玻璃抢占焦点。 */
+.settings-wrapper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--surface-modal-scrim);
+  opacity: 0;
+  transition: opacity 250ms ease;
+  pointer-events: none;
+}
+
+.settings-wrapper.active::before {
+  opacity: 1;
+}
+
+/* ---- 面板主体：设置页使用 1× 全局霜层基准 ---- */
+.settings-panel {
+  /* 只缩小设置页及其内嵌控件，正文、待办和其他窗口仍使用用户的原字号。 */
+  --fs-body: clamp(12rem, calc(var(--font-size-base) * 0.82), 16rem);
+  --fs-secondary: max(11rem, calc(var(--fs-body) * 0.86));
+  --fs-title: calc(var(--fs-body) * 1.2);
+  --settings-gutter: 16rem;
+  --settings-gutter-start: var(--settings-gutter);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  position: absolute;
+  container-type: inline-size;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 70%;
+  border-radius: 16rem 16rem 0 0;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.3);
+  transform: translateY(100%);
+  transition:
+    transform var(--motion-panel-exit) var(--ease-standard),
+    filter 100ms ease-out;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--surface-modal);
+  border: 0;
+}
+
+.settings-panel.active {
+  transform: translateY(0);
+  transition-duration: var(--motion-panel), 100ms;
+}
+
+/* 月视图从右侧滑入；左边缘是贯穿整页的横向尺寸拖动区。 */
+.settings-panel--month {
+  --settings-gutter-start: 24rem;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: auto;
+  width: 40%;
+  min-width: min(300px, 100%);
+  height: 100%;
+  border-radius: 16rem 0 0 16rem;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.3);
+  transform: translateX(100%);
+}
+
+.settings-panel--month.active {
+  transform: translateX(0);
+}
+
+/* ---- 拖拽指示条（可拖拽调整面板高度） ---- */
+.drag-indicator {
+  display: flex;
+  justify-content: center;
+  padding: 8rem 0 2rem;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.settings-panel--month .drag-indicator {
+  position: absolute;
+  z-index: var(--z-local-raised);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 16rem;
+  padding: 0;
+  align-items: center;
+  cursor: ew-resize;
+}
+
+.settings-panel--month .drag-bar {
+  width: 4rem;
+  height: 36rem;
+}
+
+.settings-panel--month .drag-indicator:hover .drag-bar {
+  transform: scaleY(1.18);
+}
+
+.drag-indicator.is-disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+.drag-bar {
+  width: 36rem;
+  height: 4rem;
+  border-radius: 2rem;
+  background-color: color-mix(in srgb, var(--text-color) 20%, transparent);
+  transition:
+    transform var(--motion-control) var(--ease-standard),
+    background-color var(--motion-fast) ease;
+}
+.drag-indicator:hover .drag-bar {
+  transform: scaleX(1.18);
+  background-color: color-mix(in srgb, var(--text-color) 32%, transparent);
+}
+
+/* ---- 面板头部 ---- */
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4rem var(--settings-gutter) 8rem var(--settings-gutter-start);
+  flex-shrink: 0;
+}
+.panel-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--text-color);
+  letter-spacing: -0.2rem;
+}
+.panel-reset-status {
+  margin-left: auto;
+  margin-right: 10rem;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+}
+.panel-close-btn {
+  width: 28rem;
+  height: 28rem;
+  border: none;
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--text-color);
+  opacity: 0.6;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background-color var(--motion-fast) ease,
+    opacity var(--motion-fast) ease,
+    transform var(--motion-control) var(--ease-standard);
+}
+.panel-close-btn:hover {
+  background-color: var(--ui-fill-hover);
+  opacity: 1;
+}
+.panel-close-btn:active:not(:disabled) {
+  transform: scale(0.98);
+  transition-duration: 70ms;
+}
+.panel-close-btn:disabled {
+  cursor: wait;
+  opacity: 0.35;
+}
+
+/* ---- 面板内容区 ---- */
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 var(--settings-gutter) 24rem var(--settings-gutter-start);
+  margin: 0 0 10rem;
+
+  /* 阻止滚动链接：子元素滚到头不会导致父级抖动 */
+  overscroll-behavior: contain;
+  /* 异步分区展开时保持已恢复的滚动偏移，避免浏览器锚定再次移动它。 */
+  overflow-anchor: none;
+
+  /* 底部内容渐隐，溢出时含蓄提示"下面还有" */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black calc(100% - 14rem),
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 14rem), transparent 100%);
+}
+.panel-body.is-resetting {
+  cursor: wait;
+  opacity: 0.55;
+}
+.panel-body {
+  transition: opacity var(--motion-control) ease;
+}
+.settings-controls {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* ---- 设置分区 ---- */
+.settings-category {
+  margin-bottom: 22rem;
+}
+.category-title {
+  margin-bottom: 10rem;
+  padding-bottom: 6rem;
+  border-bottom: 1px solid var(--ui-border-divider);
+  color: var(--text-color);
+  font-size: calc(var(--fs-body) * 1.1);
+  font-weight: 700;
+}
+
+/* ---- 单条设置项（Flex 两列：左标签 + 右控件，space-between 平分多余空间）---- */
+/* 原生模糊参数随启用状态平滑展开/收起；grid 可适应内容高度。 */
+.native-blur-options {
+  overflow: hidden;
+}
+.native-blur-options-inner {
+  min-height: 0;
+}
+.wallpaper-panel-enter-active,
+.wallpaper-panel-leave-active {
+  overflow: hidden;
+  transition:
+    max-height 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease,
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-top 280ms ease;
+}
+.wallpaper-panel-enter-active {
+  max-height: 1200rem;
+}
+.wallpaper-panel-enter-from,
+.wallpaper-panel-leave-to {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateY(-6rem);
+}
+.wallpaper-panel-leave-from {
+  max-height: 1200rem;
+}
+
+/* 必要的多行说明自然撑高，普通项保持相同的垂直基线。 */
+
+/* 按钮项占满宽度（单列） */
+
+/* 一行两个按钮：等宽平分 */
+
+/* ---- 左侧区域（标签 + 提示）---- */
+
+/* ---- 右侧区域（控件容器）---- */
+.holiday-summary-row {
+  flex-wrap: wrap;
+  gap: 12rem;
+}
+.holiday-summary-item {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 140px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8rem;
+}
+.holiday-action-row .base-btn {
+  white-space: nowrap;
+}
+.holiday-action-row {
+  flex-wrap: wrap;
+}
+.holiday-action-row .base-btn {
+  flex: 1 1 100px;
+}
+.titlebar-style-selector {
+  display: flex;
+  flex-wrap: wrap;
+  width: max-content;
+  min-width: min(136rem, 100%);
+  max-width: 100%;
+  flex-shrink: 0;
+  gap: 2rem;
+  padding: 2rem;
+  border: 0;
+  border-radius: 8rem;
+  background-color: var(--ui-fill-passive);
+}
+.titlebar-style-selector button {
+  flex: 1 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: max(24rem, 1.8em);
+  padding: 2rem 6rem;
+  border: 0;
+  border-radius: 6rem;
+  color: var(--text-color-secondary);
+  background-color: transparent;
+  font: inherit;
+  font-size: var(--fs-secondary);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-control) var(--ease-standard),
+    box-shadow var(--motion-control) var(--ease-standard),
+    transform var(--motion-fast) ease;
+}
+.titlebar-style-selector button:hover:not(.active) {
+  color: var(--text-color);
+  background-color: var(--ui-fill-hover);
+}
+.titlebar-style-selector button.active {
+  color: var(--text-color);
+  background-color: var(--surface-float);
+  box-shadow: 0 1rem 4rem rgba(0, 0, 0, 0.16);
+}
+.titlebar-style-selector button:active {
+  transform: scale(0.98);
+}
+.titlebar-style-selector button:focus-visible {
+  outline: 1px solid var(--ui-border-hover);
+  outline-offset: 1rem;
+}
+
+/* 滑块右侧共用定宽数值槽；窄窗仍优先保持左右布局。 */
+
+/* ---- 文字样式 ---- */
+
+.remote-health-badge {
+  padding: 0;
+  margin-left: auto;
+  border: 0;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.remote-health-badge.sched-badge {
+  padding: 2rem 8rem;
+  font-size: var(--fs-secondary);
+}
+
+.remote-health-message {
+  margin: -2rem 2rem 6rem;
+  color: rgb(255, 149, 0);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+
+.holiday-data-message {
+  margin: -2rem 2rem 6rem;
+  color: rgb(255, 149, 0);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+.holiday-data-message.is-error {
+  color: rgb(255, 59, 48);
+}
+
+/* 持久错误提示（恒显示，不自动消失）—— Apple 风格：图标 + 文字 */
+
+/* 错误/警告图标（ⓘ 风格，复用于所有错误提示） */
+.warn-icon {
+  flex-shrink: 0;
+}
+
+/* ---- 预设色块 ---- */
+
+/* ---- hex 颜色输入框 ---- */
+
+/* ---- 颜色选择器 ---- */
+
+@container (max-width: 380px) {
+  .holiday-summary-item {
+    flex-basis: 100%;
+  }
+}
+
+.ui-scale-controls {
+  gap: 4rem;
+}
+@container (max-width: 300px) {
+  .settings-search p {
+    display: none;
+  }
+}
+@media (max-height: 600px) {
+  .settings-panel {
+    min-height: min(400rem, 100%);
+  }
+}
+/* 仅设置页缩小控件，不改变编辑器与主页面的组件尺寸。 */
+.settings-panel :deep(.fsi-trigger) {
+  min-height: 26px;
+  padding: 3px 7px;
+}
+
+.settings-panel :deep(.base-btn) {
+  min-height: 26px;
+  padding: 4px 8px;
+  white-space: normal;
+}
+.settings-panel :deep(.setting-hint-caption),
+.settings-panel :deep(.shortcut-recorder-status) {
+  font-size: var(--fs-secondary);
+}
+.settings-panel :deep(.clear-data-btn) {
+  color: var(--ui-danger);
+}
+.diagnostics-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8rem 2rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-color-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.diagnostics-toggle:hover {
+  color: var(--text-color);
+}
+.diagnostics-chevron {
+  transition: transform var(--motion-control) var(--ease-standard);
+}
+.diagnostics-toggle[aria-expanded='true'] .diagnostics-chevron {
+  transform: rotate(180deg);
+}
+.diagnostics-content {
+  overflow: hidden;
+}
+.settings-panel :deep(.settings-search-target) {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  animation: settings-search-highlight 1600ms var(--ease-standard);
+}
+@keyframes settings-search-highlight {
+  20%,
+  70% {
+    outline-color: var(--ui-accent);
+  }
+}
+
+/* ---- 滑动条（已由 AppSlider 组件接管）---- */
+
+/* ---- 调度器诊断 ---- */
+.weather-refresh-btn {
+  display: grid;
+  width: 22rem;
+  height: 22rem;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-color-secondary);
+  cursor: pointer;
+}
+.weather-refresh-btn:hover:not(:disabled) {
+  background: var(--ui-fill-hover);
+}
+.weather-refresh-btn:focus-visible {
+  outline: none;
+}
+.weather-refresh-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.weather-refresh-btn:disabled {
+  cursor: wait;
+}
+.weather-refresh-btn.is-refreshing svg {
+  animation: weather-refresh-spin 720ms linear infinite;
+}
+@keyframes weather-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.sched-refresh-btn {
+  width: 22rem;
+  height: 22rem;
+  border: none;
+  border-radius: 50%;
+  background: var(--ui-surface-control);
+  color: var(--text-color-secondary);
+  font-size: calc(var(--fs-body) * 0.95);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 150ms ease;
+  flex-shrink: 0;
+}
+.sched-refresh-btn:hover {
+  background: var(--ui-fill-hover);
+  color: var(--text-color);
+}
+.sched-refresh-btn:active {
+  transform: scale(0.98);
+  transition: transform 70ms ease;
+}
+/* 苹果风格淡染胶囊：背景为语义色极淡染，文字同色系 */
+.sched-badge {
+  font-size: var(--fs-secondary);
+  padding: 2rem 8rem;
+  border-radius: 4rem;
+  font-weight: 500;
+}
+.sched-badge--ok {
+  background: rgba(52, 199, 89, 0.1);
+  color: rgb(52, 199, 89);
+}
+.sched-badge--warn {
+  background: rgba(255, 149, 0, 0.1);
+  color: rgb(255, 149, 0);
+}
+.sched-badge--danger {
+  background: rgba(255, 59, 48, 0.1);
+  color: rgb(255, 59, 48);
+}
+.sched-warn {
+  color: rgb(255, 149, 0);
+}
+.sched-tasks {
+  margin-top: 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 8rem;
+}
+.sched-tasks-title {
+  font-size: var(--fs-secondary);
+  font-weight: 600;
+  color: var(--text-color-secondary);
+  margin-bottom: 4rem;
+}
+.sched-task-card {
+  padding: 10rem;
+  border-radius: 8rem;
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-border-divider);
+}
+.sched-task-card--disabled {
+  opacity: 0.6;
+  border-color: rgba(255, 59, 48, 0.2);
+}
+.sched-task-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4rem;
+}
+.sched-task-name {
+  font-size: var(--fs-secondary);
+  font-weight: 600;
+}
+.sched-task-meta {
+  font-size: var(--fs-secondary);
+  color: var(--text-color-secondary);
+}
+.sched-task-error {
+  font-size: var(--fs-secondary);
+  color: rgb(255, 59, 48);
+  margin-top: 4rem;
+  padding: 4rem 6rem;
+  background: rgba(255, 59, 48, 0.06);
+  border-radius: 4rem;
+  word-break: break-all;
+}
+</style>
+
+<style scoped src="./settings/settings-form.css"></style>

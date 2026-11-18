@@ -1,0 +1,651 @@
+<script setup>
+import { flushRendererPerformanceDiagnostics } from '../../utils/performanceDiagnostics.js'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import AppModalShell from '../ui/AppModalShell.vue'
+import BaseButton from '../ui/BaseButton.vue'
+import StyledSelect from '../ui/StyledSelect.vue'
+import { formatLogRecordText } from '../../utils/logRecordText.js'
+
+const props = defineProps({
+  queue: { type: Object, default: null },
+  visible: { type: Boolean, default: false }
+})
+const emit = defineEmits(['update:visible'])
+
+const loading = ref(false)
+const exporting = ref('')
+const errorMessage = ref('')
+const records = ref([])
+const nextCursor = ref(null)
+const hasMore = ref(false)
+const files = ref([])
+const level = ref('all')
+const processType = ref('all')
+const searchInput = ref('')
+const appliedSearch = ref('')
+const searchRef = ref(null)
+const diagnosticState = ref({ mode: 'daily' })
+const changingMode = ref(false)
+const clockNow = ref(Date.now())
+let modeTimer = null
+let unsubscribePolicy = null
+const deepMode = computed(
+  () => diagnosticState.value.mode === 'deep' && diagnosticState.value.expiresAt > clockNow.value
+)
+const remaining = computed(() => {
+  const seconds = Math.max(0, Math.ceil((diagnosticState.value.expiresAt - clockNow.value) / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+})
+const incomplete = computed(() => {
+  const health = diagnosticState.value.diagnostics
+  return (
+    health &&
+    (health.writer?.status !== 'ready' ||
+      health.rejectedRecords ||
+      health.writer?.droppedRecords ||
+      health.writer?.writeErrors ||
+      diagnosticState.value.lastFreeze?.complete === false)
+  )
+})
+const earlyStopMessage = computed(
+  () =>
+    ({
+      'capture-budget': '本次采集已达到容量上限，已恢复日常记录。',
+      'queue-budget': '记录生成过快，已停止详细采集以保持应用响应。',
+      'writer-unavailable': '日志暂时无法保存，已恢复日常记录。',
+      'collector-cost': '详细采集开销偏高，已自动恢复日常记录。'
+    })[diagnosticState.value.reason] || ''
+)
+let requestSequence = 0
+let searchTimer = null
+
+const levelOptions = [
+  { value: 'all', label: '全部级别' },
+  { value: 'warn', label: '警告' },
+  { value: 'error', label: '错误' },
+  { value: 'fatal', label: '严重' },
+  { value: 'info', label: '信息' },
+  { value: 'debug', label: '调试' }
+]
+const processOptions = [
+  { value: 'all', label: '全部来源' },
+  { value: 'main', label: '主进程' },
+  { value: 'renderer', label: '页面' },
+  { value: 'child', label: '子进程' }
+]
+
+const fileSummary = computed(() => {
+  const totalBytes = files.value.reduce((sum, file) => sum + Number(file.size || 0), 0)
+  if (!files.value.length) return '暂无日志文件'
+  return `${files.value.length} 个文件 · ${formatBytes(totalBytes)}`
+})
+
+function close() {
+  emit('update:visible', false)
+}
+
+async function query({ append = false } = {}) {
+  const sequence = ++requestSequence
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const result = await window.api.queryLogs({
+      levels: level.value === 'all' ? [] : [level.value],
+      processes: processType.value === 'all' ? [] : [processType.value],
+      search: appliedSearch.value,
+      cursor: append ? nextCursor.value : 0,
+      limit: 200
+    })
+    if (sequence !== requestSequence) return
+    records.value = append ? [...records.value, ...result.items] : result.items
+    nextCursor.value = result.nextCursor
+    hasMore.value = result.hasMore
+    files.value = result.files || []
+    await refreshDiagnosticState()
+  } catch (error) {
+    console.error('[LogViewerDialog] 查询日志失败:', error)
+    if (sequence !== requestSequence) return
+    errorMessage.value = error?.message || '读取日志失败'
+  } finally {
+    if (sequence === requestSequence) loading.value = false
+  }
+}
+
+async function refreshDiagnosticState() {
+  try {
+    diagnosticState.value = await window.api.getDiagnosticState()
+  } catch {
+    /* 查询错误由主要操作显示。 */
+  }
+}
+
+async function changeMode(action) {
+  if (changingMode.value) return
+  changingMode.value = true
+  errorMessage.value = ''
+  try {
+    const method = {
+      start: 'startDeepDiagnostics',
+      extend: 'extendDeepDiagnostics',
+      stop: 'stopDeepDiagnostics'
+    }[action]
+    diagnosticState.value = await window.api[method]()
+    clockNow.value = Date.now()
+  } catch (error) {
+    errorMessage.value = error?.message || '切换采集模式失败'
+  } finally {
+    changingMode.value = false
+  }
+}
+
+function applySearch() {
+  clearTimeout(searchTimer)
+  appliedSearch.value = searchInput.value.trim()
+  query()
+}
+
+function clearSearch() {
+  searchInput.value = ''
+  applySearch()
+}
+
+async function exportLogs(range) {
+  if (exporting.value) return
+  exporting.value = range
+  errorMessage.value = ''
+  try {
+    flushRendererPerformanceDiagnostics('export')
+    await window.api.exportLogs({ range })
+    await refreshDiagnosticState()
+  } catch (error) {
+    console.error('[LogViewerDialog] 导出日志失败:', error)
+    errorMessage.value = error?.message || '导出日志失败'
+  } finally {
+    exporting.value = ''
+  }
+}
+
+async function copyRecord(record) {
+  try {
+    await window.api.writeClipboardText(formatLogRecordText(record))
+  } catch (error) {
+    console.error('[LogViewerDialog] 复制日志记录失败:', error)
+    errorMessage.value = error?.message || '复制日志失败'
+  }
+}
+
+function formatTime(value) {
+  if (!value) return '——'
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3,
+    hour12: false
+  })
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function levelLabel(value) {
+  return (
+    {
+      debug: '调试',
+      info: '信息',
+      warn: '警告',
+      error: '错误',
+      fatal: '严重'
+    }[value] || value
+  )
+}
+
+watch(
+  () => props.visible,
+  (visible) => {
+    clearInterval(modeTimer)
+    unsubscribePolicy?.()
+    unsubscribePolicy = null
+    if (visible) {
+      clockNow.value = Date.now()
+      modeTimer = setInterval(() => {
+        clockNow.value = Date.now()
+      }, 1000)
+      unsubscribePolicy = window.api.onDiagnosticPolicy?.((policy) => {
+        diagnosticState.value = { ...diagnosticState.value, ...policy }
+        void refreshDiagnosticState()
+      })
+      requestAnimationFrame(() => searchRef.value?.focus())
+      void query()
+    }
+  },
+  { immediate: true }
+)
+
+watch([level, processType], () => {
+  if (props.visible) query()
+})
+
+// 与模板页搜索框一致：输入防抖自动搜索，回车立即搜索
+watch(searchInput, () => {
+  if (!props.visible) return
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    const next = searchInput.value.trim()
+    if (next === appliedSearch.value) return
+    appliedSearch.value = next
+    query()
+  }, 300)
+})
+
+onBeforeUnmount(() => {
+  clearTimeout(searchTimer)
+  clearInterval(modeTimer)
+  unsubscribePolicy?.()
+  requestSequence++
+})
+</script>
+
+<template>
+  <AppModalShell
+    :queue="queue"
+    :visible="visible"
+    title="应用日志"
+    :subtitle="fileSummary"
+    width="min(780rem, calc(100vw - 40rem))"
+    height="min(680rem, calc(100vh - 40rem))"
+    flush
+    @update:visible="close"
+  >
+    <div class="log-content">
+      <div class="log-mode">
+        <div class="log-mode-description">
+          <strong>{{ deepMode ? `深度排查 · 剩余 ${remaining}` : '日常记录' }}</strong>
+          <p>
+            {{
+              deepMode
+                ? '请复现问题，完成后停止并导出日志。到时会自动恢复日常记录。'
+                : '低开销保留异常与运行摘要。需要复现问题时，可临时开启详细采集。'
+            }}
+          </p>
+          <p v-if="incomplete" class="log-capture-warning" role="status">
+            部分诊断记录未能保留，导出文件会注明缺失情况。
+          </p>
+          <p v-if="earlyStopMessage" class="log-capture-warning" role="status">
+            {{ earlyStopMessage }}
+          </p>
+        </div>
+        <BaseButton
+          v-if="!deepMode"
+          size="sm"
+          :disabled="changingMode || Boolean(exporting)"
+          @click="changeMode('start')"
+          >开启深度排查（10 分钟）</BaseButton
+        >
+        <template v-else>
+          <BaseButton
+            size="sm"
+            :disabled="
+              changingMode ||
+              Boolean(exporting) ||
+              diagnosticState.expiresAt >= diagnosticState.startedAt + 1800000
+            "
+            @click="changeMode('extend')"
+            >延长 10 分钟</BaseButton
+          >
+          <BaseButton
+            size="sm"
+            :disabled="changingMode || Boolean(exporting)"
+            @click="changeMode('stop')"
+            >停止采集</BaseButton
+          >
+        </template>
+      </div>
+      <div class="log-toolbar">
+        <StyledSelect v-model="level" :options="levelOptions" size="sm" width="108rem" />
+        <StyledSelect v-model="processType" :options="processOptions" size="sm" width="108rem" />
+        <div class="log-search">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.5" cy="8.5" r="5.5" />
+            <path d="m13 13 4 4" />
+          </svg>
+          <input
+            ref="searchRef"
+            v-model="searchInput"
+            placeholder="搜索消息、范围或堆栈"
+            aria-label="搜索日志"
+            @keydown.enter="applySearch"
+          />
+          <button v-if="searchInput" title="清空搜索" @click="clearSearch">×</button>
+        </div>
+        <BaseButton size="sm" :disabled="loading" @click="query()">刷新</BaseButton>
+      </div>
+
+      <div class="log-list" aria-live="polite">
+        <p v-if="errorMessage" class="log-error">{{ errorMessage }}</p>
+        <div v-if="loading && !records.length" class="log-empty">正在读取日志…</div>
+        <div v-else-if="!records.length" class="log-empty">当前条件下没有日志</div>
+        <details
+          v-for="record in records"
+          :key="record.id"
+          class="log-record"
+          :class="`is-${record.level}`"
+        >
+          <summary>
+            <span class="log-level">{{ levelLabel(record.level) }}</span>
+            <time>{{ formatTime(record.time) }}</time>
+            <span class="log-source">
+              {{ record.windowRole || record.process }} · {{ record.scope }}
+            </span>
+            <span class="log-message">{{ record.message || '无消息' }}</span>
+          </summary>
+          <div class="log-detail">
+            <pre>{{ formatLogRecordText(record) }}</pre>
+            <BaseButton size="sm" @click="copyRecord(record)">复制此条</BaseButton>
+          </div>
+        </details>
+        <BaseButton
+          v-if="hasMore"
+          class="load-more"
+          size="sm"
+          :disabled="loading"
+          @click="query({ append: true })"
+        >
+          {{ loading ? '正在加载…' : '加载更早日志' }}
+        </BaseButton>
+      </div>
+
+      <footer class="log-footer">
+        <BaseButton
+          size="sm"
+          :disabled="Boolean(exporting)"
+          title="导出最近一小时内所有级别和来源的日志，不受当前搜索条件影响"
+          @click="exportLogs('last-hour')"
+        >
+          {{ exporting === 'last-hour' ? '正在导出…' : '导出近一小时日志' }}
+        </BaseButton>
+        <BaseButton
+          size="sm"
+          :disabled="Boolean(exporting)"
+          title="导出本机当前保留的全部日志，不受当前搜索条件影响"
+          @click="exportLogs('all')"
+        >
+          {{ exporting === 'all' ? '正在导出…' : '导出全部日志' }}
+        </BaseButton>
+      </footer>
+    </div>
+  </AppModalShell>
+</template>
+
+<style scoped>
+.log-content {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: 100%;
+}
+
+.log-mode {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10rem;
+  padding: 14rem 16rem;
+  border-bottom: 1px solid var(--ui-border-divider);
+  color: var(--text-color);
+  background: var(--ui-surface-control);
+  font-size: var(--fs-secondary);
+}
+.log-mode-description {
+  flex: 1 1 240rem;
+}
+.log-mode p {
+  margin: 4rem 0 0;
+  color: var(--text-color-secondary);
+  line-height: 1.5;
+}
+.log-mode .log-capture-warning {
+  font-weight: 600;
+}
+
+.log-footer,
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10rem;
+  padding: 14rem 16rem;
+}
+
+.log-toolbar {
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--ui-border-divider);
+}
+
+/* 搜索框复用模板页 tp-search 的形态：图标 + 输入框 + 清空按钮 */
+.log-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 220rem;
+  min-width: 0;
+  height: 32rem;
+  overflow: hidden;
+  border: 1px solid var(--ui-border-control);
+  border-radius: 8rem;
+  background: var(--ui-surface-control);
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.log-search:focus-within {
+  border-color: var(--ui-border-hover);
+}
+
+.log-search svg {
+  width: 16rem;
+  height: 16rem;
+  margin-left: 10rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--text-color-secondary);
+  flex-shrink: 0;
+}
+
+.log-search input {
+  flex: 1;
+  min-width: 0;
+  height: 30rem;
+  padding: 0 10rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-color);
+  font: inherit;
+  font-size: var(--fs-secondary);
+}
+
+.log-search input::placeholder {
+  color: var(--text-color-secondary);
+  opacity: 0.64;
+}
+
+.log-search button {
+  display: grid;
+  place-items: center;
+  width: 24rem;
+  height: 24rem;
+  margin-right: 4rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-color-secondary);
+  font-size: 17rem;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    transform var(--motion-fast) ease;
+}
+
+.log-search button:hover {
+  background: var(--ui-fill-hover);
+  color: var(--text-color);
+}
+
+.log-search button:active {
+  transform: scale(0.98);
+}
+
+.log-error {
+  margin: 0 4rem 10rem;
+  padding: 8rem 10rem;
+  border-radius: 8rem;
+  color: #ff6961;
+  background: rgba(255, 59, 48, 0.1);
+  font-size: var(--fs-secondary);
+}
+
+.log-list {
+  min-width: 0;
+  min-height: 0;
+  padding: 10rem 12rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.log-empty {
+  display: grid;
+  min-height: 180rem;
+  place-items: center;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+}
+
+/* 卡片背景对齐待办卡片（NoteCard）：半透明背景 + 浅描边，悬停时加深 */
+.log-record {
+  min-width: 0;
+  margin-bottom: 6rem;
+  border: 1px solid var(--ui-border-divider);
+  border-left: 3rem solid color-mix(in srgb, var(--text-color) 35%, transparent);
+  border-radius: 11rem;
+  background: rgb(var(--bg-color) / 0.08);
+  transition:
+    background-color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.log-record:hover {
+  border-color: var(--ui-border-control);
+  /* border-color 简写会覆盖左侧级别色条，这里保住默认灰；
+     warn/error 色条由下方同优先级且靠后的 is-* 规则继续生效 */
+  border-left-color: color-mix(in srgb, var(--text-color) 35%, transparent);
+}
+
+.log-record.is-warn {
+  border-left-color: #ff9f0a;
+}
+
+.log-record.is-error,
+.log-record.is-fatal {
+  border-left-color: #ff453a;
+}
+
+/* 单行摘要：级别 · 时间 · 来源 · 消息，消息占满剩余宽度并省略号截断 */
+.log-record summary {
+  display: flex;
+  align-items: center;
+  gap: 8rem;
+  padding: 8rem 10rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--fs-secondary);
+  white-space: nowrap;
+}
+
+.log-record summary::-webkit-details-marker {
+  display: none;
+}
+
+.log-level {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.log-record time,
+.log-source {
+  color: var(--text-color-secondary);
+}
+
+.log-record time {
+  flex-shrink: 0;
+}
+
+.log-source {
+  max-width: 180rem;
+  flex-shrink: 0;
+}
+
+.log-message {
+  min-width: 0;
+  flex: 1;
+}
+
+.log-source,
+.log-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-detail {
+  display: flex;
+  align-items: flex-end;
+  gap: 10rem;
+  padding: 0 10rem 10rem;
+}
+
+.log-detail pre {
+  min-width: 0;
+  max-height: 300rem;
+  flex: 1;
+  margin: 0;
+  padding: 10rem;
+  border-radius: 7rem;
+  overflow: auto;
+  color: var(--text-color);
+  background: rgba(0, 0, 0, 0.14);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.load-more {
+  display: flex;
+  margin: 10rem auto 2rem;
+}
+
+.log-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--ui-border-divider);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 620px) {
+  .log-detail {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

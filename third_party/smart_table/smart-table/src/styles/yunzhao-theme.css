@@ -1,0 +1,41 @@
+/* Yunzhao design language: one blue, the same neutrals as the settings app. */
+:root {
+  --el-color-primary: #0a84ff;
+  --el-color-primary-light-3: #64b0ff;
+  --el-color-primary-light-5: #8dc4ff;
+  --el-color-primary-light-7: #b9dbff;
+  --el-color-primary-light-8: #d6eaff;
+  --el-color-primary-light-9: #eaf4ff;
+  --el-color-primary-dark-2: #0072e0;
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f5f5f7;
+  --el-text-color-primary: #1d1d1f;
+  --el-text-color-regular: #6e6e73;
+  --el-text-color-secondary: #a1a1a6;
+  --el-border-color: #e8e8ed;
+  --el-border-radius-base: 17px;
+  --el-font-family: "OPPOSans", "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+html,
+body,
+#app {
+  background: #f5f5f7;
+  color: #1d1d1f;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+.el-button--primary {
+  --el-button-bg-color: #0a84ff;
+  --el-button-border-color: #0a84ff;
+  --el-button-hover-bg-color: #0071e3;
+  --el-button-hover-border-color: #0071e3;
+}
+
+.el-card,
+.base-card,
+.table-card {
+  border-radius: 16px;
+  border-color: #e8e8ed;
+  box-shadow: none;
+}

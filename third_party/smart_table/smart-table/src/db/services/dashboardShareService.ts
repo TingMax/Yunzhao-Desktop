@@ -1,0 +1,536 @@
+import { db } from "../schema";
+import type { DashboardShare, Dashboard } from "../schema";
+import { apiClient } from "@/api/client";
+import { t } from "@/i18n";
+
+export interface CreateShareData {
+  dashboardId: string;
+  expiresInHours?: number;
+  maxAccessCount?: number;
+  requireAccessCode?: boolean;
+  permission?: "view" | "edit";
+  title?: string;
+  description?: string;
+}
+
+export interface ShareValidationResult {
+  valid: boolean;
+  share?: DashboardShare;
+  dashboard?: {
+    widgets: unknown[];
+    layoutType: string;
+    gridColumns: number;
+  };
+  tables?: any[];
+  error?: string;
+}
+
+export class DashboardShareService {
+  /**
+   * 生成访问密码
+   */
+  private generateAccessCode(): string {
+    const digits = "0123456789";
+    let code = "";
+    for (let i = 0; i < 6; i++) {
+      code += digits.charAt(Math.floor(Math.random() * digits.length));
+    }
+    return code;
+  }
+
+  /**
+   * 创建分享链接 - 调用后端 API
+   */
+  async createShare(data: CreateShareData): Promise<DashboardShare> {
+    try {
+      console.log("[DashboardShare] Creating share:", data);
+
+      // 调用后端 API 创建分享
+      const response = await apiClient.post(
+        `/dashboards/${data.dashboardId}/shares`,
+        {
+          requireAccessCode: data.requireAccessCode,
+          expiresInHours: data.expiresInHours,
+          maxAccessCount: data.maxAccessCount,
+          permission: data.permission || "view",
+          title: data.title,
+          description: data.description,
+        },
+      ) as any;
+
+      console.log("[DashboardShare] API response:", response);
+
+      // apiClient.post() 已自动解包 {success, message, data} 格式，response 即为分享对象
+      let apiShare: any;
+      if (response && typeof response === 'object' && response.id) {
+        apiShare = response;
+      } else if (response?.data) {
+        apiShare = response.data;
+      } else {
+        apiShare = response;
+      }
+
+      console.log("[DashboardShare] Extracted share:", apiShare);
+
+      if (!apiShare || !apiShare.id) {
+        throw new Error("Invalid API response: missing share data");
+      }
+
+      // 转换为本地格式并保存到 IndexedDB
+      // 使用后端返回的 access_code（创建时返回一次）
+      const share: DashboardShare = {
+        id: apiShare.id,
+        dashboardId: apiShare.dashboard_id,
+        shareToken: apiShare.share_token,
+        title: apiShare.title,
+        description: apiShare.description,
+        accessCode: apiShare.access_code || (apiShare.has_access_code
+          ? this.generateAccessCode()
+          : undefined),
+        expiresAt: apiShare.expires_at ? apiShare.expires_at * 1000 : undefined,
+        maxAccessCount: apiShare.max_access_count,
+        currentAccessCount: apiShare.current_access_count,
+        isActive: apiShare.is_active,
+        permission: apiShare.permission as "view" | "edit",
+        createdAt: new Date(apiShare.created_at).getTime(),
+        createdBy: apiShare.created_by,
+      };
+
+      await db.dashboardShares.put(share);
+      return share;
+    } catch (error) {
+      console.error("[DashboardShare] createShare failed:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 通过分享令牌获取分享信息 - 调用后端 API（公开接口）
+   */
+  async getShareByToken(token: string): Promise<DashboardShare | undefined> {
+    try {
+      // 先尝试从本地获取
+      const localShare = await db.dashboardShares
+        .where("shareToken")
+        .equals(token)
+        .first();
+      if (localShare) {
+        return localShare;
+      }
+
+      // 本地没有，从后端获取（这个接口需要 accessCode）
+      // 由于是公开接口，我们只从本地读取
+      return undefined;
+    } catch (error) {
+      console.error("[DashboardShare] getShareByToken failed:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * 获取仪表盘的所有分享链接 - 调用后端 API
+   */
+  async getSharesByDashboard(dashboardId: string): Promise<DashboardShare[]> {
+    try {
+      console.log(
+        "[DashboardShare] Fetching shares from API for dashboard:",
+        dashboardId,
+      );
+
+      // 检查是否有 token
+      const token =
+        localStorage.getItem("access_token") ||
+        sessionStorage.getItem("access_token");
+      console.log(
+        "[DashboardShare] Current token:",
+        token ? "exists" : "missing",
+      );
+
+      // 调用后端 API 获取分享列表
+      // apiClient.get() 已自动解包 {success, message, data} 格式，直接返回 data 字段
+      const response = await apiClient.get(`/dashboards/${dashboardId}/shares`) as any;
+      console.log("[DashboardShare] API response:", response);
+
+      // response 已是分享数组，兼容可能的包装格式
+      const apiShares = Array.isArray(response) ? response : (response?.data || []);
+      console.log("[DashboardShare] Extracted shares:", apiShares);
+
+      if (!Array.isArray(apiShares)) {
+        console.warn(
+          "[DashboardShare] API response is not an array:",
+          apiShares,
+        );
+        return [];
+      }
+
+      // 转换为本地格式并保存
+      const shares: DashboardShare[] = await Promise.all(
+        apiShares.map(async (apiShare: any) => {
+          const share: DashboardShare = {
+            id: apiShare.id,
+            dashboardId: apiShare.dashboard_id,
+            shareToken: apiShare.share_token,
+            title: apiShare.title,
+            description: apiShare.description,
+            accessCode: apiShare.has_access_code
+              ? this.generateAccessCode()
+              : undefined,
+            expiresAt: apiShare.expires_at ? apiShare.expires_at * 1000 : undefined,
+            maxAccessCount: apiShare.max_access_count,
+            currentAccessCount: apiShare.current_access_count,
+            isActive: apiShare.is_active,
+            permission: apiShare.permission as "view" | "edit",
+            createdAt: new Date(apiShare.created_at).getTime(),
+            createdBy: apiShare.created_by,
+          };
+          await db.dashboardShares.put(share);
+          return share;
+        }),
+      );
+
+      console.log("[DashboardShare] Loaded", shares.length, "shares from API");
+      return shares;
+    } catch (error: any) {
+      console.error("[DashboardShare] getSharesByDashboard failed:", error);
+      console.error("[DashboardShare] Error details:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        headers: error.response?.headers,
+      });
+
+      // API 失败时从本地读取
+      console.warn("[DashboardShare] Falling back to local cache");
+      const shares = await db.dashboardShares
+        .where("dashboardId")
+        .equals(dashboardId)
+        .and((share) => share.isActive)
+        .sortBy("createdAt");
+      return shares;
+    }
+  }
+
+  /**
+   * 验证分享链接是否有效 - 调用后端 API（公开接口）
+   */
+  async validateShare(
+    token: string,
+    accessCode?: string,
+  ): Promise<ShareValidationResult> {
+    try {
+      console.log("[DashboardShare] Validating share:", token);
+
+      // 调用后端 API 验证
+      // skipAuthRedirect: 防止 401/403/429 时拦截器跳转登录页，分享接口的错误由组件自行处理
+      const response = await apiClient.post(`/shares/${token}/validate`, {
+        accessCode,
+      }, { skipAuthRedirect: true } as any) as any;
+
+      console.log("[DashboardShare] Full response:", response);
+
+      // 适配多种响应格式
+      // apiClient.post() 已自动解包 {success, message, data}，response 即为内部数据
+      let result: any;
+
+      // 情况 0: 需要访问密码（未提供密码但分享需要密码）
+      if (response?.requires_access_code && response?.share) {
+        const share = response.share;
+        const localShare: DashboardShare = {
+          id: share.id,
+          dashboardId: share.dashboard_id,
+          shareToken: share.share_token,
+          title: share.title,
+          description: share.description,
+          accessCode: "required", // 标记需要密码，让前端显示密码输入框
+          expiresAt: share.expires_at ? share.expires_at * 1000 : undefined,
+          maxAccessCount: share.max_access_count,
+          currentAccessCount: share.current_access_count,
+          isActive: share.is_active,
+          permission: share.permission as "view" | "edit",
+          createdAt: new Date(share.created_at).getTime(),
+          createdBy: share.created_by,
+        };
+        await db.dashboardShares.put(localShare);
+        return { valid: false, share: localShare };
+      }
+
+      // 情况 1: {share, dashboard} 直接在 response 中
+      if (response.share && response.dashboard) {
+        result = response;
+      }
+      // 情况 2: 嵌套在 data 中
+      else if (response.data?.share && response.data?.dashboard) {
+        result = response.data;
+      }
+      // 情况 3: 其他格式
+      else {
+        result = response;
+      }
+
+      console.log("[DashboardShare] Extracted result:", result);
+
+      if (!result) {
+        return {
+          valid: false,
+          error: t('dashboard.shareValidationNoResponse'),
+        };
+      }
+
+      if (result.share && result.dashboard) {
+        const { share, dashboard, tables } = result;
+
+        // 保存 share 到本地
+        const localShare: DashboardShare = {
+          id: share.id,
+          dashboardId: share.dashboard_id,
+          shareToken: share.share_token,
+          accessCode: accessCode,
+          expiresAt: share.expires_at ? share.expires_at * 1000 : undefined,
+          maxAccessCount: share.max_access_count,
+          currentAccessCount: share.current_access_count,
+          isActive: share.is_active,
+          permission: share.permission as "view" | "edit",
+          createdAt: new Date(share.created_at).getTime(),
+          createdBy: share.created_by,
+        };
+        await db.dashboardShares.put(localShare);
+
+        // 保存 dashboard 到本地
+        const localDashboard: Dashboard = {
+          id: dashboard.id,
+          baseId: dashboard.base_id,
+          name: dashboard.name,
+          description: dashboard.description,
+          widgets: (dashboard.widgets as any[]) || [],
+          layout: dashboard.layout || {},
+          layoutType:
+            ((dashboard.layout as any)?.type as "grid" | "free") || "grid",
+          gridColumns: (dashboard.layout as any)?.config?.gridColumns || 12,
+          refreshConfig: {
+            enabled: false,
+            interval: 30000,
+            autoRefresh: false,
+          },
+          isStarred: false,
+          order: 0,
+          createdAt: new Date(dashboard.created_at).getTime(),
+          updatedAt: new Date(dashboard.updated_at).getTime(),
+        };
+        await db.dashboards.put(localDashboard);
+
+        // 保存表数据到本地（如果后端返回了 tables）
+        if (tables && Array.isArray(tables)) {
+          console.log(
+            "[DashboardShare] Saving",
+            tables.length,
+            "tables to local cache",
+          );
+          for (const table of tables) {
+            // 保存表信息到 tableEntities 表
+            await db.tableEntities.put({
+              id: table.id,
+              baseId: table.base_id,
+              name: table.name,
+              description: table.description,
+              order: table.order || 0,
+              primaryFieldId: table.primary_field_id,
+              recordCount: 0,
+              isStarred: false,
+              createdAt: new Date(table.created_at).getTime(),
+              updatedAt: new Date(table.updated_at).getTime(),
+            });
+            console.log(
+              `  [DashboardShare] 保存表：${table.name} (${table.id})`,
+            );
+
+            // 保存字段信息
+            if (table.fields && Array.isArray(table.fields)) {
+              console.log(`    保存 ${table.fields.length} 个字段`);
+              for (const field of table.fields) {
+                await db.fields.put({
+                  id: field.id,
+                  tableId: field.table_id,
+                  name: field.name,
+                  type: field.type,
+                  description: field.description,
+                  order: field.order || 0,
+                  isPrimary: field.is_primary || false,
+                  isSystem: false,
+                  isRequired: field.is_required || false,
+                  isVisible: true,
+                  options: field.options || null,
+                  config: field.config || null,
+                  createdAt: new Date(field.created_at).getTime(),
+                  updatedAt: new Date(field.updated_at).getTime(),
+                });
+              }
+            }
+
+            // 保存记录信息
+            if (table.records && Array.isArray(table.records)) {
+              console.log(
+                `  Table ${table.name}: saving ${table.records.length} records`,
+              );
+              for (const record of table.records) {
+                await db.records.put({
+                  id: record.id,
+                  tableId: record.table_id,
+                  values: record.values || {},
+                  createdAt: new Date(record.created_at).getTime(),
+                  updatedAt: new Date(record.updated_at).getTime(),
+                });
+              }
+            }
+          }
+
+          // 验证数据是否真的被保存了
+          const savedTables = await db.tableEntities.toArray();
+          const savedFields = await db.fields.toArray();
+          const savedRecords = await db.records.toArray();
+          console.log(
+            `[DashboardShare] 验证保存结果：${savedTables.length} 个表，${savedFields.length} 个字段，${savedRecords.length} 条记录`,
+          );
+        }
+
+        return {
+          valid: true,
+          share: localShare,
+          dashboard: {
+            widgets: localDashboard.widgets || [],
+            layoutType: localDashboard.layoutType || 'grid',
+            gridColumns: localDashboard.gridColumns || 12,
+          },
+          tables: tables || [], // 返回表数据
+        };
+      } else {
+        console.warn(
+          "[DashboardShare] Invalid result format, expected share and dashboard:",
+          result,
+        );
+        return {
+          valid: false,
+          error: t('dashboard.shareValidationDataFormat'),
+        };
+      }
+    } catch (error: any) {
+      console.error("[DashboardShare] validateShare failed:", error);
+      // 优先使用后端返回的错误码，其次使用消息
+      const errorCode = error.response?.data?.error;
+      const errorMsg =
+        error.response?.data?.message || error.message || t('dashboard.shareValidationFailed');
+      return {
+        valid: false,
+        error: errorCode || errorMsg,
+      };
+    }
+  }
+
+  /**
+   * 记录访问 - 调用后端 API
+   */
+  async recordAccess(shareId: string): Promise<void> {
+    try {
+      // 后端在验证时自动记录，这里只需要更新本地
+      const share = await db.dashboardShares.get(shareId);
+      if (!share) return;
+
+      await db.dashboardShares.update(shareId, {
+        currentAccessCount: share.currentAccessCount + 1,
+        lastAccessedAt: Date.now(),
+      });
+    } catch (error) {
+      console.error("[DashboardShare] recordAccess failed:", error);
+    }
+  }
+
+  /**
+   * 禁用分享链接 - 调用后端 API
+   */
+  async deactivateShare(shareId: string): Promise<void> {
+    try {
+      // 调用后端 API 禁用
+      await apiClient.post(`/shares/${shareId}/deactivate`);
+
+      // 更新本地
+      await db.dashboardShares.update(shareId, {
+        isActive: false,
+      });
+    } catch (error) {
+      console.error("[DashboardShare] deactivateShare failed:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 删除分享链接 - 调用后端 API
+   */
+  async deleteShare(shareId: string): Promise<void> {
+    try {
+      // 调用后端 API 删除
+      await apiClient.delete(`/dashboard-shares/${shareId}`);
+
+      // 从本地删除
+      await db.dashboardShares.delete(shareId);
+    } catch (error) {
+      console.error("[DashboardShare] deleteShare failed:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 清理过期的分享链接
+   */
+  async cleanupExpiredShares(): Promise<number> {
+    const now = Date.now();
+    const expiredShares = await db.dashboardShares
+      .where("expiresAt")
+      .below(now)
+      .and((share) => share.isActive)
+      .toArray();
+
+    for (const share of expiredShares) {
+      await db.dashboardShares.update(share.id, { isActive: false });
+    }
+
+    return expiredShares.length;
+  }
+
+  /**
+   * 生成分享链接 URL
+   */
+  generateShareUrl(token: string): string {
+    const baseUrl = window.location.origin;
+    return `${baseUrl}/#/share/dashboard/${token}`;
+  }
+
+  /**
+   * 复制链接到剪贴板
+   */
+  async copyToClipboard(text: string): Promise<boolean> {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+
+      // 降级方案
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      const result = document.execCommand("copy");
+      document.body.removeChild(textArea);
+      return result;
+    } catch (error) {
+      console.error("复制失败:", error);
+      return false;
+    }
+  }
+}
+
+export const dashboardShareService = new DashboardShareService();

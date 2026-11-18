@@ -1,0 +1,181 @@
+"""
+Record（记录）模块测试
+"""
+import pytest
+
+
+class TestRecord:
+    """Record功能测试类"""
+    
+    def test_create_record(self, client, auth_headers, test_table, test_field):
+        """测试创建记录"""
+        response = client.post(f'/api/records/tables/{test_table.id}/records',
+            json={
+                'values': {
+                    str(test_field.id): '测试数据'
+                }
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data['code'] == 201
+        assert str(test_field.id) in data['data']['values']
+    
+    def test_get_records_list(self, client, auth_headers, test_table, test_record):
+        """测试获取记录列表"""
+        response = client.get(f'/api/records/tables/{test_table.id}/records',
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['code'] == 200
+        assert 'items' in data['data']
+    
+    def test_get_records_pagination(self, client, auth_headers, test_table, test_record):
+        """测试记录分页"""
+        response = client.get(f'/api/records/tables/{test_table.id}/records?page=1&per_page=10',
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['code'] == 200
+        assert 'total' in data['data']
+        assert 'page' in data['data']
+    
+    def test_get_record_detail(self, client, auth_headers, test_record):
+        """测试获取记录详情"""
+        response = client.get(f'/api/records/records/{test_record.id}',
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['code'] == 200
+        assert data['data']['id'] == str(test_record.id)
+    
+    def test_update_record(self, client, auth_headers, test_record, test_field):
+        """测试更新记录"""
+        response = client.put(f'/api/records/records/{test_record.id}',
+            json={
+                'values': {
+                    str(test_field.id): '更新后的数据'
+                }
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['code'] == 200
+    
+    def test_delete_record(self, client, auth_headers, test_record):
+        """测试删除记录"""
+        response = client.delete(f'/api/records/records/{test_record.id}',
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['code'] == 200
+    
+    def test_batch_create_records(self, client, auth_headers, test_table, test_field):
+        """测试批量创建记录"""
+        response = client.post(f'/api/records/tables/{test_table.id}/records/batch',
+            json={
+                'records': [
+                    {'values': {str(test_field.id): '数据1'}},
+                    {'values': {str(test_field.id): '数据2'}}
+                ]
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code in [200, 201]
+        data = response.get_json()
+        assert 'created_count' in data['data']
+    
+    def test_batch_update_records(self, client, auth_headers, test_table, test_record, test_field):
+        """测试批量更新记录"""
+        response = client.put('/api/records/records/batch',
+            json={
+                'record_ids': [str(test_record.id)],
+                'values': {
+                    str(test_field.id): '批量更新数据'
+                }
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.get_json()
+        assert 'updated_count' in data['data']
+    
+    def test_batch_delete_records(self, client, auth_headers, test_record):
+        """测试批量删除记录"""
+        response = client.delete('/api/records/records/batch',
+            json={
+                'record_ids': [str(test_record.id)]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert 'deleted_count' in data['data']
+
+    def test_delete_record_keeps_history_audit(self, app, client, auth_headers,
+                                                test_record, test_field):
+        """删除记录后，其历史日志（含 DELETE 审计记录）必须保留
+
+        回归测试：record_history.record_id 曾带 ondelete='CASCADE' 外键，
+        PostgreSQL 会级联删除历史日志导致审计信息丢失
+        （SQLite 默认不强制外键，不受影响）。
+        """
+        from sqlalchemy import inspect
+
+        from app.extensions import db
+        from app.models.record_history import RecordHistory
+
+        # 表结构层面：record_history 不得存在指向 records 的外键
+        fks = inspect(db.engine).get_foreign_keys('record_history')
+        assert all(fk['referred_table'] != 'records' for fk in fks)
+
+        record_id = str(test_record.id)
+
+        # 产生一条 UPDATE 历史
+        response = client.put(f'/api/records/{record_id}',
+            json={
+                'values': {
+                    str(test_field.id): '更新后的值'
+                }
+            },
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+
+        # 删除记录（服务端会先写入 DELETE 历史再删除记录）
+        response = client.delete(f'/api/records/{record_id}',
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+
+        # 记录已删除，但 CREATE/UPDATE/DELETE 历史日志必须完整保留
+        actions = {h.action for h in
+                   RecordHistory.query.filter_by(record_id=record_id).all()}
+        assert 'UPDATE' in actions
+        assert 'DELETE' in actions
+
+    
+    def test_search_records(self, client, auth_headers, test_table, test_record):
+        """测试搜索记录"""
+        response = client.get(f'/api/records/tables/{test_table.id}/records?search=测试',
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['code'] == 200

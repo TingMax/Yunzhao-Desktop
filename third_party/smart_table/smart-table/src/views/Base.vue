@@ -1,0 +1,3763 @@
+<script setup lang="ts">
+import { ref, reactive, onMounted, onUnmounted, watch, computed, shallowRef } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
+import { useBaseStore } from "@/stores";
+import { useViewStore } from "@/stores/viewStore";
+import { useTableStore } from "@/stores/tableStore";
+import { useMemberStore } from "@/stores/memberStore";
+import { useTableShareStore } from "@/stores/tableShareStore";
+import { useAuthStore } from "@/stores/authStore";
+import {
+  Setting,
+  Share,
+  Upload,
+  Document,
+  Plus,
+  Search,
+  Clock,
+  Folder,
+  FolderAdd,
+  Refresh,
+} from "@element-plus/icons-vue";
+import GroupedTableView from "@/components/groups/GroupedTableView.vue";
+import { TableView, VTableView } from "@/components/views/TableView";
+import KanbanView from "@/components/views/KanbanView/KanbanView.vue";
+import CalendarView from "@/components/views/CalendarView/CalendarView.vue";
+import GanttView from "@/components/views/GanttView/GanttView.vue";
+import GalleryView from "@/components/views/GalleryView/GalleryView.vue";
+import FormView from "@/components/views/FormView/FormView.vue";
+import FormViewConfig from "@/components/views/FormView/FormViewConfig.vue";
+import FormShareDialog from "@/components/views/FormView/FormShareDialog.vue";
+import ViewSwitcher from "@/components/views/ViewSwitcher.vue";
+import Loading from "@/components/common/Loading.vue";
+import FieldDialog from "@/components/dialogs/FieldDialog.vue";
+import FilterDialog from "@/components/dialogs/FilterDialog.vue";
+import SortDialog from "@/components/dialogs/SortDialog.vue";
+import GroupDialog from "@/components/dialogs/GroupDialog.vue";
+import ExportDialog from "@/components/dialogs/ExportDialog.vue";
+import ParentFieldConfig from "@/components/views/TableView/ParentFieldConfig.vue";
+import { formatDateTime, initDayjsPlugins } from "@/utils/timezone";
+import RecordDetailDrawer from "@/components/dialogs/RecordDetailDrawer.vue";
+import AddRecordDrawer from "@/components/dialogs/AddRecordDrawer.vue";
+import ImportDialog from "@/components/dialogs/ImportDialog.vue";
+import ExcelImportCreateDialog from "@/components/dialogs/ExcelImportCreateDialog.vue";
+import MemberManagementDialog from "@/components/dialogs/MemberManagementDialog.vue";
+import BaseShareDialog from "@/components/dialogs/BaseShareDialog.vue";
+import TableShareDialog from "@/components/dialogs/TableShareDialog.vue";
+import { ViewType } from "@/types";
+import { FieldType } from "@/types/fields";
+import { linkApiService } from "@/services/api/linkApiService";
+import type { FormInstance, FormRules } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
+import type { FilterCondition, SortConfig } from "@/types/filters";
+import type { CellValue } from "@/types";
+import type { FieldEntity, RecordEntity, TableEntity, Dashboard } from "@/db/schema";
+import { applyFilters, applySorts } from "@/utils";
+import Sortable from "sortablejs";
+import { dashboardService } from "@/db/services/dashboardService";
+import { tableService } from "@/db/services/tableService";
+import BaseSidebar from "@/components/common/BaseSidebar.vue";
+import DashboardView from "@/views/Dashboard.vue";
+import { useEntityOperations } from "@/composables/useEntityOperations";
+import { useRealtimeCollaboration } from "@/composables/useRealtimeCollaboration";
+import { useUserCacheStore } from "@/stores/userCacheStore";
+import CollaborationToast from "@/components/collaboration/CollaborationToast.vue";
+import ConflictDialog from "@/components/collaboration/ConflictDialog.vue";
+import TableHistoryDialog from "@/components/dialogs/TableHistoryDialog.vue";
+import { useCollaborationStore } from "@/stores/collaborationStore";
+import { useDocumentStore } from "@/stores/documentStore";
+import { DocumentEditor } from "@/components/documents";
+// 插件体系：工具栏扩展点宿主
+import PluginToolbar from "@/components/plugins/PluginToolbar.vue";
+import PluginBaseMenu from "@/components/plugins/PluginBaseMenu.vue";
+import { setSelection } from "@/plugins/registry";
+import { registerSelectionProvider } from "@/plugins/selection";
+import type { SelectionSummary } from "@/plugins/types";
+
+const route = useRoute();
+const router = useRouter();
+const baseStore = useBaseStore();
+const viewStore = useViewStore();
+const tableStore = useTableStore();
+const memberStore = useMemberStore();
+const tableShareStore = useTableShareStore();
+const authStore = useAuthStore();
+const collaborationStore = useCollaborationStore();
+const userCacheStore = useUserCacheStore();
+const documentStore = useDocumentStore();
+
+const { t } = useI18n();
+
+// VTableView 组件引用（用于调用搜索功能 / 读取勾选状态）
+const vtableViewRef = shallowRef<{
+  openSearch: () => void;
+  getSelection?: () => SelectionSummary | null;
+} | null>(null);
+
+// 插件体系：把 VTable 的勾选状态暴露给插件（惰性读取 ref，切换表格/卸载后自动降级为 null）
+registerSelectionProvider({
+  getSelection: () => vtableViewRef.value?.getSelection?.() ?? null,
+});
+// DocumentEditor 组件引用（用于检查未保存更改）
+const documentEditorRef = ref<{ hasUnsavedChanges: () => boolean; save: () => Promise<void> } | null>(null);
+
+const baseId = route.params.id as string;
+// 初始化实时协同编辑连接（内部通过 onUnmounted 自动断开）
+if (baseId) {
+  useRealtimeCollaboration(baseId)
+}
+
+// 初始化实体操作
+const {
+  renameTable,
+  deleteTable,
+  toggleStarTable,
+  renameDashboard,
+  deleteDashboard,
+  toggleStarDashboard,
+} = useEntityOperations();
+
+const isLoading = computed(
+  () => baseStore.loading || viewStore.loading || tableStore.loading || documentStore.loading,
+);
+const currentTableId = computed(() => tableStore.currentTable?.id || "");
+const currentDocumentId = computed(() => documentStore.currentDocumentId);
+const isDocumentView = computed(() => route.path.includes('/documents/'));
+const isDashboardView = computed(() => route.path.includes('/dashboard/'));
+
+// 权限控制计算属性
+const canEdit = computed(() => memberStore.canEdit);
+const canManage = computed(() => memberStore.canManage);
+// 数据表分享受限模式（非 Base 成员通过表分享链接访问）
+const isTableShareRestricted = computed(() => memberStore.isTableShareRestricted);
+// 使用 tableStore.fields 计算可见字段，确保状态同步
+const visibleFields = computed(() => {
+  const fields = tableStore.fields;
+  // 首先过滤掉 isVisible 为 false 的字段（全局隐藏）
+  let result = fields.filter((field) => (field as any).isVisible !== false);
+  // 再根据当前视图的 hiddenFields 进行过滤（视图级隐藏）
+  if (viewStore.currentView) {
+    result = result.filter(
+      (field) => !viewStore.currentView!.hiddenFields.includes(field.id),
+    );
+  }
+  return result;
+});
+
+// 创建数据表对话框显示状态
+const createTableDialogVisible = ref(false);
+
+// VTable 临时测试开关
+const useVTable = ref(true);
+
+// 数据表管理对话框显示状态
+const showTableManager = ref(false);
+
+// 创建仪表盘对话框显示状态
+const createDashboardDialogVisible = ref(false);
+
+// 创建文档对话框显示状态
+const createDocumentDialogVisible = ref(false);
+
+// 仪表盘加载状态
+const dashboardLoading = ref(false);
+
+// 成员管理对话框显示状态
+const showMemberManagement = ref(false);
+
+// Base 分享对话框显示状态
+const showBaseShare = ref(false);
+
+// 数据表分享对话框显示状态
+const showTableShare = ref(false);
+
+// 创建仪表盘表单数据
+const createDashboardForm = reactive({
+  name: "",
+  description: "",
+});
+
+// 创建文档表单数据
+const createDocumentForm = reactive({
+  name: "",
+});
+
+// 仪表盘表单引用
+const createDashboardFormRef = ref<FormInstance>();
+
+// 创建文档表单引用
+const createDocumentFormRef = ref<FormInstance>();
+
+// 仪表盘表单验证规则
+const createDashboardFormRules: FormRules = {
+  name: [
+    { required: true, message: t('view.base.enterDashboardName'), trigger: "blur" },
+    { min: 1, max: 50, message: t('view.base.nameLength'), trigger: "blur" },
+  ],
+};
+
+// 创建文档表单验证规则
+const createDocumentFormRules: FormRules = {
+  name: [
+    { required: true, message: t('view.base.enterDocName'), trigger: "blur" },
+    { min: 1, max: 50, message: t('view.base.nameLength'), trigger: "blur" },
+  ],
+};
+
+// 重命名仪表盘对话框显示状态
+const renameDashboardDialogVisible = ref(false);
+
+// 重命名仪表盘表单数据
+const renameDashboardForm = reactive({
+  id: "",
+  name: "",
+  description: "",
+});
+
+// 重命名仪表盘表单引用
+const renameDashboardFormRef = ref<FormInstance>();
+
+// 重命名仪表盘表单验证规则
+const renameDashboardFormRules: FormRules = {
+  name: [
+    { required: true, message: t('view.base.enterDashboardName'), trigger: "blur" },
+    { min: 1, max: 50, message: t('view.base.nameLength'), trigger: "blur" },
+  ],
+};
+
+// 创建数据表表单数据
+const createTableForm = reactive({
+  name: "",
+  description: "",
+});
+
+// 表单引用
+const createTableFormRef = ref<FormInstance>();
+
+// 表单验证规则
+const createTableFormRules: FormRules = {
+  name: [
+    { required: true, message: t('view.base.enterTableName'), trigger: "blur" },
+    { min: 1, max: 50, message: t('view.base.nameLength'), trigger: "blur" },
+  ],
+};
+
+// 对话框显示状态
+const fieldDialogVisible = ref(false);
+const filterDialogVisible = ref(false);
+const sortDialogVisible = ref(false);
+const groupDialogVisible = ref(false);
+const exportDialogVisible = ref(false);
+const renameTableDialogVisible = ref(false);
+const recordDialogVisible = ref(false);
+const addRecordDialogVisible = ref(false);
+const formConfigDialogVisible = ref(false);
+const formShareDialogVisible = ref(false);
+const importDialogVisible = ref(false);
+const excelImportCreateDialogVisible = ref(false);
+
+// 表格历史变更弹窗显示状态
+const showTableHistory = ref(false);
+
+// 表单配置
+interface FormConfig {
+  title: string;
+  description: string;
+  submitButtonText: string;
+  visibleFieldIds: string[];
+  successMessage: string;
+  allowMultipleSubmit: boolean;
+  /** 每行显示的字段数量（1-4），用于一行显示多个字段 */
+  columns?: number;
+}
+
+const formConfig = ref<FormConfig>({
+  title: t('view.base.formTitleDefault'),
+  description: "",
+  submitButtonText: t('view.base.formSubmitDefault'),
+  visibleFieldIds: [] as string[],
+  successMessage: t('view.base.formSuccessDefault'),
+  allowMultipleSubmit: true,
+  columns: 1,
+});
+
+// 当前编辑的记录
+const editingRecord = ref<any>(null);
+
+// 当前编辑的字段ID（用于字段管理对话框）
+const editingFieldId = ref<string | null>(null);
+
+// Drawer 抽屉大小（响应式）
+const drawerSize = computed(() => {
+  const width = window.innerWidth;
+  if (width < 768) return "100%";
+  if (width < 1024) return "70%";
+  if (width < 1440) return "50%";
+  return "600px";
+});
+
+// 添加记录的初始值（用于日历视图等预填充数据）
+const addRecordInitialValues = ref<Record<string, unknown>>({});
+
+// 添加记录的分组信息（用于看板视图）
+const addRecordGroupInfo = ref<{
+  groupFieldId?: string;
+  groupId?: string;
+  groupName?: string;
+  groupLevels?: Array<{
+    fieldId: string;
+    fieldName: string;
+    value: string;
+    valueId?: string;
+  }>;
+}>({});
+
+// 重命名表单
+const renameTableForm = reactive({
+  id: "",
+  name: "",
+  description: "",
+});
+const renameTableFormRef = ref<FormInstance>();
+const renameTableFormRules: FormRules = {
+  name: [
+    { required: true, message: t('view.base.enterTableName'), trigger: "blur" },
+    { min: 1, max: 50, message: t('view.base.nameLength'), trigger: "blur" },
+  ],
+};
+
+// 筛选和排序状态
+// 从 viewStore 获取当前筛选和排序配置
+const activeFilters = computed(() => viewStore.currentFilters as FilterCondition[]);
+const filterConjunction = ref<"and" | "or">("and");
+
+// 从 viewStore 获取当前排序配置
+const activeSorts = computed(() => viewStore.currentSorts);
+
+// 侧边栏引用
+const sidebarRef = ref<InstanceType<typeof BaseSidebar> | null>(null);
+
+// 过滤和排序后的记录
+// F5 优化：无 filter + 无 sort 时直接返回原引用，避免每次 records 变化都 O(N) 拷贝
+const filteredRecords = computed(() => {
+  const hasFilter = activeFilters.value.length > 0;
+  const hasSort = activeSorts.value.length > 0;
+
+  if (!hasFilter && !hasSort) {
+    return tableStore.records;
+  }
+
+  let records: any[] = tableStore.records;
+
+  if (hasFilter) {
+    records = applyFilters(
+      records,
+      activeFilters.value,
+      tableStore.fields,
+      filterConjunction.value,
+    );
+  }
+
+  if (hasSort) {
+    records = applySorts(records, activeSorts.value, tableStore.fields);
+  }
+
+  return records;
+});
+
+// 当前视图类型
+const currentViewType = computed(() => {
+  return viewStore.currentView?.type || ViewType.TABLE;
+});
+
+// 是否为表格视图
+const isTableView = computed(() => currentViewType.value === ViewType.TABLE);
+
+// 是否为看板视图
+const isKanbanView = computed(() => currentViewType.value === ViewType.KANBAN);
+
+// 是否为日历视图
+const isCalendarView = computed(
+  () => currentViewType.value === ViewType.CALENDAR,
+);
+
+// 是否为画册视图
+const isGalleryView = computed(
+  () => currentViewType.value === ViewType.GALLERY,
+);
+
+// 是否为甘特视图
+const isGanttView = computed(() => currentViewType.value === ViewType.GANTT);
+
+// 是否为表单视图
+const isFormView = computed(() => currentViewType.value === ViewType.FORM);
+
+// 当前分组配置
+const currentGroupBys = computed(() => viewStore.currentGroupBys);
+
+// 当前视图的父记录字段 ID
+const currentParentFieldId = computed(() => viewStore.currentView?.parentFieldId || null);
+
+// 是否存在自关联字段（关联字段且目标表为当前表），存在时才有树形层级能力
+const hasSelfLinkField = computed(() => {
+  const tableId = tableStore.currentTable?.id;
+  if (!tableId) return false;
+  return tableStore.fields.some((field: any) => {
+    if (field.type !== FieldType.LINK) return false;
+    const targetTableId =
+      field.options?.linkedTableId ||
+      field.options?.linked_table_id ||
+      field.config?.linkedTableId ||
+      field.config?.linked_table_id ||
+      '';
+    return !!targetTableId && String(targetTableId) === String(tableId);
+  });
+});
+
+// 是否有分组配置
+const hasGroupConfig = computed(() => currentGroupBys.value.length > 0);
+
+// 打开分组对话框
+function openGroupDialog() {
+  groupDialogVisible.value = true;
+}
+
+// 处理分组配置应用
+async function handleGroupApply(newGroupBy: string[]) {
+  if (viewStore.currentView) {
+    await viewStore.updateGroupBys(viewStore.currentView.id, newGroupBy);
+    ElMessage.success(t('view.base.groupApplied'));
+  }
+}
+
+// 处理分组配置清除
+async function handleGroupClear() {
+  if (viewStore.currentView) {
+    await viewStore.updateGroupBys(viewStore.currentView.id, []);
+    ElMessage.success(t('view.base.groupCleared'));
+  }
+}
+
+// 表格列表引用（用于拖拽排序）
+const tableListRef = ref<HTMLElement | null>(null);
+let sortableInstance: Sortable | null = null;
+let isInitializing = false; // 防止初始化期间重复请求
+
+// 数据表分享受限模式处理：
+// 解析 localStorage 中的 table_share_permission_{baseId}，登录态下调用 join：
+// - restricted=true：记录 shareRole 进入受限模式（保留 localStorage 供刷新后重新 join）
+// - restricted=false：已是 Base 正式成员，清除标记按正常模式加载
+// - join 失败（token 失效等）：清除标记正常加载，后续数据 403 自然兜底
+// 返回被分享的表 ID（供加载表格后自动选中）
+async function resolveTableShareAccess(currentBaseId: string): Promise<string | null> {
+  const raw = localStorage.getItem(`table_share_permission_${currentBaseId}`);
+  if (!raw) {
+    // 常规进入 Base（无表分享标记）：清理可能残留的受限状态（切换 Base / 切换账号场景）
+    memberStore.setShareRole(null);
+    return null;
+  }
+
+  let shareToken: string | null = null;
+  let sharedTableId: string | null = null;
+  try {
+    const info = JSON.parse(raw);
+    if (info && typeof info.share_token === "string") {
+      shareToken = info.share_token;
+    }
+    if (info && typeof info.table_id === "string") {
+      sharedTableId = info.table_id;
+    }
+  } catch {
+    localStorage.removeItem(`table_share_permission_${currentBaseId}`);
+    return null;
+  }
+
+  if (!shareToken) {
+    localStorage.removeItem(`table_share_permission_${currentBaseId}`);
+    return null;
+  }
+
+  // join 需登录；未登录时由路由守卫跳转登录页，登录回来后再处理
+  if (!authStore.isAuthenticated) return sharedTableId;
+
+  try {
+    const result = await tableShareStore.joinShare(shareToken);
+    if (result.restricted) {
+      memberStore.setShareRole(result.role);
+    } else {
+      localStorage.removeItem(`table_share_permission_${currentBaseId}`);
+      memberStore.setShareRole(null);
+    }
+  } catch (e) {
+    localStorage.removeItem(`table_share_permission_${currentBaseId}`);
+    memberStore.setShareRole(null);
+    console.warn("[Base] table share join failed:", e);
+  }
+  return sharedTableId;
+}
+
+onMounted(async () => {
+  initDayjsPlugins();
+  const currentBaseId = route.params.id as string;
+  if (currentBaseId) {
+    isInitializing = true;
+    try {
+      // 先处理表分享 join（仅登录态），再走原有 Base 分享/fetchBase 流程
+      const sharedTableId = await resolveTableShareAccess(currentBaseId);
+
+      if (isTableShareRestricted.value) {
+        // 表分享受限用户（非 Base 成员）：Base 详情/成员/文件夹接口必然 403，
+        // 直接跳过这些调用，避免全局拦截器弹出无意义的权限错误提示
+        await tableStore.loadTables(currentBaseId);
+      } else {
+        const shareInfo = localStorage.getItem(`share_permission_${currentBaseId}`);
+        try {
+          if (shareInfo) {
+            try {
+              const info = JSON.parse(shareInfo);
+              if (info && info.share_token && typeof info.share_token === "string") {
+                await baseStore.fetchBase(currentBaseId, info.share_token);
+              } else {
+                localStorage.removeItem(`share_permission_${currentBaseId}`);
+                await baseStore.fetchBase(currentBaseId);
+              }
+            } catch (e) {
+              localStorage.removeItem(`share_permission_${currentBaseId}`);
+              await baseStore.fetchBase(currentBaseId);
+            }
+          } else {
+            await baseStore.fetchBase(currentBaseId);
+          }
+        } catch (e) {
+          // Base 详情加载失败不阻塞后续表格/视图加载，页面头部信息按缺失处理
+          console.warn("[Base] fetchBase failed:", e);
+        }
+        try {
+          const members = await memberStore.fetchMembers(currentBaseId);
+          // 将成员信息缓存到 userCacheStore
+          // 注意：BaseMember 中的用户信息在 user 对象中
+          if (members && members.length > 0) {
+            userCacheStore.cacheUsers(
+              members.map(m => ({
+                id: m.user_id,
+                name: (m.user as any)?.name || (m.user as any)?.email || '',
+                email: (m.user as any)?.email || '',
+                avatar: (m.user as any)?.avatar,
+                role: m.role,
+              }))
+            );
+          }
+        } catch (e) {
+          // 成员列表加载失败不阻塞，忽略
+          console.warn("[Base] fetchMembers failed:", e);
+        }
+
+        // 加载表格和文档列表
+        await tableStore.loadTables(currentBaseId);
+        await tableStore.loadFolders(currentBaseId);
+        await documentStore.fetchDocuments(currentBaseId);
+      }
+
+      // 初始加载：直接检查路由参数并加载对应内容
+      const targetDocId = route.params.docId as string | undefined;
+      const targetTableId = route.params.tableId as string | undefined;
+
+      if (targetDocId) {
+        // 如果在文档路由，直接加载文档详情
+        try {
+          await documentStore.fetchDocumentDetail(targetDocId);
+        } catch (error) {
+          ElMessage.error(t('view.base.docLoadFailed'));
+          console.error('Failed to load document:', error);
+        }
+      } else if (targetTableId) {
+        // 如果在表格路由，选择表格
+        const targetTable = tableStore.tables.find(t => t.id === targetTableId);
+        if (targetTable) {
+          await handleTableSelect(targetTable.id);
+        } else if (tableStore.tables.length > 0 && !tableStore.currentTable) {
+          // 回退到第一个表格
+          await loadTableView(tableStore.tables[0].id);
+        }
+      } else if (
+        sharedTableId &&
+        tableStore.tables.some(t => t.id === sharedTableId)
+      ) {
+        // 受限模式：自动选中被分享的表
+        await handleTableSelect(sharedTableId);
+      } else if (tableStore.tables.length > 0 && !tableStore.currentTable) {
+        // 默认选择第一个表格
+        await loadTableView(tableStore.tables[0].id);
+      }
+      
+      // 初始化拖拽排序
+      initSortable();
+    } finally {
+      isInitializing = false;
+    }
+  }
+
+  tableStore.setupRealtimeListeners();
+  viewStore.setupRealtimeListeners();
+
+  // 监听来自 AppHeader 的分享和成员按钮点击事件
+  window.addEventListener("open-base-share", handleOpenBaseShare);
+  window.addEventListener("open-member-management", handleOpenMemberManagement);
+});
+
+onUnmounted(() => {
+  tableStore.cleanupRealtimeListeners();
+  viewStore.cleanupRealtimeListeners();
+  window.removeEventListener("open-base-share", handleOpenBaseShare);
+  window.removeEventListener(
+    "open-member-management",
+    handleOpenMemberManagement,
+  );
+});
+
+// 处理打开分享对话框
+const handleOpenBaseShare = () => {
+  if (canManage.value) {
+    showBaseShare.value = true;
+  }
+};
+
+// 处理打开数据表分享对话框（ViewSwitcher 分享按钮，按钮自身已按 canManage 显隐）
+const handleOpenTableShare = () => {
+  if (canManage.value && tableStore.currentTable) {
+    showTableShare.value = true;
+  }
+};
+
+// 处理打开成员管理对话框
+const handleOpenMemberManagement = () => {
+  if (canManage.value) {
+    showMemberManagement.value = true;
+  }
+};
+
+// 监听路由变化
+// 监听 baseId 变化
+watch(
+  () => route.params.id,
+  async (newId, oldId) => {
+    if (isInitializing || !newId || newId === oldId) {
+      return;
+    }
+    try {
+      await baseStore.fetchBase(newId as string);
+      await tableStore.loadTables(newId as string);
+      await tableStore.loadFolders(newId as string);
+      await documentStore.fetchDocuments(newId as string);
+    } catch (error) {
+      ElMessage.error(t('view.base.loadDataFailed'));
+      console.error('Failed to load data:', error);
+    }
+  },
+);
+
+// 监听 docId 变化
+watch(
+  () => route.params.docId,
+  async (newDocId, oldDocId) => {
+    if (isInitializing || !newDocId || newDocId === oldDocId) {
+      return;
+    }
+    try {
+      await documentStore.fetchDocumentDetail(newDocId as string);
+    } catch (error) {
+      ElMessage.error(t('view.base.docLoadFailed'));
+      console.error('Failed to load document:', error);
+    }
+  },
+);
+
+// 监听 dashboardId 变化
+watch(
+  () => route.params.dashboardId,
+  async (newDashboardId, oldDashboardId) => {
+    if (isInitializing || !newDashboardId || newDashboardId === oldDashboardId) {
+      return;
+    }
+    // 给 DashboardView 一点时间加载完成，然后清除 loading
+    try {
+      // 暂时先延时清除 loading，后续可以用 emit 或其他方式更精确
+      setTimeout(() => {
+        dashboardLoading.value = false;
+      }, 1000);
+    } catch (error) {
+      dashboardLoading.value = false;
+      ElMessage.error(t('view.base.dashboardLoadFailed'));
+      console.error('Failed to load dashboard:', error);
+    }
+  },
+);
+
+// 监听 tableId 变化
+watch(
+  () => route.params.tableId,
+  async (newTableId, oldTableId) => {
+    if (isInitializing || !newTableId || newTableId === oldTableId) {
+      return;
+    }
+    try {
+      const targetTable = tableStore.tables.find(t => t.id === newTableId);
+      if (targetTable) {
+        // 现在直接调用 loadTableView，因为我们已经跳转到路由了
+        await loadTableView(targetTable.id);
+        // 重置筛选
+        filterConjunction.value = "and";
+        // 关闭分组弹窗，确保切换数据表时弹窗状态正确
+        groupDialogVisible.value = false;
+      } else if (tableStore.tables.length > 0 && !tableStore.currentTable) {
+        const firstTable = tableStore.tables[0];
+        await loadTableView(firstTable.id);
+      }
+    } catch (error) {
+      ElMessage.error(t('view.base.loadDataFailed'));
+      console.error('Failed to load data:', error);
+    } finally {
+      // 确保 loading 状态被清除
+      tableStore.loading = false;
+    }
+  },
+);
+
+// 初始化拖拽排序
+function initSortable() {
+  if (sortableInstance) {
+    sortableInstance.destroy();
+  }
+
+  if (tableListRef.value) {
+    sortableInstance = new Sortable(tableListRef.value, {
+      handle: ".drag-handle",
+      animation: 150,
+      onEnd: handleTableDragEnd,
+    });
+  }
+}
+
+// 处理表格拖拽结束（侧边栏树形分组传完整 ID 顺序；兼容旧 SortableEvent）
+async function handleTableDragEnd(payload: string[] | Sortable.SortableEvent) {
+  let tableIds: string[];
+  if (Array.isArray(payload)) {
+    tableIds = payload;
+  } else {
+    const evt = payload;
+    if (evt.oldIndex === evt.newIndex) return;
+    tableIds = tableStore.tables.map((t) => t.id);
+    const [movedId] = tableIds.splice(evt.oldIndex!, 1);
+    tableIds.splice(evt.newIndex!, 0, movedId);
+  }
+
+  if (baseStore.currentBase) {
+    await tableStore.reorderTables(baseStore.currentBase.id, tableIds);
+    // 刷新表格列表
+    await tableStore.loadTables(baseStore.currentBase.id);
+  }
+}
+
+// ==================== 数据表管理弹窗：文件夹树形 ====================
+
+interface ManagerRow {
+  id: string;
+  name: string;
+  description?: string;
+  updatedAt: number;
+  isFolder?: boolean;
+  folderId?: string | null;
+  children?: ManagerRow[];
+}
+
+const toManagerRow = (t: TableEntity): ManagerRow => ({
+  id: t.id,
+  name: t.name,
+  description: t.description,
+  updatedAt: t.updatedAt,
+  folderId: t.folderId ?? null,
+});
+
+// 树形数据：文件夹作为父行（children 为其包含的数据表），未分组沉底
+const managerTableData = computed<ManagerRow[]>(() => {
+  const folderList = [...tableStore.folders].sort((a, b) => a.order - b.order);
+  const rows: ManagerRow[] = folderList.map((f) => ({
+    id: `folder-${f.id}`,
+    name: f.name,
+    updatedAt: f.updatedAt,
+    isFolder: true,
+    folderId: f.id,
+    children: tableStore.tables
+      .filter((t) => t.folderId === f.id)
+      .map((t) => toManagerRow(t)),
+  }));
+  rows.push(
+    ...tableStore.tables
+      .filter((t) => !t.folderId || !folderList.some((f) => f.id === t.folderId))
+      .map((t) => toManagerRow(t)),
+  );
+  return rows;
+});
+
+// 新建文件夹（管理弹窗）
+const handleCreateFolderInManager = async () => {
+  if (!baseStore.currentBase) return;
+  try {
+    const { value } = await ElMessageBox.prompt(
+      t('base.folderNamePrompt'),
+      t('base.createFolder'),
+      {
+        confirmButtonText: t('view.confirm'),
+        cancelButtonText: t('view.cancel'),
+        inputPattern: /\S+/,
+        inputErrorMessage: t('base.folderNameRequired'),
+      },
+    );
+    await tableStore.createFolder(baseStore.currentBase.id, value.trim());
+  } catch {
+    // 用户取消
+  }
+};
+
+// 重命名文件夹（管理弹窗）
+const handleRenameFolderInManager = async (row: ManagerRow) => {
+  const folder = tableStore.folders.find((f) => f.id === row.folderId);
+  if (!folder) return;
+  try {
+    const { value } = await ElMessageBox.prompt(
+      t('base.folderNamePrompt'),
+      t('base.renameFolder'),
+      {
+        confirmButtonText: t('view.confirm'),
+        cancelButtonText: t('view.cancel'),
+        inputValue: folder.name,
+        inputPattern: /\S+/,
+        inputErrorMessage: t('base.folderNameRequired'),
+      },
+    );
+    await tableStore.renameFolder(folder.id, value.trim());
+  } catch {
+    // 用户取消
+  }
+};
+
+// 删除文件夹（管理弹窗，仅空文件夹可删）
+const handleDeleteFolderInManager = async (row: ManagerRow) => {
+  const folder = tableStore.folders.find((f) => f.id === row.folderId);
+  if (!folder) return;
+  const count = tableStore.tables.filter((tb) => tb.folderId === folder.id).length;
+  if (count > 0) {
+    ElMessage.warning(t('base.folderNotEmpty'));
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      t('base.deleteFolderConfirm', { name: folder.name }),
+      t('sidebar.deleteTitle'),
+      {
+        confirmButtonText: t('view.delete'),
+        cancelButtonText: t('view.cancel'),
+        type: 'warning',
+      },
+    );
+    await tableStore.deleteFolder(folder.id);
+  } catch {
+    // 用户取消
+  }
+};
+
+// 移动数据表到文件夹（管理弹窗）
+const moveFolderDialog = reactive({
+  visible: false,
+  tableId: '',
+  tableName: '',
+  target: '', // '' = 不分组
+});
+const openMoveFolderDialog = (row: ManagerRow) => {
+  moveFolderDialog.tableId = row.id;
+  moveFolderDialog.tableName = row.name;
+  moveFolderDialog.target = row.folderId ?? '';
+  moveFolderDialog.visible = true;
+};
+const confirmMoveFolder = async () => {
+  const { tableId, target } = moveFolderDialog;
+  if (!tableId) return;
+  try {
+    await tableStore.moveTableToFolder(tableId, target || null);
+    moveFolderDialog.visible = false;
+  } catch {
+    // 失败提示由 service 层处理
+  }
+};
+
+// 正在加载的表格 ID（防重入：handleTableSelect 与路由 watch 可能并发触发同一表格加载）
+let tableLoadInFlight = '';
+// 加载表格及其视图的统一入口
+const loadTableView = async (tableId: string) => {
+  if (!tableId || tableLoadInFlight === tableId) return;
+  tableLoadInFlight = tableId;
+  // 切换数据表：清空插件体系持有的勾选状态，避免跨表残留
+  setSelection(null);
+  try {
+    await tableStore.selectTable(tableId);
+    await viewStore.loadViews(tableId);
+    await viewStore.selectDefaultView(tableId);
+    if (viewStore.currentView?.type === ViewType.FORM) {
+      loadFormConfig();
+    }
+  } finally {
+    tableLoadInFlight = '';
+  }
+};
+
+const handleTableSelect = async (tableId: string) => {
+  // 如果点击的是当前已选中的表格，不做任何操作
+  if (tableId === tableStore.currentTable?.id) {
+    return;
+  }
+
+  // 如果有未保存更改，先提示用户
+  const canLeave = await confirmLeaveDocument();
+  if (!canLeave) return;
+
+  // 清除其他选中状态
+  documentStore.clearCurrentDocumentId();
+  
+  // 立即设置 loading 状态，让用户看到提示
+  tableStore.loading = true;
+  
+  try {
+    // 跳转到路由
+    const baseId = route.params.id as string;
+    if (route.params.tableId === tableId) {
+      // 已在目标表格路由（如初始化/刷新场景）：直接加载
+      await loadTableView(tableId);
+    } else {
+      // 切换到新表格路由：先清空残留视图，避免旧视图数据误渲染/误请求，
+      // 再跳转路由，加载由 watch(route.params.tableId) 统一处理
+      viewStore.clearView();
+      await router.push(`/base/${baseId}/table/${tableId}`);
+    }
+  } catch (error) {
+    ElMessage.error(t('view.base.loadDataFailed'));
+    console.error('Failed to load data:', error);
+  } finally {
+    // 确保 loading 状态被清除
+    tableStore.loading = false;
+  }
+};
+
+// 处理点击仪表盘
+const handleDashboardClick = async (dashboardId: string) => {
+  // 如果有未保存更改，先提示用户
+  const canLeave = await confirmLeaveDocument();
+  if (!canLeave) return;
+
+  // 清除其他选中状态
+  tableStore.currentTable = null;
+  documentStore.clearCurrentDocumentId();
+  
+  // 立即设置 loading 状态，让用户看到提示
+  dashboardLoading.value = true;
+  
+  // 使用正确的路由格式：/base/:id/dashboard/:dashboardId
+  const baseId = route.params.id as string;
+  router.push(`/base/${baseId}/dashboard/${dashboardId}`);
+};
+
+const handleViewChange = async (viewId: string) => {
+  await viewStore.selectView(viewId);
+  // 如果切换到表单视图，加载表单配置
+  const selectedView = viewStore.views.find((v) => v.id === viewId);
+  if (selectedView?.type === ViewType.FORM) {
+    loadFormConfig();
+  }
+};
+
+const handleRecordSelect = (_record: any) => {
+  // 记录选择处理
+};
+
+const handleRecordsSelect = (_records: any[]) => {
+  // 多记录选择处理：同步勾选状态给插件体系（仅记录 ID，用于按钮可用性与打开插件时的快照）
+  const ids = (_records || [])
+    .map((r) => (typeof r === "string" ? r : String(r?.id ?? "")))
+    .filter(Boolean);
+  setSelection({
+    recordIds: ids,
+    total: ids.length,
+    selectAll: ids.length > 0 && ids.length === filteredRecords.value.length,
+    scope: "page",
+  });
+};
+
+// 处理添加记录（来自看板视图和日历视图）
+const handleAddRecord = (
+  values: Record<string, unknown> = {},
+  groupInfo?: { groupFieldId?: string; groupId?: string; groupName?: string },
+) => {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+
+  // 保存初始值和分组信息
+  addRecordInitialValues.value = values;
+  addRecordGroupInfo.value = groupInfo || {};
+  addRecordDialogVisible.value = true;
+};
+
+// 处理刷新：重新从后端加载当前表全部记录，并给出结果反馈
+const handleReloadRecords = async () => {
+  if (!tableStore.currentTable) return;
+  const ok = await tableStore.reloadRecords();
+  if (ok) {
+    ElMessage.success(t('view.refreshSuccess'));
+  } else {
+    ElMessage.error(t('view.refreshFailed'));
+  }
+};
+
+// 处理从分组表格添加记录
+const handleAddRecordFromGroup = (groupInfo: {
+  groupFieldId?: string;
+  groupId?: string;
+  groupName?: string;
+  groupLevels?: Array<{
+    fieldId: string;
+    fieldName: string;
+    value: string;
+    valueId?: string;
+  }>;
+}) => {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+
+  // 构建初始值，包含所有层级分组字段的值
+  const initialValues: Record<string, unknown> = {};
+
+  // 关联（LINK）字段的值为数组（分组传入的可能是数组或单个 ID），其余字段为单值
+  const applyGroupInitialValue = (fieldId: string, valueId: string | string[]) => {
+    const field = tableStore.fields.find((f) => f.id === fieldId);
+    // 查找字段为计算字段，不参与新记录预填
+    if (field?.type === FieldType.LOOKUP) return;
+    initialValues[fieldId] =
+      field?.type === FieldType.LINK
+        ? Array.isArray(valueId)
+          ? valueId
+          : [valueId]
+        : valueId;
+  };
+
+  // 优先使用 groupLevels（多层分组信息）
+  if (groupInfo.groupLevels && groupInfo.groupLevels.length > 0) {
+    for (const level of groupInfo.groupLevels) {
+      if (level.fieldId && level.valueId) {
+        applyGroupInitialValue(level.fieldId, level.valueId);
+      }
+    }
+  } else if (groupInfo.groupFieldId && groupInfo.groupId) {
+    // 兼容旧版单层分组
+    applyGroupInitialValue(groupInfo.groupFieldId, groupInfo.groupId);
+  }
+
+  // 保存初始值和分组信息
+  addRecordInitialValues.value = initialValues;
+  addRecordGroupInfo.value = groupInfo;
+  addRecordDialogVisible.value = true;
+};
+
+// 处理 VTable 分组视图的添加记录
+const handleVTableGroupAddRecord = (groupFieldValues: Record<string, any>) => {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+
+  // 构建初始值，直接使用分组字段值作为初始值
+  const initialValues: Record<string, unknown> = { ...groupFieldValues };
+  addRecordInitialValues.value = initialValues;
+  addRecordGroupInfo.value = { groupLevels: [] };
+  addRecordDialogVisible.value = true;
+};
+
+// 新增记录后为关联（LINK）字段创建关联数据
+// 关联数据通过独立接口维护，无法随记录创建一起写入，需记录创建成功后单独建立
+const createRecordLinks = async (
+  recordId: string,
+  values: Record<string, unknown>,
+) => {
+  const linkFields = tableStore.fields.filter(
+    (f) => f.type === FieldType.LINK,
+  );
+  if (linkFields.length === 0) return;
+
+  for (const field of linkFields) {
+    const raw = values[field.id];
+    const ids = Array.isArray(raw)
+      ? raw
+      : raw
+        ? [String(raw)]
+        : [];
+    if (ids.length === 0) continue;
+
+    try {
+      // 正向：建立「源记录 -> 目标记录」的关联。
+      // 双向关联的反向数据由后端在 update_record_link 内通过
+      // _sync_bidirectional_links 自动补齐，且该逻辑采用「追加」方式写入
+      // （仅当 target_field_id 已配置时），不会覆盖目标记录已有的关联。
+      // 注意：绝不能在此显式调用 updateRecordLink 去写反向字段，因为该接口会
+      // 用传入的 id 列表「整体替换」目标字段值，从而导致一对多/多对多场景下
+      // 已有的关联记录被错误清空（如 A001 已关联 B01，再新增 B02 时 B01 丢失）。
+      await linkApiService.updateRecordLink(recordId, field.id, {
+        target_record_ids: ids,
+      });
+    } catch (error) {
+      console.error("[Base] 创建关联字段失败:", field.id, error);
+    }
+  }
+};
+
+// 处理保存新记录
+const handleSaveNewRecord = async (values: Record<string, unknown>) => {
+  if (!tableStore.currentTable) return;
+
+  try {
+    const record = await tableStore.createRecord({
+      tableId: tableStore.currentTable.id,
+      values: values as Record<string, CellValue>,
+    });
+
+    if (record) {
+      // 记录创建成功后，为关联（LINK）字段建立关联数据
+      await createRecordLinks(record.id, values);
+
+      // tableStore.createRecord 已经内部添加了记录，不需要手动 push
+      ElMessage.success(t('view.base.recordCreated'));
+      addRecordDialogVisible.value = false;
+
+      // 强制刷新记录列表，确保分组表格视图等能正确显示新记录
+      await tableStore.refreshRecords(tableStore.currentTable.id);
+    } else {
+      ElMessage.error(tableStore.error || t('view.base.recordCreateFailed'));
+    }
+  } catch (error) {
+    ElMessage.error(t('view.base.recordCreateFailed'));
+  }
+};
+
+// 处理表单提交
+const handleFormSubmit = async (values: Record<string, CellValue>) => {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+
+  try {
+    const record = await tableStore.createRecord({
+      tableId: tableStore.currentTable.id,
+      values,
+    });
+
+    if (record) {
+      // 表单提交成功后，为关联（LINK）字段建立关联数据（含双向关联）
+      await createRecordLinks(record.id, values);
+
+      // tableStore.createRecord 已经内部添加了记录，不需要手动 push
+      ElMessage.success(t('view.base.formSubmitSuccess'));
+
+      // 强制刷新记录列表，确保分组表格视图等能正确显示新记录
+      await tableStore.refreshRecords(tableStore.currentTable.id);
+    } else {
+      ElMessage.error(tableStore.error || t('view.base.submitFailed'));
+    }
+  } catch (error) {
+    ElMessage.error(t('view.base.submitFailed'));
+  }
+};
+
+// 处理表单取消
+const handleFormCancel = () => {
+  // 切换到表格视图
+  const tableView = viewStore.views.find((v) => v.type === ViewType.TABLE);
+  if (tableView) {
+    viewStore.selectView(tableView.id);
+  }
+};
+
+// 加载表单配置
+const loadFormConfig = () => {
+  const currentView = viewStore.currentView;
+
+  const systemFieldTypes = [
+    "createdBy",
+    "createdTime",
+    "updatedBy",
+    "updatedTime",
+    "autoNumber",
+  ];
+
+  // 获取所有非系统字段作为默认可见字段
+  const defaultVisibleFieldIds = tableStore.fields
+    .filter((f) => !systemFieldTypes.includes(f.type))
+    .map((f) => f.id);
+
+  if (currentView?.type === ViewType.FORM) {
+    // 从 config 字段加载表单配置（后端会将 form_config 以 config 形式返回）
+    const configData = currentView.config as {
+      title?: string;
+      description?: string;
+      submitButtonText?: string;
+      visibleFieldIds?: string[];
+      successMessage?: string;
+      allowMultipleSubmit?: boolean;
+      columns?: number;
+    };
+
+    // 检查配置中是否明确设置了 visibleFieldIds
+    // 如果 configData 中有 visibleFieldIds 属性（即使是空数组），使用它
+    // 如果没有 visibleFieldIds 属性，使用默认值
+    const hasVisibleFieldIdsConfig = configData?.visibleFieldIds !== undefined;
+
+    formConfig.value = {
+      title: configData?.title || t('view.base.formTitleDefault'),
+      description: configData?.description || "",
+      submitButtonText: configData?.submitButtonText || t('view.base.formSubmitDefault'),
+      visibleFieldIds: hasVisibleFieldIdsConfig
+        ? configData!.visibleFieldIds || []
+        : defaultVisibleFieldIds,
+      successMessage: configData?.successMessage || t('view.base.formSuccessDefault'),
+      allowMultipleSubmit: configData?.allowMultipleSubmit !== false,
+      columns: configData?.columns ?? 1,
+    };
+  } else {
+    // 使用默认配置
+    formConfig.value = {
+      title: t('view.base.formTitleDefault'),
+      description: "",
+      submitButtonText: t('view.base.formSubmitDefault'),
+      visibleFieldIds: defaultVisibleFieldIds,
+      successMessage: t('view.base.formSuccessDefault'),
+      allowMultipleSubmit: true,
+      columns: 1,
+    };
+  }
+};
+
+// 监听当前视图变化，自动加载表单配置
+watch(
+  () => viewStore.currentView,
+  (newView, oldView) => {
+    if (newView?.type === ViewType.FORM && newView?.id !== oldView?.id) {
+      loadFormConfig();
+    }
+  },
+  { immediate: true },
+);
+
+// 打开表单配置对话框
+const openFormConfigDialog = () => {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+  // 加载当前视图的配置
+  loadFormConfig();
+  formConfigDialogVisible.value = true;
+};
+
+// 保存表单配置
+const handleFormConfigSave = async (config: typeof formConfig.value) => {
+  formConfig.value = { ...config };
+
+  // 保存到视图配置
+  const currentView = viewStore.currentView;
+
+  if (currentView && currentView.type === ViewType.FORM) {
+    const newConfig = {
+      ...currentView.config,
+      title: config.title,
+      description: config.description,
+      submitButtonText: config.submitButtonText,
+      visibleFieldIds: config.visibleFieldIds,
+      successMessage: config.successMessage,
+      allowMultipleSubmit: config.allowMultipleSubmit,
+      columns: config.columns ?? 1,
+    };
+
+    await viewStore.updateView(currentView.id, {
+      config: newConfig,
+    });
+  }
+
+  ElMessage.success(t('view.base.formConfigSaved'));
+};
+
+// 打开表单分享对话框
+const openFormShareDialog = () => {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+  formShareDialogVisible.value = true;
+};
+
+// 处理编辑记录（用于 GroupedTableView）
+const handleEditRecord = (record: RecordEntity) => {
+  editingRecord.value = record;
+  recordDialogVisible.value = true;
+};
+
+// 处理编辑记录（用于其他视图，接收 recordId）
+const handleEditRecordById = (recordId: string) => {
+  const record = tableStore.records.find((r) => r.id === recordId);
+  if (record) {
+    editingRecord.value = record;
+    recordDialogVisible.value = true;
+  }
+};
+
+// 处理放大查看记录（用于 GroupedTableView）
+const handleExpandRecord = (record: RecordEntity) => {
+  editingRecord.value = record;
+  recordDialogVisible.value = true;
+};
+
+// 处理分组视图的排序
+const handleSortFromGroup = async (
+  fieldId: string,
+  direction: "asc" | "desc",
+) => {
+  if (!viewStore.currentView) return;
+
+  const currentSorts = viewStore.currentSorts as SortConfig[];
+  const existingSortIndex = currentSorts.findIndex(
+    (s) => s.fieldId === fieldId,
+  );
+  const newSorts = [...currentSorts];
+
+  if (existingSortIndex > -1) {
+    newSorts[existingSortIndex] = { fieldId, direction };
+  } else {
+    newSorts.push({ fieldId, direction });
+  }
+
+  await viewStore.updateSorts(
+    viewStore.currentView.id,
+    newSorts as SortConfig[],
+  );
+  ElMessage.success(
+    t('view.base.sortByField', {
+      name: tableStore.fields.find((f) => f.id === fieldId)?.name || "",
+      direction: direction === "asc" ? t('view.base.sortedAsc') : t('view.base.sortedDesc'),
+    }),
+  );
+};
+
+// 处理分组视图的冻结列
+const handleFreezeFieldFromGroup = async (fieldId: string) => {
+  if (!viewStore.currentView) return;
+
+  const newFrozen = [...viewStore.currentView.frozenFields, fieldId];
+  await viewStore.updateFrozenFields(viewStore.currentView.id, newFrozen);
+  ElMessage.success(t('view.base.frozenColumn'));
+};
+
+// 处理分组视图的取消冻结列
+const handleUnfreezeFieldFromGroup = async (fieldId: string) => {
+  if (!viewStore.currentView) return;
+
+  const newFrozen = viewStore.currentView.frozenFields.filter(
+    (fid) => fid !== fieldId,
+  );
+  await viewStore.updateFrozenFields(viewStore.currentView.id, newFrozen);
+  ElMessage.success(t('view.base.unfrozenColumn'));
+};
+
+// 处理分组视图的隐藏字段
+const handleHideFieldFromGroup = async (fieldId: string) => {
+  if (!viewStore.currentView) return;
+
+  if (viewStore.currentView.hiddenFields.includes(fieldId)) {
+    ElMessage.warning(t('view.base.fieldAlreadyHidden'));
+    return;
+  }
+
+  const newHidden = [...viewStore.currentView.hiddenFields, fieldId];
+  await viewStore.updateHiddenFields(viewStore.currentView.id, newHidden);
+  ElMessage.success(t('view.base.hiddenField'));
+};
+
+// 处理分组视图的编辑字段
+const handleEditFieldFromGroup = (fieldId: string) => {
+  editingFieldId.value = fieldId;
+  fieldDialogVisible.value = true;
+};
+
+// 处理分组视图的删除记录
+const handleDeleteRecordsFromGroup = async (records: RecordEntity[]) => {
+  if (records.length === 0) return;
+
+  try {
+    await ElMessageBox.confirm(
+      t('view.base.deleteRecordsConfirm', { count: records.length }),
+      t('view.base.deleteTitle'),
+      {
+        confirmButtonText: t('view.base.confirmDelete'),
+        cancelButtonText: t('view.cancel'),
+        type: "warning",
+      },
+    );
+
+    // 批量删除记录
+    for (const record of records) {
+      await tableStore.deleteRecord(record.id);
+      const index = tableStore.records.findIndex((r) => r.id === record.id);
+      if (index > -1) {
+        tableStore.records.splice(index, 1);
+      }
+    }
+
+    ElMessage.success(t('view.base.deleteRecordsSuccess', { count: records.length }));
+  } catch (error) {
+    // 用户取消删除
+  }
+};
+
+// 处理分组视图的复制记录
+const handleDuplicateRecordFromGroup = async (record: RecordEntity) => {
+  if (!tableStore.currentTable) return;
+
+  try {
+    // 创建新记录，复制原记录的值
+    // tableStore.createRecord 不再手动添加记录，而是通过实时事件监听添加
+    const newRecord = await tableStore.createRecord({
+      tableId: tableStore.currentTable.id,
+      values: { ...record.values },
+    });
+
+    if (newRecord) {
+      // 不再手动 push，因为实时事件会添加记录
+      // 但为了立即打开编辑对话框，我们需要使用返回的记录
+      ElMessage.success(t('view.base.duplicateSuccess'));
+      // 打开新记录的编辑对话框
+      editingRecord.value = newRecord;
+      recordDialogVisible.value = true;
+    }
+  } catch (error) {
+    ElMessage.error(t('view.base.duplicateFailed'));
+    console.error("复制记录失败:", error);
+  }
+};
+
+// 处理保存记录
+const handleSaveRecord = async (
+  recordId: string,
+  values: Record<string, unknown>,
+) => {
+  try {
+    const typedValues: Record<string, CellValue> = {};
+    Object.keys(values).forEach((key) => {
+      typedValues[key] = values[key] as CellValue;
+    });
+    await tableStore.updateRecord(recordId, typedValues);
+    // 更新本地记录
+    const index = tableStore.records.findIndex((r) => r.id === recordId);
+    if (index !== -1) {
+      tableStore.records[index] = {
+        ...tableStore.records[index],
+        values: { ...tableStore.records[index].values, ...typedValues },
+        updatedAt: Date.now(),
+      };
+    }
+    ElMessage.success(t('view.base.recordUpdated'));
+  } catch (error) {
+    ElMessage.error(t('view.base.updateRecordFailed'));
+  }
+};
+
+// 处理删除记录
+const handleDeleteRecord = async (recordId: string) => {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+
+  try {
+    // 显示确认对话框
+    await ElMessageBox.confirm(
+      t('view.base.deleteRecordConfirm'),
+      t('view.base.deleteTitle'),
+      {
+        confirmButtonText: t('view.base.confirmDelete'),
+        cancelButtonText: t('view.cancel'),
+        type: "warning",
+        confirmButtonClass: "el-button--danger",
+      },
+    );
+
+    // 执行删除
+    await tableStore.deleteRecord(recordId);
+
+    // 从本地记录列表中移除
+    const index = tableStore.records.findIndex((r) => r.id === recordId);
+    if (index !== -1) {
+      tableStore.records.splice(index, 1);
+    }
+
+    ElMessage.success(t('view.base.recordDeleted'));
+  } catch (error) {
+    // 用户取消删除时不显示错误
+    if (error !== "cancel") {
+      ElMessage.error(t('view.base.deleteRecordFailed'));
+    }
+  }
+};
+
+// 打开创建数据表对话框
+function openCreateTableDialog() {
+  if (!baseStore.currentBase) {
+    ElMessage.warning(t('view.base.baseSelectFirst'));
+    return;
+  }
+  createTableDialogVisible.value = true;
+  createTableForm.name = "";
+  createTableForm.description = "";
+}
+
+// 打开创建仪表盘对话框
+function openCreateDashboardDialog() {
+  if (!baseStore.currentBase) {
+    ElMessage.warning(t('view.base.baseSelectFirst'));
+    return;
+  }
+  createDashboardDialogVisible.value = true;
+  createDashboardForm.name = "";
+  createDashboardForm.description = "";
+}
+
+// 关闭创建仪表盘对话框
+function closeCreateDashboardDialog() {
+  createDashboardDialogVisible.value = false;
+  createDashboardFormRef.value?.resetFields();
+}
+
+// 处理创建仪表盘
+async function handleCreateDashboard() {
+  if (!createDashboardFormRef.value) return;
+  if (!baseStore.currentBase) {
+    ElMessage.error(t('view.base.baseSelectFirst'));
+    return;
+  }
+
+  await createDashboardFormRef.value.validate(async (valid) => {
+    if (valid) {
+      try {
+        const { dashboardService } =
+          await import("@/db/services/dashboardService");
+        const dashboard = await dashboardService.createDashboard({
+          baseId: baseStore.currentBase!.id,
+          name: createDashboardForm.name.trim(),
+          description: createDashboardForm.description || undefined,
+          widgets: [],
+        });
+
+        if (dashboard) {
+          ElMessage.success(t('view.base.dashboardCreated'));
+          closeCreateDashboardDialog();
+          // 刷新仪表盘列表
+          sidebarRef.value?.refreshDashboards();
+          // 跳转到仪表盘页面
+          const baseId = route.params.id as string;
+          router.push(`/base/${baseId}/dashboard/${dashboard.id}`);
+        } else {
+          ElMessage.error(t('view.base.createFailed'));
+        }
+      } catch (error) {
+        ElMessage.error(t('view.base.createFailed'));
+      }
+    }
+  });
+}
+
+// 关闭创建数据表对话框
+function closeCreateTableDialog() {
+  createTableDialogVisible.value = false;
+  createTableFormRef.value?.resetFields();
+}
+
+// 打开重命名仪表盘对话框
+function openRenameDashboardDialog(dashboard: {
+  id: string;
+  name: string;
+  description?: string;
+}) {
+  renameDashboardForm.id = dashboard.id;
+  renameDashboardForm.name = dashboard.name;
+  renameDashboardForm.description = dashboard.description || "";
+  renameDashboardDialogVisible.value = true;
+}
+
+// 关闭重命名仪表盘对话框
+function closeRenameDashboardDialog() {
+  renameDashboardDialogVisible.value = false;
+  renameDashboardFormRef.value?.resetFields();
+}
+
+// 处理重命名仪表盘
+async function handleRenameDashboard() {
+  if (!renameDashboardFormRef.value) return;
+
+  await renameDashboardFormRef.value.validate(async (valid) => {
+    if (valid) {
+      try {
+        // 使用通用操作模块
+        await renameDashboard(
+          {
+            id: renameDashboardForm.id,
+            name: renameDashboardForm.name,
+            description: renameDashboardForm.description,
+          } as Dashboard,
+          renameDashboardForm.name,
+          renameDashboardForm.description,
+        );
+        closeRenameDashboardDialog();
+        // 刷新仪表盘列表
+        sidebarRef.value?.refreshDashboards();
+      } catch (error) {
+        // 错误已经在通用模块中处理
+      }
+    }
+  });
+}
+
+// 处理删除仪表盘
+async function handleDeleteDashboard(dashboard: { id: string; name: string }) {
+  try {
+    // 使用通用操作模块
+    await deleteDashboard(dashboard as Dashboard, () => {
+      // 刷新仪表盘列表
+      sidebarRef.value?.refreshDashboards();
+      // 如果当前正在查看该仪表盘，跳转到 base 首页
+      if (route.params.dashboardId === dashboard.id) {
+        const baseId = route.params.id as string;
+        router.push(`/base/${baseId}`);
+      }
+    });
+  } catch (error: any) {
+    // 错误已经在通用模块中处理
+  }
+}
+
+// 处理切换仪表盘收藏状态
+async function handleToggleStarDashboard(dashboard: {
+  id: string;
+  isStarred: boolean;
+}) {
+  try {
+    // 使用通用操作模块
+    await toggleStarDashboard(dashboard as Dashboard);
+    // 刷新仪表盘列表
+    sidebarRef.value?.refreshDashboards();
+  } catch (error) {
+    // 错误已经在通用模块中处理
+  }
+}
+
+// 处理仪表盘排序
+async function handleReorderDashboards(dashboardIds: string[]) {
+  try {
+    if (!baseStore.currentBase) return;
+    await dashboardService.reorderDashboards(
+      baseStore.currentBase.id,
+      dashboardIds,
+    );
+    // 刷新仪表盘列表
+    sidebarRef.value?.refreshDashboards();
+  } catch (error) {
+    ElMessage.error(t('view.base.reorderFailed'));
+  }
+}
+
+// 处理创建数据表
+async function handleCreateTable() {
+  if (!createTableFormRef.value) return;
+  if (!baseStore.currentBase) {
+    ElMessage.error(t('view.base.baseSelectFirst'));
+    return;
+  }
+
+  await createTableFormRef.value.validate(async (valid) => {
+    if (valid) {
+      const table = await tableStore.createTable({
+        baseId: baseStore.currentBase!.id,
+        name: createTableForm.name,
+        description: createTableForm.description || undefined,
+      });
+
+      if (table) {
+        ElMessage.success(t('view.base.tableCreated'));
+        closeCreateTableDialog();
+        // 刷新当前 base 的表格列表并选中新创建的表格
+        await tableStore.loadTables(baseStore.currentBase!.id);
+        await tableStore.selectTable(table.id);
+      } else {
+        ElMessage.error(tableStore.error || t('view.base.createFailed'));
+      }
+    }
+  });
+}
+
+// 打开重命名对话框
+function openRenameTableDialog(table: {
+  id: string;
+  name: string;
+  description?: string;
+}) {
+  renameTableForm.id = table.id;
+  renameTableForm.name = table.name;
+  renameTableForm.description = table.description || "";
+  renameTableDialogVisible.value = true;
+}
+
+// 关闭重命名对话框
+function closeRenameTableDialog() {
+  renameTableDialogVisible.value = false;
+  renameTableFormRef.value?.resetFields();
+}
+
+// 处理重命名表格
+async function handleRenameTable() {
+  if (!renameTableFormRef.value) return;
+
+  await renameTableFormRef.value.validate(async (valid) => {
+    if (valid) {
+      try {
+        // 使用通用操作模块
+        await renameTable(
+          {
+            id: renameTableForm.id,
+            name: renameTableForm.name,
+            description: renameTableForm.description,
+            isStarred: false,
+          } as TableEntity,
+          renameTableForm.name,
+          renameTableForm.description,
+        );
+        // 同步更新 tableStore 中的表格信息
+        const tableIndex = tableStore.tables.findIndex(
+          (t) => t.id === renameTableForm.id,
+        );
+        if (tableIndex !== -1) {
+          tableStore.tables[tableIndex].name = renameTableForm.name;
+          tableStore.tables[tableIndex].description =
+            renameTableForm.description;
+        }
+        if (tableStore.currentTable?.id === renameTableForm.id) {
+          tableStore.currentTable.name = renameTableForm.name;
+          tableStore.currentTable.description = renameTableForm.description;
+        }
+        closeRenameTableDialog();
+      } catch (error) {
+        // 错误已经在通用模块中处理
+      }
+    }
+  });
+}
+
+// 处理删除表格
+async function handleDeleteTable(table: { id: string; name: string }) {
+  try {
+    // 使用通用操作模块
+    await deleteTable(table as TableEntity, async () => {
+      // 刷新表格列表
+      await refreshTables();
+      if (tableStore.currentTable?.id === table.id) {
+        tableStore.currentTable = null;
+        tableStore.fields = [];
+        tableStore.records = [];
+        viewStore.views = [];
+        // 如果有其他表格，选中第一个
+        if (tableStore.tables.length > 0) {
+          await tableStore.selectTable(tableStore.tables[0].id);
+        }
+      }
+    });
+  } catch (error) {
+    // 错误已经在通用模块中处理
+  }
+}
+
+// 处理收藏/取消收藏表格
+async function handleToggleStarTable(table: {
+  id: string;
+  isStarred?: boolean;
+}) {
+  try {
+    // 使用通用操作模块
+    await toggleStarTable(table as TableEntity);
+    // 刷新表格列表
+    await refreshTables();
+  } catch (error) {
+    // 错误已经在通用模块中处理
+  }
+}
+
+// 处理复制数据表
+async function duplicateTable(table: { id: string; name: string }) {
+  try {
+    await tableService.duplicateTable(table.id);
+    // 刷新表格列表
+    await refreshTables();
+    ElMessage.success(t('view.base.duplicateTableSuccess'));
+  } catch (error: any) {
+    console.error("复制数据表失败:", error);
+    ElMessage.error(t('view.base.duplicateFailedRetry'));
+  }
+}
+
+// 刷新数据表列表
+async function refreshTables() {
+  if (baseStore.currentBase) {
+    tableStore.tables = await tableService.getTablesByBase(
+      baseStore.currentBase.id,
+    );
+  }
+}
+
+// 打开字段对话框
+function openFieldDialog() {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+  fieldDialogVisible.value = true;
+}
+
+// 处理字段创建
+function handleFieldCreated(field: any) {
+  // 立即添加字段到 store（提供即时反馈）
+  // 实时事件处理器会通过 changed_by 检查避免重复添加
+  if (!tableStore.fields.find((f) => f.id === field.id)) {
+    tableStore.fields.push(field);
+  }
+}
+
+// 处理字段更新
+function handleFieldUpdated(field: any) {
+  const index = tableStore.fields.findIndex((f) => f.id === field.id);
+  if (index !== -1) {
+    // 使用 Object.assign 保留响应式，并触发更新
+    Object.assign(tableStore.fields[index], field);
+  }
+  ElMessage.success(t('view.base.fieldUpdated', { name: field.name }));
+}
+
+// 处理字段删除
+function handleFieldDeleted(fieldId: string) {
+  const index = tableStore.fields.findIndex((f) => f.id === fieldId);
+  if (index !== -1) {
+    const fieldName = tableStore.fields[index].name;
+    tableStore.fields.splice(index, 1);
+    ElMessage.success(t('view.base.fieldDeleted', { name: fieldName }));
+  }
+}
+
+// 处理字段重排序
+function handleFieldsReordered(fieldIds: string[]) {
+  // 更新本地字段顺序
+  const sortedFields = fieldIds
+    .map((id) => tableStore.fields.find((f) => f.id === id))
+    .filter((f): f is FieldEntity => f !== undefined);
+
+  // 更新 order 属性
+  sortedFields.forEach((field, index) => {
+    field.order = index;
+  });
+
+  tableStore.fields = sortedFields;
+}
+
+// 处理字段可见性变化（视图级隐藏/显示）
+async function handleFieldVisibilityChanged(
+  fieldId: string,
+  isVisible: boolean,
+) {
+  if (!viewStore.currentView) return;
+
+  let newHiddenFields: string[];
+  if (isVisible) {
+    // 从隐藏列表中移除
+    newHiddenFields = viewStore.currentView.hiddenFields.filter(
+      (id) => id !== fieldId,
+    );
+  } else {
+    // 添加到隐藏列表
+    newHiddenFields = [...viewStore.currentView.hiddenFields, fieldId];
+  }
+
+  await viewStore.updateHiddenFields(viewStore.currentView.id, newHiddenFields);
+}
+
+// 打开筛选对话框
+function openFilterDialog() {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+  filterDialogVisible.value = true;
+}
+
+// 处理筛选应用
+async function handleFilterApply(
+  filters: FilterCondition[],
+  conjunction: "and" | "or",
+) {
+  filterConjunction.value = conjunction;
+  // 同步到后端数据库
+  if (viewStore.currentView) {
+    await viewStore.updateFilters(viewStore.currentView.id, filters);
+  }
+  if (filters.length > 0) {
+    ElMessage.success(t('view.base.filterApplied', { count: filters.length }));
+  }
+}
+
+// 处理筛选清除
+async function handleFilterClear() {
+  filterConjunction.value = "and";
+  // 同步到后端数据库
+  if (viewStore.currentView) {
+    await viewStore.updateFilters(viewStore.currentView.id, []);
+  }
+  ElMessage.success(t('view.base.filterCleared'));
+}
+
+// 打开排序对话框
+function openSortDialog() {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+  sortDialogVisible.value = true;
+}
+
+// 处理排序应用
+async function handleSortApply(sorts: SortConfig[]) {
+  if (viewStore.currentView) {
+    await viewStore.updateSorts(viewStore.currentView.id, sorts);
+    if (sorts.length > 0) {
+      ElMessage.success(t('view.base.sortApplied', { count: sorts.length }));
+    }
+  }
+}
+
+// 处理排序清除
+async function handleSortClear() {
+  if (viewStore.currentView) {
+    await viewStore.updateSorts(viewStore.currentView.id, []);
+    ElMessage.success(t('view.base.sortCleared'));
+  }
+}
+
+// 打开导出对话框
+function openExportDialog() {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+  exportDialogVisible.value = true;
+}
+
+// 打开导入对话框
+function openImportDialog() {
+  if (!tableStore.currentTable) {
+    ElMessage.warning(t('view.base.selectTableFirst'));
+    return;
+  }
+  importDialogVisible.value = true;
+}
+
+// 打开Excel导入创建对话框
+function openExcelImportCreateDialog() {
+  if (!baseStore.currentBase) {
+    ElMessage.warning(t('view.base.baseSelectFirst'));
+    return;
+  }
+  excelImportCreateDialogVisible.value = true;
+}
+
+// 处理Excel导入创建完成
+async function handleExcelImportCreated(tableId: string) {
+  // 刷新表格列表
+  if (baseStore.currentBase) {
+    await tableStore.loadTables(baseStore.currentBase.id);
+    // 自动选中新创建的表格
+    await tableStore.selectTable(tableId);
+    // 加载视图
+    await viewStore.loadViews(tableId);
+    await viewStore.selectDefaultView(tableId);
+  }
+}
+
+// 处理导入完成
+function handleImported() {
+  // 刷新数据
+  if (tableStore.currentTable) {
+    tableStore.selectTable(tableStore.currentTable.id);
+  }
+}
+
+// 处理成员变更
+function handleMemberChanged() {
+  console.log("成员发生变更，刷新相关数据");
+  // TODO: 刷新 Base 成员列表和权限
+}
+
+// 处理分享变更
+function handleShareChanged() {
+  console.log("分享发生变更，刷新相关数据");
+  // TODO: 刷新 Base 分享列表
+}
+
+// ========== 文档功能 ==========
+
+// 检查当前文档是否有未保存更改，并提示用户
+const confirmLeaveDocument = async (): Promise<boolean> => {
+  if (!isDocumentView.value || !documentEditorRef.value?.hasUnsavedChanges()) {
+    return true;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      t('view.base.unsavedChanges'),
+      t('view.base.unsavedTitle'),
+      {
+        confirmButtonText: t('view.base.saveAndLeave'),
+        cancelButtonText: t('view.base.leaveDirectly'),
+        type: 'warning',
+        distinguishCancelAndClose: true,
+      }
+    );
+    // 用户点击“保存并离开”
+    await documentEditorRef.value?.save();
+    return true;
+  } catch (action: any) {
+    if (action === 'cancel') {
+      // 用户点击“直接离开”
+      return true;
+    }
+    // 用户点击关闭或 ESC，取消离开
+    return false;
+  }
+};
+
+// 处理选择文档
+const handleDocumentSelect = async (docId: string) => {
+  // 如果有未保存更改，先提示用户
+  const canLeave = await confirmLeaveDocument();
+  if (!canLeave) return;
+
+  const baseId = route.params.id as string;
+
+  // 点击的就是当前文档：路由不会变化，watch 不会触发加载，
+  // 若继续设置 loading 将无人复位导致一直显示"文档正在加载中"，直接返回
+  // 注意：文档路由参数名为 docId（/base/:id/documents/:docId）
+  if (route.params.docId === docId) {
+    return;
+  }
+
+  // 清除当前选中的表格，避免双重高亮
+  tableStore.currentTable = null;
+  tableStore.loading = false;
+
+  // 立即设置 loading 状态，让用户看到提示
+  documentStore.loadingDocumentDetail = true;
+
+  try {
+    // 直接跳转路由，让 watch 来处理加载文档详情
+    router.push(`/base/${baseId}/documents/${docId}`);
+  } catch (error) {
+    ElMessage.error(t('view.base.docLoadFailed'));
+    documentStore.loadingDocumentDetail = false;
+    console.error('Failed to load document:', error);
+  }
+};
+
+// 打开创建文档对话框
+const openCreateDocumentDialog = () => {
+  if (!baseStore.currentBase) {
+    ElMessage.warning(t('view.base.baseSelectFirst'));
+    return;
+  }
+  createDocumentDialogVisible.value = true;
+  createDocumentForm.name = "";
+};
+
+// 关闭创建文档对话框
+const closeCreateDocumentDialog = () => {
+  createDocumentDialogVisible.value = false;
+  createDocumentFormRef.value?.resetFields();
+};
+
+// 处理创建文档
+const handleCreateDocument = async () => {
+  if (!createDocumentFormRef.value) return;
+  if (!baseStore.currentBase) {
+    ElMessage.error(t('view.base.baseSelectFirst'));
+    return;
+  }
+
+  await createDocumentFormRef.value.validate(async (valid) => {
+    if (valid) {
+      try {
+        const doc = await documentStore.createDocument(baseStore.currentBase!.id, {
+          name: createDocumentForm.name.trim(),
+          content: JSON.stringify({ ops: [{ insert: '\n' }] }),
+          contentFormat: 'delta'
+        });
+        ElMessage.success(t('view.base.documentCreated'));
+        closeCreateDocumentDialog();
+        // 跳转到新创建的文档
+        router.push(`/base/${baseStore.currentBase!.id}/documents/${doc.id}`);
+      } catch (error) {
+        ElMessage.error(t('view.base.createDocFailed'));
+      }
+    }
+  });
+};
+
+// 处理添加文档
+const handleAddDocument = () => {
+  openCreateDocumentDialog();
+};
+
+// 处理重命名文档
+const handleRenameDocument = async (doc: any) => {
+  try {
+    const { value } = await ElMessageBox.prompt(t('view.base.enterNewName'), t('view.base.renameDocument'), {
+      confirmButtonText: t('view.confirm'),
+      cancelButtonText: t('view.cancel'),
+      inputValue: doc.name,
+      inputValidator: (value) => {
+        if (!value.trim()) return t('view.base.nameNotEmpty');
+        return true;
+      }
+    });
+    await documentStore.updateDocument(doc.id, { name: value.trim() });
+    ElMessage.success(t('view.base.renameSuccess'));
+  } catch {
+    // 用户取消
+  }
+};
+
+// 处理删除文档
+const handleDeleteDocument = async (doc: any) => {
+  try {
+    await documentStore.deleteDocument(doc.id);
+    // 如果当前正在查看该文档，跳转到 base 首页
+    if (route.params.docId === doc.id) {
+      const baseId = route.params.id as string;
+      router.push(`/base/${baseId}`);
+    }
+    ElMessage.success(t('view.base.deleteDocSuccess'));
+  } catch (error) {
+    ElMessage.error(t('view.base.deleteDocFailed'));
+  }
+};
+
+// 处理切换文档置顶
+const handleTogglePinDocument = async (doc: any) => {
+  try {
+    await documentStore.updateDocument(doc.id, { isPinned: !doc.isPinned });
+    ElMessage.success(doc.isPinned ? t('view.base.unpinned') : t('view.base.pinned'));
+  } catch (error) {
+    ElMessage.error(t('view.base.toggleFailed'));
+  }
+};
+
+// 处理文档保存：保存成功后必须把服务端返回的最新文档（含新的 updatedAt）
+// 回写到 store，否则编辑器仍持有旧的乐观锁基准，再次保存会被判为版本冲突（409）
+const handleDocumentSave = (doc: any) => {
+  documentStore.updateCurrentDocument(doc);
+};
+
+// 处理文档版本恢复：服务端文档内容/时间已变更，重新拉取以刷新乐观锁基准
+const handleDocumentRestored = async () => {
+  const docId = documentStore.currentDocument?.id;
+  if (!docId) return;
+  try {
+    await documentStore.fetchDocumentDetail(docId);
+  } catch (error) {
+    console.error('Failed to refresh document after restore:', error);
+  }
+};
+
+// 处理文档导出 PDF
+const isExportingPdf = ref(false);
+const handleDocumentExportPdf = async () => {
+  if (!documentStore.currentDocument) return;
+  isExportingPdf.value = true;
+  try {
+    await documentStore.exportPdf(documentStore.currentDocument.id, 'frontend');
+    ElMessage.success(t('view.base.pdfExportSuccess'));
+  } catch (error) {
+    ElMessage.error(t('view.base.pdfExportFailed'));
+  } finally {
+    isExportingPdf.value = false;
+  }
+};
+</script>
+
+<template>
+  <div class="base-page">
+    <BaseSidebar
+      ref="sidebarRef"
+      :current-table-id="tableStore.currentTable?.id"
+      :current-document-id="currentDocumentId"
+      :show-tables="true"
+      :show-dashboards="!isTableShareRestricted"
+      :show-documents="!isTableShareRestricted"
+      :can-manage="canManage"
+      @select-table="handleTableSelect"
+      @select-dashboard="handleDashboardClick"
+      @select-document="handleDocumentSelect"
+      @add-table="openCreateTableDialog"
+      @add-dashboard="openCreateDashboardDialog"
+      @add-document="handleAddDocument"
+      @excel-import-create="openExcelImportCreateDialog"
+      @rename-table="openRenameTableDialog"
+      @delete-table="handleDeleteTable"
+      @toggle-star="handleToggleStarTable"
+      @rename-dashboard="openRenameDashboardDialog"
+      @delete-dashboard="handleDeleteDashboard"
+      @toggle-star-dashboard="handleToggleStarDashboard"
+      @reorder-dashboards="handleReorderDashboards"
+      @reorder-tables="handleTableDragEnd"
+      @rename-document="handleRenameDocument"
+      @delete-document="handleDeleteDocument"
+      @toggle-pin-document="handleTogglePinDocument"
+      @manage-tables="showTableManager = true" />
+
+    <!-- 仪表盘视图 -->
+    <template v-if="isDashboardView">
+      <div class="dashboard-container">
+        <Loading
+          v-if="dashboardLoading"
+          :text="t('view.base.loadingDashboard')"
+          size="large"
+          absolute />
+        <DashboardView :dashboard-id="route.params.dashboardId as string" />
+      </div>
+    </template>
+    <!-- 文档视图 -->
+    <template v-else-if="isDocumentView">
+      <div class="document-container">
+        <!-- Loading 遮罩层：使用通用 Loading 组件 -->
+        <Loading
+          v-if="documentStore.loadingDocumentDetail"
+          :text="t('view.base.loadingDocument')"
+          size="large"
+          absolute />
+        <DocumentEditor
+          v-if="documentStore.currentDocument"
+          ref="documentEditorRef"
+          :key="documentStore.currentDocument.id"
+          :document="documentStore.currentDocument"
+          :base-id="baseId"
+          @save="handleDocumentSave"
+          @restored="handleDocumentRestored"
+          @export-pdf="handleDocumentExportPdf" />
+        <div v-else class="empty-state">
+          <el-empty :description="t('view.base.loadingDocEmpty')" />
+        </div>
+      </div>
+    </template>
+    <!-- 数据表视图 -->
+    <main v-else class="main-content">
+      <Loading v-if="isLoading && !tableStore.currentTable" />
+      <template v-else-if="tableStore.currentTable">
+        <div class="table-container">
+          <ViewSwitcher
+            :table-id="currentTableId"
+            :readonly="!canEdit || isTableShareRestricted"
+            @view-change="handleViewChange"
+            @open-share="handleOpenTableShare" />
+
+          <header
+            class="table-header"
+            :class="{
+              'gantt-header': isGanttView,
+              'kanban-header': isKanbanView,
+              'calendar-header': isCalendarView,
+              'gallery-header': isGalleryView,
+            }">
+            <div
+              v-if="
+                !isGanttView &&
+                !isKanbanView &&
+                !isCalendarView &&
+                !isGalleryView
+              "
+              class="table-info">
+              <el-button
+                v-if="canEdit && (isTableView || hasGroupConfig)"
+                type="primary" plain
+                size="default"
+                @click="handleAddRecord()">
+                <el-icon><Plus /></el-icon>
+                {{ t('view.base.addRecord') }}
+              </el-button>
+              <!-- 刷新：重新从后端加载当前表全部记录 -->
+              <el-button
+                size="default"
+                :loading="tableStore.streamingState.isLoading"
+                :title="t('view.refresh')"
+                @click="handleReloadRecords">
+                <el-icon v-if="!tableStore.streamingState.isLoading"><Refresh /></el-icon>
+              </el-button>
+            </div>
+            <div
+              class="table-actions"
+              :class="{ 'gantt-actions': isGanttView }">
+              <!-- 表格视图：显示所有常规操作按钮 -->
+              <template v-if="isTableView">
+                <el-button-group>
+                  <!-- 搜索按钮（仅 VTable 模式显示） -->
+                  <el-button
+                    v-if="useVTable"
+                    size="default"
+                    :title="t('view.base.tableGlobalSearch')"
+                    @click="vtableViewRef?.openSearch()">
+                    <el-icon><Search /></el-icon>
+                  </el-button>
+                  <!-- 筛选按钮（树形视图下仅作用于叶子节点） -->
+                  <el-button
+                    size="default"
+                    :type="activeFilters.length > 0 ? 'primary' : 'default'"
+                    :title="
+                      currentParentFieldId ? t('view.base.treeFilterTip') : ''
+                    "
+                    @click="openFilterDialog">
+                    <el-icon><Filter /></el-icon>
+                    {{ t('view.base.filter') }}
+                    <el-tag
+                      v-if="activeFilters.length > 0"
+                      size="default"
+                      class="filter-badge">
+                      {{ activeFilters.length }}
+                    </el-tag>
+                  </el-button>
+                  <el-button
+                    size="default"
+                    :type="activeSorts.length > 0 ? 'primary' : 'default'"
+                    :title="currentParentFieldId ? t('view.base.treeSortTip') : ''"
+                    @click="openSortDialog">
+                    <el-icon><Sort /></el-icon>
+                    {{ t('view.base.sort') }}
+                    <el-tag
+                      v-if="activeSorts.length > 0"
+                      size="default"
+                      class="sort-badge">
+                      {{ activeSorts.length }}
+                    </el-tag>
+                  </el-button>
+                  <el-button
+                    size="default"
+                    :type="hasGroupConfig ? 'primary' : 'default'"
+                    :disabled="!!currentParentFieldId"
+                    :title="
+                      currentParentFieldId
+                        ? t('view.base.treeGroupDisabledTip')
+                        : ''
+                    "
+                    @click="openGroupDialog">
+                    <el-icon><Folder /></el-icon>
+                    {{ t('view.base.group') }}
+                    <el-tag
+                      v-if="hasGroupConfig"
+                      size="default"
+                      class="group-badge">
+                      {{ currentGroupBys.length }}
+                    </el-tag>
+                  </el-button>
+                  <el-button
+                    v-if="canManage"
+                    size="default"
+                    @click="openFieldDialog">
+                    <el-icon><Grid /></el-icon>
+                    {{ t('view.base.field') }}
+                  </el-button>
+                </el-button-group>
+                <el-button-group>
+                  <el-popover
+                    v-if="hasSelfLinkField"
+                    placement="bottom"
+                    :width="260"
+                    trigger="click">
+                    <template #reference>
+                      <el-button
+                        size="default"
+                        :type="currentParentFieldId ? 'primary' : 'default'">
+                        <el-icon><Setting /></el-icon>
+                        {{ t('view.base.treeShape') }}
+                      </el-button>
+                    </template>
+                    <ParentFieldConfig
+                      :view-id="viewStore.currentView?.id || ''"
+                      :table-id="currentTableId"
+                      :current-parent-field-id="currentParentFieldId" />
+                  </el-popover>
+                </el-button-group>
+                <el-button-group>
+                  <el-button
+                    v-if="canEdit"
+                    size="default"
+                    @click="openImportDialog">
+                    <el-icon><Upload /></el-icon>
+                    {{ t('view.base.import') }}
+                  </el-button>
+                  <el-button size="default" @click="openExportDialog">
+                    <el-icon><Download /></el-icon>
+                    {{ t('view.base.export') }}
+                  </el-button>
+                </el-button-group>
+                <!-- 插件扩展点：工具栏按钮（有效启用的 UI 插件声明式注册） -->
+                <PluginToolbar />
+                <!-- 插件扩展点：Base 级菜单（下拉聚合，点击打开对话框沙箱） -->
+                <PluginBaseMenu />
+                <!-- <el-button-group>
+                  <el-button
+                    size="default"
+                    :type="useVTable ? 'success' : 'default'"
+                    @click="useVTable = !useVTable">
+                    <el-icon><Setting /></el-icon>
+                    {{ useVTable ? '原生表格' : 'VTable' }}
+                  </el-button>
+                </el-button-group> -->
+              </template>
+
+              <!-- 表单视图：显示配置和分享按钮 -->
+              <template v-if="isFormView">
+                <el-button-group>
+                  <el-button
+                    v-if="canManage"
+                    size="default"
+                    @click="openFormConfigDialog">
+                    <el-icon><Setting /></el-icon>
+                    {{ t('view.base.config') }}
+                    </el-button>
+                    <el-button
+                    v-if="canManage"
+                    size="default"
+                    @click="openFormShareDialog">
+                    <el-icon><Share /></el-icon>
+                    {{ t('view.base.share') }}
+                    </el-button>
+                </el-button-group>
+              </template>
+            </div>
+          </header>
+
+          <div class="table-content">
+            <!-- 表格视图 - 分组模式（仅原生表格使用，VTable 自带分组） -->
+            <GroupedTableView
+              v-if="isTableView && hasGroupConfig && !useVTable"
+              :fields="visibleFields"
+              :records="filteredRecords as any[]"
+              :group-by="currentGroupBys"
+              :frozen-fields="viewStore.currentView?.frozenFields || []"
+              :readonly="!canEdit"
+              @row-click="handleRecordSelect"
+              @cell-click="handleEditRecord"
+              @add-record="handleAddRecordFromGroup"
+              @expand-record="handleExpandRecord"
+              @duplicate-record="handleDuplicateRecordFromGroup"
+              @delete-records="handleDeleteRecordsFromGroup"
+              @sort="handleSortFromGroup"
+              @freeze-field="handleFreezeFieldFromGroup"
+              @unfreeze-field="handleUnfreezeFieldFromGroup"
+              @hide-field="handleHideFieldFromGroup"
+              @edit-field="handleEditFieldFromGroup" />
+
+            <!-- 表格视图 - 普通模式 -->
+            <TableView
+              v-else-if="isTableView && !useVTable"
+              :table-id="currentTableId"
+              :view-id="viewStore.currentView?.id || ''"
+              :records="filteredRecords"
+              :readonly="!canEdit"
+              @record-select="handleRecordSelect"
+              @records-select="handleRecordsSelect"
+              @add-record="handleAddRecord" />
+
+            <!-- VTable 视图（支持 VTable 原生分组） -->
+            <VTableView
+              ref="vtableViewRef"
+              v-else-if="isTableView && useVTable"
+              :table-id="currentTableId"
+              :view-id="viewStore.currentView?.id || ''"
+              :records="filteredRecords"
+              :readonly="!canEdit"
+              :group-by="currentGroupBys"
+              @record-select="handleRecordSelect"
+              @records-select="handleRecordsSelect"
+              @add-record="handleAddRecord"
+              @group-add-record="handleVTableGroupAddRecord" />
+
+            <!-- 看板视图 -->
+            <KanbanView
+              v-else-if="isKanbanView"
+              :table-id="currentTableId"
+              :view-id="viewStore.currentView?.id || ''"
+              :records="filteredRecords"
+              :fields="visibleFields"
+              :readonly="!canEdit"
+              @record-select="handleRecordSelect"
+              @addRecord="handleAddRecord"
+              @editRecord="handleEditRecordById"
+              @deleteRecord="handleDeleteRecord"
+              @updateRecord="handleSaveRecord" />
+
+            <!-- 日历视图 -->
+            <CalendarView
+              v-else-if="isCalendarView"
+              :table-id="currentTableId"
+              :view-id="viewStore.currentView?.id || ''"
+              :records="filteredRecords"
+              :fields="visibleFields"
+              :readonly="!canEdit"
+              @record-select="handleRecordSelect"
+              @addRecord="handleAddRecord"
+              @editRecord="handleEditRecordById" />
+
+            <!-- 甘特视图 -->
+            <GanttView
+              v-else-if="isGanttView"
+              :table-id="currentTableId"
+              :view-id="viewStore.currentView?.id || ''"
+              :records="filteredRecords"
+              :fields="visibleFields"
+              :readonly="!canEdit"
+              @updateRecord="handleSaveRecord"
+              @addRecord="handleAddRecord"
+              @editRecord="handleEditRecordById"
+              @deleteRecord="handleDeleteRecord" />
+
+            <!-- 画册视图 -->
+            <GalleryView
+              v-else-if="isGalleryView"
+              :records="filteredRecords"
+              :fields="visibleFields"
+              :readonly="!canEdit"
+              @editRecord="handleEditRecordById"
+              @deleteRecord="handleDeleteRecord" />
+
+            <!-- 表单视图 -->
+            <FormView
+              v-else-if="isFormView"
+              :fields="tableStore.fields"
+              :readonly="false"
+              :title="formConfig.title"
+              :description="formConfig.description"
+              :submit-button-text="formConfig.submitButtonText"
+              :visible-field-ids="formConfig.visibleFieldIds"
+              :columns="formConfig.columns"
+              @submit="handleFormSubmit"
+              @cancel="handleFormCancel" />
+
+            <!-- 其他视图类型占位 -->
+            <div v-else class="unsupported-view">
+              <el-empty :description="t('view.base.unsupportedView')">
+                <template #description>
+                  <p>{{ t('view.base.unsupportedView') }}</p>
+                  <p class="sub-text">
+                    {{ t('view.base.unsupportedViewHint') }}
+                  </p>
+                </template>
+              </el-empty>
+            </div>
+          </div>
+
+          <!-- 底部统计信息栏 -->
+          <div
+            v-if="
+              !isGanttView &&
+              !isKanbanView &&
+              !isCalendarView &&
+              !isGalleryView &&
+              !isFormView
+            "
+            class="table-footer-stats">
+            <span class="record-count">
+              {{ t('view.base.recordCount', { count: filteredRecords.length }) }}
+            </span>
+            <span v-if="activeFilters.length > 0" class="filter-badge">
+              <el-tag size="small" type="warning">{{ t('view.base.filterBadge', { count: activeFilters.length }) }}</el-tag>
+            </span>
+            <span v-if="activeSorts.length > 0" class="sort-badge">
+              <el-tag size="small" type="success">{{ t('view.base.sortBadge', { count: activeSorts.length }) }}</el-tag>
+            </span>
+            <span v-if="hasGroupConfig" class="group-badge">
+              <el-tag size="small" type="primary">{{ t('view.base.groupBadge', { count: currentGroupBys.length }) }}</el-tag>
+            </span>
+            <el-tooltip
+              class="history-btn"
+              :content="t('recordHistory.table.button')"
+              placement="top">
+              <el-button
+                size="small"
+                circle
+                :icon="Clock"
+                @click="showTableHistory = true" />
+            </el-tooltip>
+          </div>
+
+          <!-- 表格历史变更弹窗 -->
+          <TableHistoryDialog
+            v-model="showTableHistory"
+            :table-id="currentTableId"
+            :fields="tableStore.fields" />
+        </div>
+      </template>
+      <div v-else class="empty-state">
+        <el-empty :description="t('view.base.selectOrCreateTable')">
+          <el-button
+            v-if="canManage"
+            type="primary"
+            @click="openCreateTableDialog"
+            >{{ t('view.base.createTable') }}</el-button
+          >
+        </el-empty>
+      </div>
+    </main>
+
+    <!-- 创建数据表对话框 -->
+    <el-dialog
+      v-model="createTableDialogVisible"
+      :title="t('view.base.createTableTitle')"
+      width="500px"
+      :close-on-click-modal="false">
+      <el-form
+        ref="createTableFormRef"
+        :model="createTableForm"
+        :rules="createTableFormRules"
+        label-width="80px"
+        @submit.prevent>
+        <el-form-item :label="t('view.base.fieldName')" prop="name">
+          <el-input
+            v-model="createTableForm.name"
+            :placeholder="t('view.base.enterTableName')"
+            maxlength="50"
+            show-word-limit
+            @keyup.enter="handleCreateTable" />
+        </el-form-item>
+
+        <el-form-item :label="t('view.base.description')">
+          <el-input
+            v-model="createTableForm.description"
+            type="textarea"
+            :rows="3"
+            :placeholder="t('view.base.descriptionPlaceholder')"
+            maxlength="200"
+            show-word-limit />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="closeCreateTableDialog">{{ t('view.cancel') }}</el-button>
+          <el-button type="primary" @click="handleCreateTable">{{ t('view.confirm') }}</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 创建仪表盘对话框 -->
+    <el-dialog
+      v-model="createDashboardDialogVisible"
+      :title="t('view.base.createDashboardTitle')"
+      width="500px"
+      :close-on-click-modal="false">
+      <el-form
+        ref="createDashboardFormRef"
+        :model="createDashboardForm"
+        :rules="createDashboardFormRules"
+        label-width="80px"
+        @submit.prevent>
+        <el-form-item :label="t('view.base.fieldName')" prop="name">
+          <el-input
+            v-model="createDashboardForm.name"
+            :placeholder="t('view.base.enterDashboardName')"
+            maxlength="50"
+            show-word-limit
+            @keyup.enter="handleCreateDashboard" />
+        </el-form-item>
+
+        <el-form-item :label="t('view.base.description')">
+          <el-input
+            v-model="createDashboardForm.description"
+            type="textarea"
+            :rows="3"
+            :placeholder="t('view.base.descriptionPlaceholder')"
+            maxlength="200"
+            show-word-limit />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="closeCreateDashboardDialog">{{ t('view.cancel') }}</el-button>
+          <el-button type="primary" @click="handleCreateDashboard"
+            >{{ t('view.confirm') }}</el-button
+          >
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 创建文档对话框 -->
+    <el-dialog
+      v-model="createDocumentDialogVisible"
+      :title="t('view.base.createDocTitle')"
+      width="500px"
+      :close-on-click-modal="false">
+      <el-form
+        ref="createDocumentFormRef"
+        :model="createDocumentForm"
+        :rules="createDocumentFormRules"
+        label-width="80px"
+        @submit.prevent>
+        <el-form-item :label="t('view.base.fieldName')" prop="name">
+          <el-input
+            v-model="createDocumentForm.name"
+            :placeholder="t('view.base.enterDocName')"
+            maxlength="50"
+            show-word-limit
+            @keyup.enter="handleCreateDocument" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="closeCreateDocumentDialog">{{ t('view.cancel') }}</el-button>
+          <el-button type="primary" @click="handleCreateDocument"
+            >{{ t('view.confirm') }}</el-button
+          >
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 重命名数据表对话框 -->
+    <el-dialog
+      v-model="renameTableDialogVisible"
+      :title="t('view.base.editTableTitle')"
+      width="500px"
+      :close-on-click-modal="false">
+      <el-form
+        ref="renameTableFormRef"
+        :model="renameTableForm"
+        :rules="renameTableFormRules"
+        label-width="80px"
+        @submit.prevent>
+        <el-form-item :label="t('view.base.fieldName')" prop="name">
+          <el-input
+            v-model="renameTableForm.name"
+            :placeholder="t('view.base.enterTableName')"
+            maxlength="50"
+            show-word-limit
+            @keyup.enter="handleRenameTable" />
+        </el-form-item>
+        <el-form-item :label="t('view.base.description')">
+          <el-input
+            v-model="renameTableForm.description"
+            :placeholder="t('view.base.enterTableDesc')"
+            maxlength="200"
+            show-word-limit
+            type="textarea"
+            :rows="3" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="closeRenameTableDialog">{{ t('view.cancel') }}</el-button>
+          <el-button type="primary" @click="handleRenameTable">{{ t('view.confirm') }}</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 数据表管理对话框 -->
+    <el-dialog
+      v-model="showTableManager"
+      :title="t('view.base.tableManagerTitle')"
+      width="900px"
+      destroy-on-close
+      class="table-manager-dialog">
+      <div class="table-manager">
+        <div class="manager-header">
+          <el-button
+            type="primary"
+            class="create-btn"
+            @click="
+              openCreateTableDialog();
+              showTableManager = false;
+            ">
+            <el-icon><Plus /></el-icon>
+            {{ t('view.base.newDataTable') }}
+          </el-button>
+          <el-button type="primary" class="create-btn" @click="handleCreateFolderInManager">
+            <el-icon><FolderAdd /></el-icon>
+            {{ t('base.createFolder') }}
+          </el-button>
+        </div>
+
+        <el-table
+          :data="managerTableData"
+          row-key="id"
+          :tree-props="{ children: 'children' }"
+          default-expand-all
+          style="width: 100%"
+          class="manager-table">
+          <el-table-column prop="name" :label="t('view.base.fieldName')" min-width="160">
+            <template #default="{ row }">
+              <div class="table-name-cell">
+                <div class="table-icon" :class="{ 'folder-row-icon': row.isFolder }">
+                  <el-icon>
+                    <Folder v-if="row.isFolder" />
+                    <Document v-else />
+                  </el-icon>
+                </div>
+                <span :class="{ 'folder-row-name': row.isFolder }">{{ row.name }}</span>
+                <el-tag
+                  v-if="!row.isFolder && row.id === tableStore.currentTable?.id"
+                  size="small"
+                  type="primary"
+                  effect="light"
+                  >{{ t('view.base.currentTag') }}</el-tag
+                >
+                <el-tag
+                  v-if="!row.isFolder && row.isStarred"
+                  size="small"
+                  type="warning"
+                  effect="plain"
+                  class="star-tag"
+                  >{{ t('view.base.starredTag') }}</el-tag
+                >
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="description"
+            :label="t('view.base.description')"
+            min-width="180"
+            show-overflow-tooltip />
+          <el-table-column prop="updatedAt" :label="t('view.updatedAt')" width="140">
+            <template #default="{ row }">
+              {{ formatDateTime(row.updatedAt) }}
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('view.actions')" width="280" fixed="right">
+            <template #default="{ row }">
+              <template v-if="row.isFolder">
+                <el-button link type="primary" @click="handleRenameFolderInManager(row as ManagerRow)">
+                  {{ t('view.edit') }}
+                </el-button>
+                <el-button link type="danger" @click="handleDeleteFolderInManager(row as ManagerRow)">
+                  {{ t('view.delete') }}
+                </el-button>
+              </template>
+              <template v-else>
+                <el-button
+                  link
+                  type="primary"
+                  @click="
+                    handleTableSelect(row.id);
+                    showTableManager = false;
+                  ">
+                  {{ t('view.base.open') }}
+                </el-button>
+                <el-button link @click="openRenameTableDialog(row as TableEntity)"
+                  >{{ t('view.edit') }}</el-button
+                >
+                <el-button link @click="openMoveFolderDialog(row as ManagerRow)">{{ t('base.moveToFolder') }}</el-button>
+                <el-button link @click="duplicateTable(row as TableEntity)">{{ t('view.duplicate') }}</el-button>
+                <el-button link type="danger" @click="handleDeleteTable(row as TableEntity)"
+                  >{{ t('view.delete') }}</el-button
+                >
+              </template>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-dialog>
+
+    <!-- 移动数据表到文件夹 -->
+    <el-dialog
+      v-model="moveFolderDialog.visible"
+      :title="t('base.moveToFolder')"
+      width="420px"
+      append-to-body
+      destroy-on-close>
+      <div v-if="moveFolderDialog.tableName" class="move-folder-table-name">
+        「{{ moveFolderDialog.tableName }}」
+      </div>
+      <el-select v-model="moveFolderDialog.target" style="width: 100%">
+        <el-option :label="t('base.ungrouped')" value="" />
+        <el-option
+          v-for="folder in tableStore.folders"
+          :key="folder.id"
+          :label="folder.name"
+          :value="folder.id" />
+      </el-select>
+      <template #footer>
+        <el-button @click="moveFolderDialog.visible = false">{{ t('view.cancel') }}</el-button>
+        <el-button type="primary" @click="confirmMoveFolder">{{ t('view.confirm') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 字段管理对话框 -->
+    <FieldDialog
+      v-model:visible="fieldDialogVisible"
+      :table-id="currentTableId"
+      :fields="tableStore.fields"
+      :edit-field-id="editingFieldId || undefined"
+      @field-created="handleFieldCreated"
+      @field-updated="handleFieldUpdated"
+      @field-deleted="handleFieldDeleted"
+      @fields-reordered="handleFieldsReordered"
+      @field-visibility-changed="handleFieldVisibilityChanged"
+      @update:visible="
+        (val) => {
+          if (!val) editingFieldId = null;
+        }
+      " />
+
+    <!-- 筛选对话框 -->
+    <FilterDialog
+      v-model:visible="filterDialogVisible"
+      :fields="visibleFields"
+      :initial-filters="(activeFilters as FilterCondition[])"
+      :initial-conjunction="filterConjunction"
+      @apply="handleFilterApply"
+      @clear="handleFilterClear" />
+
+    <!-- 排序对话框 -->
+    <SortDialog
+      v-model:visible="sortDialogVisible"
+      :fields="visibleFields"
+      :initial-sorts="activeSorts"
+      @apply="handleSortApply"
+      @clear="handleSortClear" />
+
+    <!-- 分组对话框 -->
+    <GroupDialog
+      v-model:visible="groupDialogVisible"
+      :fields="visibleFields"
+      :initial-group-by="currentGroupBys"
+      @apply="handleGroupApply"
+      @clear="handleGroupClear" />
+
+    <!-- 导出对话框 -->
+    <ExportDialog
+      v-model:visible="exportDialogVisible"
+      :fields="visibleFields"
+      :records="filteredRecords" />
+
+    <!-- 记录编辑对话框 -->
+    <RecordDetailDrawer
+      v-model:visible="recordDialogVisible"
+      :record="editingRecord"
+      :fields="tableStore.fields"
+      :size="drawerSize"
+      :readonly="!canEdit"
+      @save="handleSaveRecord" />
+
+    <!-- 添加记录抽屉 -->
+    <AddRecordDrawer
+      v-model:visible="addRecordDialogVisible"
+      :fields="tableStore.fields"
+      :initial-values="addRecordInitialValues"
+      :group-field-id="addRecordGroupInfo.groupFieldId"
+      :group-id="addRecordGroupInfo.groupId"
+      :group-name="addRecordGroupInfo.groupName"
+      :group-levels="addRecordGroupInfo.groupLevels"
+      :size="drawerSize"
+      @save="handleSaveNewRecord" />
+
+    <!-- 表单配置对话框 -->
+    <FormViewConfig
+      v-model:visible="formConfigDialogVisible"
+      :fields="tableStore.fields"
+      :initial-config="formConfig"
+      @save="handleFormConfigSave" />
+
+    <!-- 表单分享对话框 -->
+    <FormShareDialog
+      v-model:visible="formShareDialogVisible"
+      :fields="tableStore.fields"
+      :table-name="tableStore.currentTable?.name || ''"
+      :table-id="tableStore.currentTable?.id || ''"
+      :view-id="viewStore.currentView?.id"
+      :form-config="formConfig" />
+
+    <!-- 数据导入对话框 -->
+    <ImportDialog
+      v-model:visible="importDialogVisible"
+      :table-id="tableStore.currentTable?.id || ''"
+      :fields="tableStore.fields"
+      @imported="handleImported" />
+
+    <!-- Excel导入创建数据表对话框 -->
+    <ExcelImportCreateDialog
+      v-model:visible="excelImportCreateDialogVisible"
+      :base-id="baseStore.currentBase?.id || ''"
+      @created="handleExcelImportCreated" />
+
+    <!-- 成员管理对话框 -->
+    <MemberManagementDialog
+      v-model:visible="showMemberManagement"
+      :base-id="baseStore.currentBase?.id || ''"
+      @member-changed="handleMemberChanged" />
+
+    <!-- Base 分享对话框 -->
+    <BaseShareDialog
+      v-model:visible="showBaseShare"
+      :base-id="baseStore.currentBase?.id || ''"
+      @share-changed="handleShareChanged" />
+
+    <!-- 数据表分享对话框 -->
+    <TableShareDialog
+      v-model:visible="showTableShare"
+      :table-id="tableStore.currentTable?.id || ''"
+      :table-name="tableStore.currentTable?.name" />
+
+    <!-- 重命名仪表盘对话框 -->
+    <el-dialog
+      v-model="renameDashboardDialogVisible"
+      :title="t('view.base.editDashboardTitle')"
+      width="500px"
+      :close-on-click-modal="false">
+      <el-form
+        ref="renameDashboardFormRef"
+        :model="renameDashboardForm"
+        :rules="renameDashboardFormRules"
+        label-width="80px"
+        @submit.prevent>
+        <el-form-item :label="t('view.base.fieldName')" prop="name">
+          <el-input
+            v-model="renameDashboardForm.name"
+            :placeholder="t('view.base.enterDashboardName')"
+            maxlength="50"
+            show-word-limit
+            @keyup.enter="handleRenameDashboard" />
+        </el-form-item>
+        <el-form-item :label="t('view.base.description')">
+          <el-input
+            v-model="renameDashboardForm.description"
+            :placeholder="t('view.base.enterDashboardDesc')"
+            maxlength="200"
+            show-word-limit
+            type="textarea"
+            :rows="3" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="closeRenameDashboardDialog">{{ t('view.cancel') }}</el-button>
+          <el-button type="primary" @click="handleRenameDashboard"
+            >{{ t('view.confirm') }}</el-button
+          >
+        </span>
+      </template>
+    </el-dialog>
+    <CollaborationToast v-if="collaborationStore.isRealtimeAvailable" />
+    <ConflictDialog
+      v-if="collaborationStore.isRealtimeAvailable"
+      :visible="collaborationStore.conflictVisible"
+      :conflict="collaborationStore.currentConflict"
+      @resolve="collaborationStore.resolveConflict"
+    />
+    <div v-if="isExportingPdf" class="pdf-export-loading">
+      <div class="pdf-export-loading__track">
+        <div class="pdf-export-loading__thumb"></div>
+      </div>
+      <span class="pdf-export-loading__text">{{ t('view.base.exportingPdf') }}</span>
+    </div>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+@use "@/assets/styles/variables" as *;
+@use "@/assets/styles/mixins" as *;
+
+.base-page {
+  display: flex;
+  height: calc(100vh - 56px);
+  background-color: $gray-50;
+}
+
+.sidebar {
+  width: $sidebar-width;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid $gray-200;
+  background: $surface-color;
+  transition: width $transition-normal;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: $shadow-md;
+
+  &.collapsed {
+    width: $sidebar-collapsed-width;
+
+    .sidebar-header {
+      justify-content: center;
+      padding: $spacing-md $spacing-sm;
+
+      .header-content {
+        display: none;
+      }
+    }
+
+    .section-title,
+    .section-divider {
+      display: none;
+    }
+
+    .dashboard-list {
+      padding: $spacing-sm 0;
+    }
+
+    .dashboard-item {
+      justify-content: center;
+      padding: $spacing-md $spacing-sm;
+      gap: 0;
+
+      .dashboard-name {
+        display: none;
+      }
+
+      .dashboard-icon {
+        margin: 0;
+      }
+    }
+
+    .table-list {
+      padding: $spacing-sm 0;
+    }
+
+    .table-item {
+      justify-content: center;
+      padding: $spacing-md $spacing-sm;
+      gap: 0;
+
+      .drag-handle,
+      .table-name,
+      .star-icon,
+      .more-icon {
+        display: none;
+      }
+
+      .table-icon {
+        margin: 0;
+      }
+
+      &.active {
+        background-color: rgba($primary-color, 0.15);
+      }
+    }
+
+    .empty-tables {
+      display: none;
+    }
+
+    .sidebar-footer {
+      padding: $spacing-sm;
+
+      .el-button {
+        padding: $spacing-sm;
+        justify-content: center;
+
+        span:not(.el-icon) {
+          display: none;
+        }
+      }
+    }
+  }
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: $spacing-md $spacing-lg;
+  border-bottom: 1px solid $border-color;
+  min-height: 56px;
+  gap: $spacing-sm;
+
+  .header-content {
+    flex: 1;
+    min-width: 0;
+
+    :deep(.el-input) {
+      width: 100%;
+    }
+  }
+}
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: $border-radius-sm;
+  color: $text-secondary;
+  cursor: pointer;
+  transition: all $transition-fast;
+  flex-shrink: 0;
+
+  &:hover {
+    background-color: $bg-color;
+    color: $text-primary;
+  }
+}
+
+.section-title {
+  padding: $spacing-sm $spacing-lg;
+  font-size: $font-size-xs;
+  color: $text-secondary;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.section-divider {
+  height: 1px;
+  background-color: $border-color;
+  margin: $spacing-sm $spacing-lg;
+}
+
+.dashboard-section {
+  flex-shrink: 0;
+}
+
+.dashboard-list {
+  padding: $spacing-sm 0;
+}
+
+.dashboard-item {
+  display: flex;
+  align-items: center;
+  padding: $spacing-sm $spacing-lg;
+  cursor: pointer;
+  transition: all $transition-fast;
+  gap: $spacing-sm;
+
+  &:hover {
+    background-color: $bg-color;
+  }
+}
+
+.dashboard-icon {
+  color: $text-secondary;
+  flex-shrink: 0;
+}
+
+.dashboard-name {
+  flex: 1;
+  font-size: $font-size-sm;
+  color: $text-primary;
+  @include text-ellipsis;
+}
+
+.table-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: $spacing-sm 0;
+}
+
+.table-item {
+  display: flex;
+  align-items: center;
+  padding: $spacing-sm $spacing-lg;
+  cursor: pointer;
+  transition: all $transition-fast;
+  gap: $spacing-sm;
+
+  &:hover {
+    background-color: $bg-color;
+
+    .drag-handle,
+    .more-icon {
+      opacity: 1;
+    }
+  }
+
+  &.active {
+    background-color: rgba($primary-color, 0.1);
+    color: $primary-color;
+
+    .table-name {
+      color: $primary-color;
+      font-weight: 500;
+    }
+  }
+}
+
+.drag-handle {
+  opacity: 0;
+  cursor: grab;
+  color: $text-secondary;
+  transition: opacity $transition-fast;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.table-icon {
+  color: $text-secondary;
+  flex-shrink: 0;
+}
+
+.table-name {
+  flex: 1;
+  font-size: $font-size-sm;
+  color: $text-primary;
+  @include text-ellipsis;
+}
+
+.star-icon {
+  color: #f7ba2a;
+  flex-shrink: 0;
+}
+
+.more-icon {
+  opacity: 0;
+  cursor: pointer;
+  color: $text-secondary;
+  transition: opacity $transition-fast;
+  padding: $spacing-xs;
+  border-radius: $border-radius-sm;
+
+  &:hover {
+    background-color: rgba($text-secondary, 0.1);
+  }
+}
+
+.empty-tables {
+  padding: $spacing-lg;
+  text-align: center;
+  color: $text-secondary;
+  font-size: $font-size-sm;
+}
+
+.sidebar-footer {
+  padding: $spacing-md;
+  border-top: 1px solid $border-color;
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+
+  .el-button {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dashboard-container,
+.document-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.table-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: $surface-color;
+  border-radius: $border-radius-xl;
+  margin-right: $spacing-xs;
+  box-shadow: $shadow-card;
+  overflow: hidden;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: $spacing-sm $spacing-xl;
+  background: $surface-color;
+  border-bottom: 1px solid $gray-200;
+  gap: $spacing-lg;
+}
+
+.table-header.gantt-header,
+.table-header.kanban-header,
+.table-header.calendar-header,
+.table-header.gallery-header {
+  padding: 0;
+  min-height: 0;
+  height: auto;
+  border-bottom: none;
+}
+
+.table-info {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+
+  h2 {
+    margin: 0;
+    font-size: $font-size-lg;
+    font-weight: 600;
+    color: $text-primary;
+    letter-spacing: -0.2px;
+  }
+
+  .record-count {
+    font-size: $font-size-sm;
+    color: $text-secondary;
+    background-color: $gray-100;
+    padding: $spacing-xs $spacing-sm;
+    border-radius: $border-radius-md;
+  }
+
+  .filter-badge,
+  .sort-badge,
+  .group-badge {
+    margin-left: $spacing-xs;
+
+    :deep(.el-tag) {
+      border-radius: $border-radius-md;
+      font-weight: 500;
+    }
+  }
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  flex-wrap: wrap;
+
+  &.gantt-actions {
+    flex: 1;
+    justify-content: flex-start;
+  }
+
+  // 按钮组样式优化
+  :deep(.el-button-group) {
+    .el-button {
+      border-radius: 0;
+
+      &:first-child {
+        border-top-left-radius: $border-radius-md;
+        border-bottom-left-radius: $border-radius-md;
+      }
+
+      &:last-child {
+        border-top-right-radius: $border-radius-md;
+        border-bottom-right-radius: $border-radius-md;
+      }
+
+      &:hover {
+        transform: translateY(-1px);
+      }
+
+      &:active {
+        transform: translateY(0);
+      }
+    }
+  }
+
+  // 主要操作按钮样式
+  :deep(.el-button--primary) {
+    @include gradient-primary;
+    border: none;
+    border-radius: $border-radius-md;
+    font-weight: 500;
+    @include button-fresh;
+
+    &:hover {
+      box-shadow:
+        $shadow-button,
+        0 4px 8px rgba($primary-color, 0.3);
+    }
+
+    &:active {
+      box-shadow: $shadow-button;
+    }
+  }
+
+  // 默认按钮样式
+  :deep(.el-button--default) {
+    border-radius: $border-radius-md;
+    transition: all $transition-fast;
+
+    &:hover {
+      background-color: $gray-100;
+      border-color: $gray-300;
+      transform: translateY(-1px);
+      box-shadow: $shadow-sm;
+    }
+
+    &:active {
+      transform: translateY(0);
+    }
+  }
+
+  // 按钮内标签样式
+  :deep(.el-button) {
+    .el-tag {
+      margin-left: $spacing-xs;
+      border-radius: $border-radius-sm;
+    }
+  }
+}
+
+.table-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+// 底部统计信息栏
+.table-footer-stats {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  padding: $spacing-sm $spacing-xl;
+  background: $surface-color;
+  border-top: 1px solid $gray-200;
+  font-size: $font-size-sm;
+
+  .history-btn {
+    margin-left: auto;
+  }
+
+  .record-count {
+    color: $text-secondary;
+    background-color: $gray-100;
+    padding: $spacing-xs $spacing-sm;
+    border-radius: $border-radius-md;
+  }
+
+  .filter-badge,
+  .sort-badge,
+  .group-badge {
+    :deep(.el-tag) {
+      border-radius: $border-radius-md;
+      font-weight: 500;
+    }
+  }
+}
+
+.empty-state {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  padding: $spacing-xl;
+
+  :deep(.el-empty) {
+    padding: $spacing-2xl;
+    background-color: $surface-color;
+    border-radius: $border-radius-xl;
+    box-shadow: $shadow-card;
+  }
+
+  :deep(.el-button--primary) {
+    @include gradient-primary;
+    border: none;
+    border-radius: $border-radius-md;
+    font-weight: 500;
+    @include button-fresh;
+  }
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+:deep(.delete-item) {
+  color: $error-color;
+}
+
+// 数据表管理对话框样式
+.table-manager-dialog {
+  :deep(.el-dialog__header) {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid $gray-100;
+
+    .el-dialog__title {
+      font-size: 17px;
+      font-weight: 600;
+      color: $gray-800;
+    }
+  }
+
+  :deep(.el-dialog__body) {
+    padding: 20px 24px;
+  }
+}
+
+// 移动数据表到文件夹对话框（append-to-body，样式需放在顶层）
+.move-folder-table-name {
+  margin-bottom: 12px;
+  color: $text-secondary;
+  font-weight: 600;
+}
+
+.table-manager {
+  .manager-header {
+    margin-bottom: 20px;
+    .create-btn {
+      padding: 0 16px;
+      border-radius: 10px;
+      font-weight: 500;
+      background: linear-gradient(135deg, $primary-color 0%, #6366f1 100%);
+      border: none;
+      box-shadow: 0 4px 14px rgba($primary-color, 0.35);
+      transition: all 0.3s ease;
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba($primary-color, 0.45);
+      }
+
+      .el-icon {
+        margin-right: 6px;
+      }
+    }
+  }
+}
+
+.manager-table {
+  :deep(th) {
+    font-weight: 600;
+    color: $gray-600;
+    background: $gray-50;
+  }
+
+  :deep(td) {
+    padding: 12px 0;
+  }
+}
+
+.table-name-cell {
+  // inline-flex：与 el-table 树形展开箭头同行排列，块级 flex 会把箭头挤到上一行
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+
+  .table-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: $primary-light;
+    border-radius: 8px;
+    color: $primary-color;
+
+    // 文件夹行图标：柔和底色
+    &.folder-row-icon {
+      background: rgba($text-secondary, 0.08);
+      color: $text-secondary;
+    }
+  }
+
+  .folder-row-name {
+    font-weight: 600;
+    color: $text-secondary;
+  }
+
+  .el-tag {
+    margin-left: 6px;
+  }
+
+  .star-tag {
+    color: #f7ba2a;
+    border-color: #f7ba2a;
+  }
+}
+
+.pdf-export-loading {
+  position: fixed;
+  bottom: 50%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  background: var(--el-bg-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 2000;
+  animation: pdf-loading-enter 0.25s ease-out;
+
+  &__track {
+    width: 200px;
+    height: 16px;
+    background: var(--el-border-color-lighter);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  &__thumb {
+    width: 30%;
+    height: 100%;
+    background: var(--el-color-primary);
+    border-radius: 3px;
+    animation: pdf-scroll-slide 1.2s ease-in-out infinite;
+  }
+
+  &__text {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    white-space: nowrap;
+  }
+}
+
+@keyframes pdf-loading-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes pdf-scroll-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
+</style>

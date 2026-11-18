@@ -1,0 +1,288 @@
+/* ============================================================
+ * tokens.css — 全局基础样式（唯一全局样式文件）
+ * ============================================================
+ * 职责：CSS Reset + 稳定根字号与界面缩放 + 全局变量 + 背景容器
+ * 使用方：src/renderer/src/main.js 导入
+ * ============================================================ */
+
+/* ---- OPPOSans 统一字体族（同一 font-family 名下注册多字重）----
+ * font-weight: 500 → Medium    font-weight: 600/700 → Bold */
+@font-face {
+  font-family: 'OPPOSans';
+  src: url('@zf-web-font/opposans/OPPOSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'OPPOSans';
+  src: url('@zf-web-font/opposans/OPPOSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---- CSS Reset ---- */
+/* 统一所有元素的盒模型为 border-box，清除默认 margin */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+/* 所有普通按钮的最低点击反馈。使用 :where 保持零特异性，组件可按语义覆盖。 */
+:where(button) {
+  transform-origin: center;
+  transition-property: transform;
+  transition-duration: var(--motion-control, 180ms);
+  transition-timing-function: var(--ease-standard, ease);
+}
+:where(button:not(:disabled):active) {
+  transform: scale(0.98);
+  transition-duration: 70ms;
+}
+/* 选择器和菜单由面板展开/收起提供反馈，不叠加按钮按压缩放。 */
+:where(button[aria-haspopup]:not(:disabled):active) {
+  transform: none;
+}
+
+/* 全局隐藏滚动条 —— 保留滚动功能，不占布局空间，零抖动
+   鼠标滚轮 / 触控板 / 键盘方向键均可正常滚动 */
+::-webkit-scrollbar {
+  display: none;
+}
+html {
+  scrollbar-width: none; /* Firefox */
+}
+
+/* 全局统一纵向滚动容器 —— 全站一处定义、各处 class="scroll-y" 复用 */
+.scroll-y {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 清除列表默认样式 */
+ul {
+  list-style: none;
+}
+
+/* 100% 下保留 1rem = 1 CSS px 的设计单位。窗口宽度只影响布局。
+ * Windows DPI 已由 Chromium 处理，不再乘 devicePixelRatio。 */
+html {
+  --ui-scale: 1;
+  font-size: calc(1px * var(--ui-scale));
+}
+
+/* ---- 全局 CSS 自定义属性（Design Tokens） ---- */
+:root {
+  --font-family-text:
+    'OPPOSans', 'Segoe UI', 'Microsoft YaHei', sans-serif; /* OPPOSans 为主字体，Segoe UI / 微软雅黑为回退 */
+  --font-family-mono: 'Consolas', monospace;
+  --text-color-secondary: color-mix(
+    in srgb,
+    var(--text-color) 50%,
+    transparent
+  ); /* 辅助文字颜色（主文字色 60% 混合透明） */
+
+  /* ---- 字号层级（以 --font-size-base 为基准按比例缩放） ---- */
+  --fs-title: calc(var(--font-size-base) * 1.125); /* 标题（base=18 → 20.25） */
+  --fs-body: var(--font-size-base); /* 正文/标签/按钮 */
+  --fs-secondary: calc(var(--font-size-base) * 0.8); /* 所有辅助文字（base=18 → 15.75） */
+  --note-remark-font-size: calc(var(--font-size-base) - 1rem); /* 设置载入前的备注字号回退值 */
+  --compact-content-font-size: 17px; /* 灵动岛固定像素字号，不受窄窗口根 rem 缩放影响 */
+  --fs-month-event: calc(var(--font-size-base) * 0.72); /* 月历日期格便签摘要 */
+
+  /* 持久化 CSS 变量由 main.js 在挂载前从 shared/settings-schema.js 注入。 */
+  --glass-opacity-base: var(--popup-opacity);
+  --window-border-width: 0px;
+
+  /* ---- 中性材质层级 ----
+   * 常态表面从背景色派生，避免文字色填充在壁纸上形成灰膜；中性边线从文字色派生，
+   * 在纯白、纯黑与图片背景上都保留方向正确的对比。组件细线固定使用 1px。 */
+  --ui-border-divider: color-mix(in srgb, var(--text-color) 6%, transparent);
+  --ui-border-control: color-mix(in srgb, var(--text-color) 12%, transparent);
+  --ui-border-hover: color-mix(in srgb, var(--text-color) 16%, transparent);
+  /* 窗口轮廓与日历网格需要在复杂壁纸上保持稳定，但两者不能共用强度。
+   * 外框使用文字色主轮廓 + 背景色内缘；日历只使用单线分隔。 */
+  --window-border-outline: color-mix(in srgb, var(--text-color) 18%, transparent);
+  --window-border-inner-rim: rgb(var(--bg-color) / 0.22);
+  --calendar-grid-line: color-mix(in srgb, var(--text-color) 9%, transparent);
+  /* 今天使用独立的日期定位红色；不是危险操作，也不填充日期格表面。 */
+  --calendar-today-border: #ff453a;
+  --ui-surface-subtle: rgb(var(--bg-color) / 0.1);
+  --ui-surface-control: rgb(var(--bg-color) / 0.18);
+  --ui-surface-control-hover: rgb(var(--bg-color) / 0.26);
+  --ui-fill-passive: color-mix(in srgb, var(--text-color) 5%, transparent);
+  --ui-fill-hover: color-mix(in srgb, var(--text-color) 4%, transparent);
+  --ui-fill-pressed: color-mix(in srgb, var(--text-color) 10%, transparent);
+
+  /* ---- 交互语义色 ---- */
+  --ui-primary: #0071e3;
+  --ui-primary-hover: #0064c8;
+  --ui-on-primary: #fff;
+  --ui-status-pending: #0a84ff;
+  --ui-status-progress: #ff9f0a;
+  --ui-status-completed: #30d158;
+  --ui-danger: #ff453a;
+  --ui-danger-solid: #c9342b;
+  --ui-danger-hover: #b12c24;
+  --ui-on-danger: #fff;
+  --ui-menu-highlight: var(--ui-primary);
+  --ui-menu-on-highlight: var(--ui-on-primary);
+  --ui-control-radius: 6rem;
+  --ui-menu-radius: 10rem;
+  --ui-menu-row-height: max(28px, 30rem);
+  --ui-menu-shadow: 0 8rem 20rem rgba(0, 0, 0, 0.12), 0 1rem 4rem rgba(0, 0, 0, 0.06);
+  --ui-accent: #0a84ff;
+  --ui-accent-subtle: color-mix(in srgb, var(--ui-accent) 15%, transparent);
+  --ui-warning: rgb(255, 149, 0);
+
+  /* 模态内容必须先形成稳定表面，再承载内部控件；用户透明度仍可向上调高。 */
+  --surface-panel: rgb(var(--bg-color) / max(var(--popup-opacity), 0.52));
+  --surface-modal: rgb(var(--bg-color) / max(var(--popup-opacity), 0.72));
+  --surface-modal-scrim: rgba(0, 0, 0, 0.12);
+
+  /* 高频交互浮层使用稳定的实体表面，而非局部毛玻璃。
+   * 背景色与文字色均来自运行时设置，因此主题改变时会同步更新。 */
+  --surface-float: color-mix(in srgb, rgb(var(--bg-color)) 96%, var(--text-color) 4%);
+  --surface-float-border: var(--ui-border-control);
+
+  /* ---- 层级令牌 ----
+   * 局部层级只在组件自己的层叠上下文中比较；全局层级只用于 body 直属浮层、
+   * Teleport 和脱离组件树的动画副本。组件内禁止继续写任意数字 z-index。 */
+  --z-local-base: 0;
+  --z-local-content: 1;
+  --z-local-raised: 2;
+  --z-local-overlay: 3;
+  --z-local-top: 4;
+
+  --z-global-presence: 1;
+  --z-global-panel: 2;
+  --z-global-workspace: 3;
+  --z-global-editor: 4;
+  --z-global-modal: 5;
+  --z-global-popover: 6;
+  --z-global-preview: 7;
+  --z-global-confirm: 8;
+  --z-global-toast: 9;
+  --z-global-critical: 10;
+
+  /* ---- Motion Tokens：克制、连续的 Apple 风格反馈 ---- */
+  --motion-fast: 120ms;
+  --motion-control: 180ms;
+  --motion-panel: 260ms;
+  --motion-panel-exit: 220ms;
+  --ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 原生毛玻璃已提供稳定表面时，窗口内缘和日历分隔线自动降一档，
+ * 避免与模糊后的背景同时突出。以实际运行状态而不是设置开关为准。 */
+:root.is-system-glass-active {
+  --window-border-outline: var(--ui-border-control);
+  --window-border-inner-rim: rgb(var(--bg-color) / 0.12);
+  --calendar-grid-line: var(--ui-border-divider);
+}
+
+/* ---- body 基础样式 ---- */
+body {
+  font-family: var(--font-family-text), sans-serif; /* 使用正文字体变量 */
+  font-size: var(--fs-body); /* 全局正文默认字号 */
+  font-weight: 500; /* OPPOSans Medium（正文基准字重） */
+  color: var(--text-color); /* 使用全局文字颜色 */
+  background: transparent; /* 透明背景，配合 BrowserWindow transparent:true */
+  overflow: hidden; /* 隐藏溢出内容，避免出现不必要的滚动条 */
+  user-select: text; /* 所有页面默认允许选择正文和辅助文字 */
+
+  text-rendering: optimizeLegibility; /* 优先保证字形清晰度（适合正文大小文字） */
+}
+
+/* 交互控件维持桌面应用手感；输入控件继续使用浏览器原生文字选择。 */
+button,
+[role='button'],
+[role='menuitem'],
+[draggable='true'] {
+  user-select: none;
+}
+
+/* ---- 应用背景容器 ---- */
+.app-bg {
+  position: relative;
+  border: 0;
+}
+
+/* Windows 原生玻璃启用时，背景色与模糊由同一个 DComp Overlay 合成。
+ * Renderer 只绘制内容和可选边框，窗口 resize 时不再出现两套可见底色追帧。 */
+html.is-system-glass-active .app-root.app-bg,
+html.is-system-glass-active .month-root.app-bg {
+  background-color: transparent;
+}
+
+/* 历史版本使用 ::before / ::after 叠加霜层；现在 ::before 保持禁用，
+ * ::after 只负责可选的窗口内侧边框，不参与背景材质。 */
+.app-bg::before {
+  display: none;
+}
+
+.app-bg::after {
+  content: '';
+  position: absolute;
+  z-index: var(--z-local-top);
+  inset: 0;
+  display: block;
+  border: var(--window-border-width) solid var(--window-border-outline);
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 var(--window-border-width) var(--window-border-inner-rim);
+  pointer-events: none;
+}
+
+/* 主窗口的旧模糊伪层继续禁用；可选边框由 .app-bg::after 统一绘制。 */
+.app-root::before {
+  display: none;
+}
+
+/* UI 背景失焦的唯一实现：模态层、设置页、模板页和帮助页全部复用。 */
+.is-ui-background-blurred {
+  filter: blur(var(--bg-blur));
+  will-change: filter;
+}
+
+/* Text caret and the existing control edge identify input focus; never add nested rings. */
+html body :is(input, textarea, [contenteditable='true']):focus {
+  outline: none;
+}
+/* Keyboard-only navigation uses a restrained neutral cue, with no blue halo. */
+:where(button, a, summary, [tabindex]):focus-visible {
+  outline: 1px solid var(--ui-border-hover);
+  outline-offset: 2px;
+}
+/* Stable gutters expose long content without changing width on hover. */
+.scroll-y {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-border-hover) transparent;
+  scrollbar-gutter: stable;
+}
+.scroll-y::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+.scroll-y::-webkit-scrollbar-thumb {
+  background: var(--ui-border-hover);
+  border-radius: 6px;
+}
+.scroll-y::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-y::-webkit-scrollbar-button {
+  display: none;
+}
+@supports selector(::-webkit-scrollbar) {
+  .scroll-y {
+    /* Chromium 的非 auto 标准属性会覆盖上述绘制规则，保留圆角细滑块而非原生箭头轨道。 */
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+}

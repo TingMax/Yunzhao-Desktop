@@ -1,0 +1,2150 @@
+<script setup>
+import { useModalRequest } from '../../composables/useQueuedModal.js'
+/**
+ * NoteList.vue — 待办列表（时间线、自定义拖拽、标签分组三种模式）
+ *
+ * 3.5 + 3.6: 新增自定义拖拽模式，集成 vuedraggable
+ * - 三状态：initialized / in_progress / completed
+ */
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useSharedMinuteClock } from '../../composables/useSharedMinuteClock.js'
+import { useTodayKey } from '../../composables/useTodayKey.js'
+import { useWeatherRecovery } from '../../composables/useWeatherRecovery.js'
+import { useDateContextSettings } from '../../composables/useDateContextSettings.js'
+import { getSettingsSnapshotStore } from '../../utils/settingsSnapshots.js'
+import { parseSettingsReceipt } from '../../../../shared/settings-receipt.js'
+import DateContextSummary from '../almanac/DateContextSummary.vue'
+import draggable from 'vuedraggable'
+import TagSelector from '../ui/TagSelector.vue'
+import FilterTabs from '../ui/FilterTabs.vue'
+import NoteCard from '../note/NoteCard.vue'
+import ListDisclosure from './ListDisclosure.vue'
+import ConfirmDialog from '../ui/ConfirmDialog.vue'
+import TagManagerDialog from '../ui/TagManagerDialog.vue'
+import { DEFAULT_SETTINGS } from '../../../../shared/settings-schema.js'
+import { useNotePresenceMotion } from '../../composables/useNotePresenceMotion.js'
+import { useMessage } from '../../composables/useMessage.js'
+import { buildDisplayableWeatherByDate, getWeatherForNote } from '../../utils/noteWeather.js'
+import { useNoteListQuerySession } from '../../composables/useNoteListQuerySession.js'
+import { useNoteStatusActions } from '../../composables/useNoteStatusActions.js'
+import { useTimelineListModel } from '../../composables/useTimelineListModel.js'
+import { useCustomListModel } from '../../composables/useCustomListModel.js'
+import { useTagGroupListModel } from '../../composables/useTagGroupListModel.js'
+import {
+  createRefreshCauses,
+  traceViewRefresh,
+  summarizeViewNotes
+} from '../../utils/diagnosticEvidence.js'
+
+const refreshCauses = createRefreshCauses('list')
+function traceListLoad(mode, options, work, notes) {
+  const expectedSequence = querySession.sequence + 1
+  return traceViewRefresh(
+    'list',
+    {
+      mode,
+      statuses: [...statusFilter.value],
+      tagIds: [...tagFilterIds.value],
+      ...options?.diagnosticCauses
+    },
+    work,
+    () => summarizeViewNotes(notes()),
+    () => querySession.sequence === expectedSequence
+  )
+}
+
+const emit = defineEmits(['edit'])
+const { showMessage } = useMessage()
+const todayKey = useTodayKey()
+const settingsSnapshots = getSettingsSnapshotStore(window.api)
+const filterIntentOwner = Symbol('note-list-filter')
+const sortIntentOwner = Symbol('note-list-sort-presentation')
+useWeatherRecovery()
+const dateContext = useDateContextSettings()
+const {
+  weatherEnabled: weatherDisplayEnabled,
+  almanacEnabled,
+  forecast: weatherForecast
+} = dateContext
+
+/** 排序模式：timeline | custom | tag-group */
+const sortMode = ref(DEFAULT_SETTINGS.listFilter.listMode)
+const minimalMode = ref(DEFAULT_SETTINGS.listAppearance.minimalMode)
+
+/** 排序模式显示文本 */
+const modeOptions = [
+  { value: 'timeline', label: '时间线' },
+  { value: 'custom', label: '自定义' },
+  { value: 'tag-group', label: '标签分组' }
+]
+const sortModeLabel = computed(
+  () => modeOptions.find((option) => option.value === sortMode.value)?.label || '时间线'
+)
+/** 模式切换只保留最新意图，使用短离场和统一入场。 */
+let modeSwitchRunning = false
+let modePresenceSwitching = false
+let pendingSortMode = null
+let activeSortIntent = null
+let sortWriteOrigin = null
+function assignSortModeFromIntent(nextMode, intent) {
+  const previous = sortWriteOrigin
+  sortWriteOrigin = intent.release
+  try {
+    sortMode.value = nextMode
+  } finally {
+    sortWriteOrigin = previous
+  }
+}
+async function selectSortMode(nextMode, existingIntent = null) {
+  if (querySession.disposed || !modeOptions.some((option) => option.value === nextMode)) {
+    existingIntent?.release()
+    return
+  }
+  if (!modeSwitchRunning && !replayRefreshRunning && nextMode === sortMode.value) {
+    existingIntent?.release()
+    return
+  }
+  const intent = existingIntent || {
+    mode: nextMode,
+    // Empty-domain leases join reset checkpoints without projecting a mode
+    // that is still waiting for its departure animation.
+    release: settingsSnapshots.protectDomain(sortIntentOwner, 'sort-presentation')
+  }
+  if (modeSwitchRunning || replayRefreshRunning) {
+    pendingSortMode?.release()
+    pendingSortMode = intent
+    return
+  }
+  if (!intent.release.isActive()) {
+    intent.release()
+    return
+  }
+  if (nextMode !== 'tag-group') exitTagGroupSortMode()
+  modeSwitchRunning = true
+  activeSortIntent = intent
+  const previousMode = sortMode.value
+  const previousTimeline = noteList.value
+  const previousCustom = customList.value
+  const previousTagGroups = tagGroups.value
+  const switchSeq = ++presenceMotionSeq
+  const current = () =>
+    !querySession.disposed &&
+    activeSortIntent === intent &&
+    intent.release.isActive() &&
+    switchSeq === presenceMotionSeq
+  const cancelExits = () => {
+    if (!querySession.disposed) cancelCurrentPresenceExits()
+  }
+  try {
+    await animateCurrentCardsOut({ includeAuxiliary: true })
+    if (!current()) {
+      cancelExits()
+      return
+    }
+
+    // 只清空即将进入的目标列表；源列表保留为失败回滚快照。
+    if (nextMode === 'timeline') {
+      timelineModel.replaceItems([])
+    } else if (nextMode === 'custom') {
+      customModel.replaceItems([])
+      syncCustomZones()
+    } else {
+      tagGroups.value = []
+    }
+    await nextTick()
+    if (!current()) {
+      cancelExits()
+      return
+    }
+
+    modePresenceSwitching = true
+    assignSortModeFromIntent(nextMode, intent)
+    await nextTick()
+    if (!current()) {
+      cancelExits()
+      return
+    }
+    const result = await switchMode(nextMode, { showLoading: false, preserveAnchor: false }, false)
+    if (!current()) {
+      cancelExits()
+      return
+    }
+    if (result?.status !== 'success') {
+      timelineModel.replaceItems(previousTimeline)
+      customModel.replaceItems(previousCustom)
+      tagGroups.value = previousTagGroups
+      syncCustomZones()
+      assignSortModeFromIntent(previousMode, intent)
+      await nextTick()
+      if (!current()) return
+      animateAuxiliaryIn()
+      animateRetainedCards(new Map())
+      return
+    }
+    await nextTick()
+    if (!current()) {
+      cancelExits()
+      return
+    }
+    animateAuxiliaryIn()
+    animateRetainedCards(new Map())
+  } finally {
+    intent.release()
+    if (!querySession.disposed && activeSortIntent === intent) {
+      activeSortIntent = null
+      modePresenceSwitching = false
+      modeSwitchRunning = false
+      resumePendingSortMode()
+    }
+  }
+}
+
+function resumePendingSortMode() {
+  const intent = pendingSortMode
+  pendingSortMode = null
+  if (!intent) return
+  if (querySession.disposed || !intent.release.isActive() || intent.mode === sortMode.value) {
+    intent.release()
+    return
+  }
+  void selectSortMode(intent.mode, intent)
+}
+
+function cancelResetSortIntents() {
+  if (pendingSortMode && !pendingSortMode.release.isActive()) {
+    pendingSortMode.release()
+    pendingSortMode = null
+  }
+  if (activeSortIntent && !activeSortIntent.release.isActive()) {
+    presenceMotionSeq += 1
+    cancelCurrentPresenceExits()
+  }
+}
+
+// 筛选面板 chip 的轻量错峰；待办本身的进出场由列表 ID 差分协调器统一处理。
+const STAGGER_STEP = 28 // 首屏轻量错峰，保持列表出现迅速
+const STAGGER_MAX = 7 // 只错峰前 8 张，长列表不再等待
+/**
+ * 按全局序号计算卡片入场动画延迟（等差递增，与新建面板一致）。
+ */
+function staggerDelay(index) {
+  return Math.min(index, STAGGER_MAX) * STAGGER_STEP + 'ms'
+}
+/** 待办列表 */
+/** 加载状态 */
+const querySession = useNoteListQuerySession({
+  getFilters: () => ({ statuses: statusFilter.value, tagIds: tagFilterIds.value })
+})
+const { loading, loadError, allNoteTotal, lastRefreshedAt } = querySession
+const weatherNow = useSharedMinuteClock()
+const weatherByDate = computed(() =>
+  buildDisplayableWeatherByDate(weatherForecast.value, Math.max(weatherNow.value, Date.now()))
+)
+/** 全部未删除待办总数，不受当前标签/状态筛选影响。 */
+const lastRefreshLabel = computed(() => formatRefreshTime(lastRefreshedAt.value))
+const timelineScrollRef = ref(null)
+const customScrollRef = ref(null)
+const tagGroupScrollRef = ref(null)
+
+function currentScrollContainer() {
+  if (sortMode.value === 'timeline') return timelineScrollRef.value
+  if (sortMode.value === 'custom') return customScrollRef.value
+  return tagGroupScrollRef.value
+}
+
+function formatRefreshTime(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((value) => String(value).padStart(2, '0'))
+    .join(':')
+}
+
+function weatherForNote(note) {
+  return getWeatherForNote(note, weatherByDate.value)
+}
+
+/** 标签筛选 ID 列表 */
+const tagFilterIds = ref([...DEFAULT_SETTINGS.listFilter.tagIds])
+
+/** 工具栏面板：tags | status | mode；taiji 表示全部收起。 */
+const panelState = ref('taiji')
+// 退出动画结束前仍视为可见，避免按钮组抢先收回。
+const panelLeaving = ref(false)
+
+/** 状态筛选列表 */
+const statusFilter = ref([...DEFAULT_SETTINGS.listFilter.statusFilter])
+
+/** FilterTabs 选项 */
+const panelOptions = [
+  { value: 'taiji', label: '刷新并收起筛选' },
+  { value: 'tags', label: '按标签筛选' },
+  { value: 'status', label: '按状态筛选' }
+]
+
+/** 面板点击：单选 + 展开/收起逻辑 */
+function onPanelClick(value) {
+  if (value === 'taiji') {
+    panelState.value = 'taiji'
+    replayListRefresh()
+    return
+  }
+  if (panelState.value === value) {
+    panelState.value = 'taiji'
+  } else {
+    panelState.value = value
+  }
+}
+
+/** 状态筛选项 */
+const statusOptions = [
+  { value: 'initialized', label: '未开始' },
+  { value: 'in_progress', label: '进行中' },
+  { value: 'completed', label: '完成' }
+]
+
+/** 切换状态筛选 */
+function toggleStatus(value) {
+  const idx = statusFilter.value.indexOf(value)
+  if (idx === -1) {
+    statusFilter.value = [...statusFilter.value, value]
+  } else {
+    statusFilter.value = statusFilter.value.filter((s) => s !== value)
+  }
+}
+
+// ============================================================
+// 数据加载
+// ============================================================
+
+/** 请求令牌：并发加载时只接受最新一次结果，避免旧请求覆盖新数据 */
+
+const timelineModel = useTimelineListModel({
+  session: querySession,
+  api: window.api,
+  presentation: {
+    captureAnchor: captureScrollAnchor,
+    captureLayout: () => captureVisibleCardLayout(),
+    restoreAnchor: restoreScrollAnchor,
+    animatePage: async (before) => {
+      await nextTick()
+      animateRetainedCards(before)
+    }
+  }
+})
+const {
+  noteList,
+  earlierOffset,
+  earlierHasMore,
+  earlierLoading,
+  earlierHasData,
+  totalRendered,
+  timelineIsEmpty,
+  recentTimelineGroups,
+  earlierTimelineGroups,
+  collapsedGroups,
+  loadEarlier,
+  clearCollapsedEarlier,
+  toggleGroupCollapse
+} = timelineModel
+
+/** 时间线模式：并行加载置顶 + 三天 + 更早计数，合并到单一列表 */
+function captureScrollAnchor(nextNotes = null) {
+  const container = currentScrollContainer()
+  if (!container) return null
+  const context = { container, sequence: querySession.sequence, scrollTop: container.scrollTop }
+  const containerTop = container.getBoundingClientRect().top
+  const cards = [...container.querySelectorAll('[data-note-id]')]
+  if (nextNotes) {
+    const nextPositions = new Map(nextNotes.map((note, index) => [String(note.id), index]))
+    let previousPosition = -1
+    const reordered = cards.some((item) => {
+      const position = nextPositions.get(item.dataset.noteId)
+      if (position === undefined) return false
+      if (position < previousPosition) return true
+      previousPosition = position
+      return false
+    })
+    // 排序变化只移动卡片，不让视口追着完成项跳到组尾；增删仍保留阅读锚点。
+    if (reordered) return { ...context, id: null }
+  }
+  const card = cards.find((item) => item.getBoundingClientRect().bottom > containerTop)
+  return card
+    ? {
+        ...context,
+        id: card.dataset.noteId,
+        offset: card.getBoundingClientRect().top - containerTop
+      }
+    : { ...context, id: null }
+}
+
+async function restoreScrollAnchor(anchor) {
+  if (!anchor) return
+  await nextTick()
+  const container = currentScrollContainer()
+  if (!container || container !== anchor.container || anchor.sequence !== querySession.sequence)
+    return
+  if (!anchor.id) {
+    container.scrollTop = anchor.scrollTop || 0
+    return
+  }
+  const card = [...container.querySelectorAll('[data-note-id]')].find(
+    (item) => item.dataset.noteId === anchor.id
+  )
+  if (!card) return
+  const containerTop = container.getBoundingClientRect().top
+  container.scrollTop += card.getBoundingClientRect().top - containerTop - anchor.offset
+}
+
+function loadAll(options = {}) {
+  return traceListLoad(
+    'timeline',
+    options,
+    () => timelineModel.load(options),
+    () => noteList.value
+  )
+}
+/** 主容器滚动触底检测（更早展开 + 有更多数据时自动加载） */
+let scrollPending = false
+function onTimelineScroll(e) {
+  if (scrollPending) return
+  scrollPending = true
+  requestAnimationFrame(() => {
+    scrollPending = false
+    const el = e.target
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+      loadEarlier()
+    }
+  })
+}
+
+// ---- 自定义模式：单列表 + 日常分页 ----
+const customModel = useCustomListModel({
+  session: querySession,
+  api: window.api,
+  presentation: {
+    captureAnchor: captureScrollAnchor,
+    restoreAnchor: restoreScrollAnchor,
+    captureLayout: () => captureVisibleCardLayout(),
+    animatePage: async (before) => {
+      await nextTick()
+      animateRetainedCards(before)
+    }
+  }
+})
+const {
+  customList,
+  customNormalHasMore,
+  customNormalTotal,
+  customNormalLoading,
+  customTotalRendered,
+  loadMore: loadCustomMore
+} = customModel
+
+/** 自定义模式：并行加载置顶 + 日常首 10 条 */
+function loadCustom(options = {}) {
+  return traceListLoad(
+    'custom',
+    options,
+    () => customModel.load(options),
+    () => customList.value
+  )
+}
+/** 自定义模式滚动触底检测 */
+function onCustomScroll(e) {
+  const el = e.target
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+    loadCustomMore()
+  }
+}
+
+// ---- 标签分组模式：分组概览 + 展开后手动分页 ----
+const tagGroupModel = useTagGroupListModel({
+  session: querySession,
+  api: window.api,
+  presentation: {
+    captureAnchor: captureScrollAnchor,
+    restoreAnchor: restoreScrollAnchor,
+    captureLayout: () => captureVisibleCardLayout(),
+    animatePage: async (before, isCurrent) => {
+      await nextTick()
+      if (isCurrent()) animateRetainedCards(before)
+    }
+  }
+})
+const tagGroups = computed({
+  get: () => tagGroupModel.tagGroups.value,
+  set: (groups) => tagGroupModel.replaceGroups(groups)
+})
+const {
+  tagGroupMatchingTotal,
+  tagGroupCanSort,
+  loadPage: loadTagGroupPage,
+  collapseAll: collapseAllTagGroups
+} = tagGroupModel
+const tagGroupDragging = ref(false)
+const tagGroupSortMode = ref(false)
+const tagGroupSortPreparing = ref(false)
+const tagGroupContextMenuVisible = ref(false)
+const tagGroupContextMenuRef = ref(null)
+const tagGroupContextMenuStyle = ref({})
+const tagManagerQueue = useModalRequest()
+const tagManagerVisible = tagManagerQueue.requested
+let tagGroupSortEntrySequence = 0
+let tagGroupSortEntryTimer = null
+let resolveTagGroupSortEntry = null
+
+function loadTagGroups(options = {}) {
+  return traceListLoad(
+    'tag-group',
+    options,
+    () => tagGroupModel.load(options),
+    () => tagGroups.value.flatMap((group) => group.notes || [])
+  )
+}
+async function toggleTagGroup(group) {
+  if (tagGroupSortMode.value || tagGroupSortPreparing.value || tagGroupDragging.value) return
+  return tagGroupModel.toggleGroup(group)
+}
+
+function exitTagGroupSortMode() {
+  tagGroupSortEntrySequence++
+  clearTimeout(tagGroupSortEntryTimer)
+  tagGroupSortEntryTimer = null
+  resolveTagGroupSortEntry?.()
+  resolveTagGroupSortEntry = null
+  tagGroupSortPreparing.value = false
+  tagGroupSortMode.value = false
+  tagGroupDragging.value = false
+}
+
+async function toggleTagGroupSortMode() {
+  if (tagGroupDragging.value || tagGroupSortPreparing.value) return
+  if (tagGroupSortMode.value) {
+    exitTagGroupSortMode()
+    return
+  }
+
+  closeTagGroupContextMenu()
+  tagGroupSortPreparing.value = true
+  const shouldWaitForCollapse = tagGroups.value.some((group) => group.expanded || group.opening)
+  collapseAllTagGroups()
+  const entrySequence = ++tagGroupSortEntrySequence
+  await nextTick()
+  if (shouldWaitForCollapse) {
+    await new Promise((resolve) => {
+      resolveTagGroupSortEntry = resolve
+      tagGroupSortEntryTimer = setTimeout(() => {
+        tagGroupSortEntryTimer = null
+        resolveTagGroupSortEntry = null
+        resolve()
+      }, 300)
+    })
+  }
+  if (entrySequence !== tagGroupSortEntrySequence || sortMode.value !== 'tag-group') return
+  tagGroupSortPreparing.value = false
+  tagGroupSortMode.value = true
+}
+
+function canMoveTagGroup(event) {
+  if (event.draggedContext?.element?.untagged) return false
+  // “未分类”是系统分组，始终保留在列表末尾。
+  return !(event.relatedContext?.element?.untagged && event.willInsertAfter)
+}
+
+function onTagGroupDragStart() {
+  tagGroupDragging.value = true
+}
+
+async function onTagGroupDragEnd() {
+  tagGroupDragging.value = false
+  const orderedTagIds = tagGroupModel.orderedTagIds()
+  try {
+    await window.api.updateTagOrder(orderedTagIds)
+  } catch (error) {
+    console.error('[NoteList] 保存标签顺序失败:', error)
+    showMessage('error', error.message || '保存标签顺序失败')
+    await loadTagGroups({ showLoading: false, preserveAnchor: true })
+  }
+}
+
+function closeTagGroupContextMenu() {
+  tagGroupContextMenuVisible.value = false
+  document.removeEventListener('pointerdown', onTagGroupContextMenuOutside)
+  document.removeEventListener('keydown', onTagGroupContextMenuKeydown)
+  window.removeEventListener('resize', closeTagGroupContextMenu)
+  window.removeEventListener('scroll', closeTagGroupContextMenu, true)
+}
+
+function onTagGroupContextMenuOutside(event) {
+  if (tagGroupContextMenuRef.value?.contains(event.target)) return
+  closeTagGroupContextMenu()
+}
+
+function onTagGroupContextMenuKeydown(event) {
+  if (event.key === 'Escape') closeTagGroupContextMenu()
+}
+
+async function openTagGroupContextMenu(event) {
+  if (tagGroupSortMode.value || tagGroupSortPreparing.value) {
+    event.preventDefault()
+    return
+  }
+  if (event.target.closest?.('[data-note-id]')) return
+  event.preventDefault()
+  closeTagGroupContextMenu()
+  tagGroupContextMenuStyle.value = { left: `${event.clientX}px`, top: `${event.clientY}px` }
+  tagGroupContextMenuVisible.value = true
+  await nextTick()
+  const rect = tagGroupContextMenuRef.value?.getBoundingClientRect()
+  if (!rect) return
+  const gap = 8
+  tagGroupContextMenuStyle.value = {
+    left: `${Math.max(gap, Math.min(event.clientX, window.innerWidth - rect.width - gap))}px`,
+    top: `${Math.max(gap, Math.min(event.clientY, window.innerHeight - rect.height - gap))}px`
+  }
+  document.addEventListener('pointerdown', onTagGroupContextMenuOutside)
+  document.addEventListener('keydown', onTagGroupContextMenuKeydown)
+  window.addEventListener('resize', closeTagGroupContextMenu)
+  window.addEventListener('scroll', closeTagGroupContextMenu, true)
+}
+
+function openCreateTagManager() {
+  closeTagGroupContextMenu()
+  tagManagerVisible.value = true
+}
+
+function retryTagGroup(group) {
+  loadTagGroupPage(group, { reset: group.notes.length === 0 })
+}
+
+// ============================================================
+// 时间线分组（从单一 noteList 派生）
+// ============================================================
+
+// ============================================================
+// 自定义模式（置顶 + 日常，拖拽排序 + 滚动分页）
+// ============================================================
+
+const customPinnedNotes = ref([])
+const customNormalNotes = ref([])
+
+/** 从 customList 派生拖拽区数组 */
+function syncCustomZones() {
+  customPinnedNotes.value = customList.value.filter((n) => n.is_pinned)
+  customNormalNotes.value = customList.value.filter((n) => !n.is_pinned)
+}
+
+/** customList 变化时自动同步拖拽区 */
+let _customSyncTimer = null
+watch(
+  customList,
+  () => {
+    clearTimeout(_customSyncTimer)
+    _customSyncTimer = setTimeout(syncCustomZones, 0)
+  },
+  { deep: false }
+)
+
+// ---- 拖拽排序回调 ----
+
+async function onCustomPinnedDragEnd() {
+  await customModel.reorderZone(true, customPinnedNotes.value)
+  syncCustomZones()
+}
+
+async function onCustomNormalDragEnd() {
+  await customModel.reorderZone(false, customNormalNotes.value)
+  syncCustomZones()
+}
+
+const statusActions = useNoteStatusActions({
+  api: window.api,
+  onCommit(updated, note, { from, to }) {
+    // Keep the old group until the ring finishes its early-start transition.
+    const resetsEffectiveTime = from === 'initialized' && to === 'in_progress'
+    patchVisibleNote(
+      resetsEffectiveTime ? { ...updated, effective_at: note.effective_at } : updated,
+      true
+    )
+  },
+  onFinish(updated, note, { from, to, reconcile = false }) {
+    const remainsVisible =
+      statusFilter.value.length === 0 || statusFilter.value.includes(updated.status)
+    const resetsEffectiveTime = from === 'initialized' && to === 'in_progress'
+    const changedEffectiveTimeOrdering =
+      resetsEffectiveTime &&
+      ((sortMode.value === 'timeline' && !note.is_pinned) || sortMode.value === 'tag-group')
+    const changedCompletionOrdering =
+      (from === 'completed' || to === 'completed') && sortMode.value !== 'custom'
+    if (reconcile || !remainsVisible || changedEffectiveTimeOrdering || changedCompletionOrdering) {
+      scheduleNotesRefresh({
+        reenterIds: changedEffectiveTimeOrdering && remainsVisible ? [note.id] : []
+      })
+    }
+  },
+  onError(error, note, { committed }) {
+    console.error('[NoteList] 状态操作失败:', note.id, error)
+    showMessage(
+      'error',
+      committed ? '待办状态已保存，显示更新失败，请刷新' : error?.message || '无法修改待办状态'
+    )
+  }
+})
+const {
+  transitions: statusTransitions,
+  transitionFor: statusTransitionFor,
+  execute: executeCardStatusAction
+} = statusActions
+const earlyStartConfirmVisible = ref(false)
+const earlyStartNote = ref(null)
+const earlyStartMessage = computed(() => {
+  if (earlyStartNote.value?.duration_kind === 'until_completed') {
+    return '该待办设置为持续到完成。提前执行后，生效时间将改为当前时间，并从今天开始连续显示，直到标记完成。是否确认提前执行？'
+  }
+  const durationDays = Math.max(1, Number(earlyStartNote.value?.duration_days) || 1)
+  if (durationDays > 1) {
+    return `该待办设置了持续 ${durationDays} 天。提前执行后，生效时间将改为当前时间，日历视图中的连续显示日期也会从今天重新计算。是否确认提前执行？`
+  }
+  return '该待办尚未到达生效时间。提前执行后，生效时间将改为当前时间。是否确认提前执行？'
+})
+
+/** 未开始待办先确认提前执行；其他状态保持原有单击流程。 */
+function onCardStatusAction(note) {
+  if (querySession.disposed || statusTransitions.has(note.id)) return
+  if (note.status === 'initialized') {
+    earlyStartNote.value = note
+    earlyStartConfirmVisible.value = true
+    return
+  }
+  void executeCardStatusAction(note)
+}
+
+function confirmEarlyStart() {
+  const note = earlyStartNote.value
+  earlyStartNote.value = null
+  if (note) void executeCardStatusAction(note)
+}
+
+function cancelEarlyStart() {
+  earlyStartNote.value = null
+}
+
+function patchVisibleNote(updated, force = false) {
+  const allowed = statusFilter.value.length === 0 || statusFilter.value.includes(updated.status)
+  if (!allowed && !force) return false
+  if (sortMode.value === 'timeline') {
+    timelineModel.patchNote(updated)
+    return true
+  }
+  if (sortMode.value === 'custom') {
+    customModel.patchNote(updated)
+    syncCustomZones()
+    return true
+  }
+  return tagGroupModel.patchNote(updated)
+}
+
+async function refreshOne(noteOrId) {
+  const id = typeof noteOrId === 'object' ? noteOrId?.id : noteOrId
+  if (!id) return
+  const updated =
+    typeof noteOrId === 'object' && Array.isArray(noteOrId.tags)
+      ? noteOrId
+      : await window.api.getNote(id)
+  if (updated) {
+    if (!patchVisibleNote(updated)) await refreshInBackground()
+    else querySession.markRefreshed()
+  }
+}
+
+let presenceMotionSeq = 0
+
+const {
+  captureVisibleCardLayout,
+  animateRetainedCards,
+  animateAuxiliaryIn,
+  cancelCurrentPresenceExits,
+  animateCurrentCardsOut,
+  disposePresenceMotion
+} = useNotePresenceMotion(currentScrollContainer)
+
+/** 用户主动刷新：完整播放依次离场 → 清空 → 重新查询 → 依次进场。 */
+let replayRefreshRunning = false
+async function replayListRefresh() {
+  if (replayRefreshRunning) return
+  replayRefreshRunning = true
+  const refreshSeq = ++presenceMotionSeq
+  try {
+    const container = currentScrollContainer()
+    const scrollTop = container?.scrollTop || 0
+    await animateCurrentCardsOut()
+    if (refreshSeq !== presenceMotionSeq) {
+      cancelCurrentPresenceExits()
+      return
+    }
+
+    const options = { showLoading: false, preserveAnchor: false }
+    let result
+    if (sortMode.value === 'timeline') {
+      result = await loadAll(options)
+    } else if (sortMode.value === 'custom') {
+      result = await loadCustom(options)
+      syncCustomZones()
+    } else {
+      result = await loadTagGroups(options)
+    }
+    if (result?.status !== 'success') {
+      cancelCurrentPresenceExits()
+      return
+    }
+    if (refreshSeq !== presenceMotionSeq) {
+      cancelCurrentPresenceExits()
+      return
+    }
+    await nextTick()
+    const refreshedContainer = currentScrollContainer()
+    if (refreshedContainer) refreshedContainer.scrollTop = scrollTop
+    animateRetainedCards(new Map())
+  } finally {
+    if (!querySession.disposed) {
+      replayRefreshRunning = false
+      resumePendingSortMode()
+    }
+  }
+}
+
+async function refreshInBackground({ reenterIds = [], diagnosticCauses } = {}) {
+  const motionSeq = ++presenceMotionSeq
+  const before = captureVisibleCardLayout()
+  const options = { showLoading: false, preserveAnchor: true, diagnosticCauses }
+  let result
+  if (sortMode.value === 'timeline') {
+    result = await loadAll(options)
+  } else if (sortMode.value === 'custom') {
+    result = await loadCustom(options)
+    syncCustomZones()
+  } else {
+    result = await loadTagGroups(options)
+  }
+  if (result?.status !== 'success' || motionSeq !== presenceMotionSeq) return result
+  await nextTick()
+  if (motionSeq !== presenceMotionSeq) return result
+  animateRetainedCards(result.layoutBefore || before, { reenterIds })
+  return result
+}
+
+// ---- 模式切换 ----
+
+async function switchMode(mode, loadOptions, cancelPresence = true) {
+  if (cancelPresence) presenceMotionSeq++
+  if (mode === 'custom') {
+    let result = await loadCustom(loadOptions)
+    if (result?.status !== 'success') return result
+    syncCustomZones()
+    // 主进程检查全部待办，修复早期版本可能留下的 0 或重复排序槽位。
+    const repaired = await window.api.reorderCustomSortOrder()
+    if (repaired) {
+      result = await loadCustom(loadOptions)
+      if (result?.status !== 'success') return result
+      syncCustomZones()
+    }
+    return result
+  }
+  if (mode === 'tag-group') return loadTagGroups(loadOptions)
+  return loadAll(loadOptions)
+}
+
+function retryLoad() {
+  switchMode(sortMode.value, { showLoading: true, preserveAnchor: false })
+}
+
+/** 是否正在恢复持久化状态（恢复期间抑制自动重载/持久化，避免重复请求） */
+let restoring = false
+let bootstrappingSettings = true
+let pendingFilterIntent = null
+let filterWriteTail = null
+
+function currentFilterState() {
+  return {
+    listMode: sortMode.value,
+    tagIds: [...tagFilterIds.value],
+    statusFilter: [...statusFilter.value]
+  }
+}
+
+function protectFilterIntent() {
+  const previous = pendingFilterIntent
+  const value = currentFilterState()
+  const intent = {
+    value,
+    started: false,
+    cancelled: false,
+    task: null,
+    release: settingsSnapshots.protectSetting(filterIntentOwner, 'listFilter', value, {
+      continuationOf: sortWriteOrigin
+    })
+  }
+  pendingFilterIntent = intent
+  if (previous && !previous.started) previous.cancelled = true
+  previous?.release()
+}
+
+/** 同一个设置键串行落盘；列表查询和动画仍由原 watcher 协调。 */
+function saveFilterState() {
+  const intent = pendingFilterIntent
+  if (!intent || querySession.disposed) return Promise.resolve()
+  if (intent.task) return intent.task
+  const previous = filterWriteTail
+  const task = (async () => {
+    if (previous) await previous
+    if (intent.cancelled || querySession.disposed || !intent.release.isActive()) return
+    intent.started = true
+    try {
+      const result = await window.api.setSettingValue('listFilter', intent.value)
+      const receipt = parseSettingsReceipt(result, { source: settingsSnapshots.latest()?.source })
+      if (!receipt.saved) throw new Error(receipt.error?.message || '筛选设置保存结果尚未确认')
+      if (pendingFilterIntent === intent) pendingFilterIntent = null
+      settingsSnapshots.settleWrite(intent.release, result)
+    } catch (error) {
+      // The existing list behavior keeps the chosen filters on save failure.
+      // Keep that intent protected until another choice replaces it or disposal.
+      if (!querySession.disposed) console.warn('[NoteList] 保存筛选状态失败:', error)
+    }
+  })()
+  intent.task = task
+  filterWriteTail = task
+  return task
+}
+
+function isCurrentFilterState(state) {
+  return (
+    state.listMode === sortMode.value &&
+    JSON.stringify(state.tagIds) === JSON.stringify(tagFilterIds.value) &&
+    JSON.stringify(state.statusFilter) === JSON.stringify(statusFilter.value)
+  )
+}
+
+async function applyFilterState(state) {
+  if (!state || isCurrentFilterState(state)) return false
+  restoring = true
+  if (state.listMode !== 'tag-group') exitTagGroupSortMode()
+  sortMode.value = state.listMode
+  tagFilterIds.value = [...state.tagIds]
+  statusFilter.value = [...state.statusFilter]
+  await nextTick()
+  restoring = false
+  return true
+}
+
+/** 从完整设置快照恢复筛选状态。 */
+async function loadFilterState() {
+  restoring = true
+  try {
+    await dateContext.settingsReady
+  } catch (e) {
+    if (querySession.disposed) return
+    if (!settingsSnapshots.latest() && !settingsSnapshots.status().awaitingCanonical)
+      applyInitialSettings({ values: DEFAULT_SETTINGS })
+    console.warn(
+      settingsSnapshots.status().awaitingCanonical
+        ? '[NoteList] 设置已保存，筛选状态仍待读回确认:'
+        : '[NoteList] 恢复筛选状态失败，保留当前值或共享默认值:',
+      e
+    )
+  } finally {
+    // 等响应式 flush 完成后再解除抑制，防止恢复赋值触发重复加载
+    await nextTick()
+    restoring = false
+  }
+}
+
+function applyInitialSettings(snapshot) {
+  if (!snapshot?.values) return
+  restoring = true
+  minimalMode.value =
+    snapshot.values.listAppearance?.minimalMode ?? DEFAULT_SETTINGS.listAppearance.minimalMode
+  const state = snapshot.values.listFilter
+  sortMode.value = state.listMode
+  tagFilterIds.value = [...state.tagIds]
+  statusFilter.value = [...state.statusFilter]
+}
+
+onMounted(async () => {
+  await loadFilterState()
+  if (querySession.disposed) return
+  bootstrappingSettings = false
+  // 统一入口：根据当前模式加载（时间线 / 自定义 / 标签分组）
+  const result = await switchMode(sortMode.value)
+  if (result?.status === 'success') {
+    await nextTick()
+    animateRetainedCards(new Map())
+    animateAuxiliaryIn()
+  }
+})
+
+let notesChangedTimer = null
+const pendingRefreshReenterIds = new Set()
+function scheduleNotesRefresh({ reenterIds = [] } = {}) {
+  for (const id of reenterIds) pendingRefreshReenterIds.add(id)
+  clearTimeout(notesChangedTimer)
+  notesChangedTimer = setTimeout(refreshNotesWhenStatusIdle, 80)
+}
+
+function refreshNotesWhenStatusIdle() {
+  notesChangedTimer = null
+  if (statusTransitions.size > 0) {
+    refreshCauses.defer('status-transition')
+    notesChangedTimer = setTimeout(refreshNotesWhenStatusIdle, 100)
+    return
+  }
+  const reenterIds = [...pendingRefreshReenterIds]
+  pendingRefreshReenterIds.clear()
+  refreshInBackground({ reenterIds, diagnosticCauses: refreshCauses.take() })
+}
+const stopNotesChanged = window.api.onNotesChanged?.((payload) => {
+  refreshCauses.add(payload)
+  // 本地状态回调和主进程广播共用队列，等待所有状态动画结束后只刷新一次。
+  scheduleNotesRefresh()
+})
+watch(todayKey, () => {
+  if (restoring || sortMode.value !== 'timeline') return
+  // 使用同一个后台队列更新最近三天边界、历史分页和日期分组。
+  refreshCauses.add({ reason: 'day-change' })
+  scheduleNotesRefresh()
+})
+
+const stopSettingsChanged = settingsSnapshots.subscribe(
+  async (snapshot, { origin } = {}) => {
+    if (!querySession.disposed && origin === 'reset') cancelResetSortIntents()
+    if (querySession.disposed || !snapshot?.values) return
+    if (bootstrappingSettings) {
+      applyInitialSettings(snapshot)
+      return
+    }
+    minimalMode.value =
+      snapshot?.values?.listAppearance?.minimalMode ?? DEFAULT_SETTINGS.listAppearance.minimalMode
+    const changed = await applyFilterState(snapshot?.values?.listFilter)
+    if (changed && !querySession.disposed) await switchMode(sortMode.value)
+  },
+  { availabilityEvents: true }
+)
+
+let tagsChangedTimer = null
+const stopTagsChanged = window.api.onTagsChanged?.(() => {
+  if (sortMode.value !== 'tag-group') return
+  clearTimeout(tagsChangedTimer)
+  tagsChangedTimer = setTimeout(
+    () => loadTagGroups({ showLoading: false, preserveAnchor: true }),
+    60
+  )
+})
+
+onUnmounted(() => {
+  statusActions.dispose()
+  pendingSortMode?.release()
+  pendingSortMode = null
+  settingsSnapshots.clearOwner(sortIntentOwner)
+  for (const animation of panelMotions.values()) animation.cancel()
+  panelMotions.clear()
+  presenceMotionSeq++
+  querySession.dispose()
+  if (pendingFilterIntent && !pendingFilterIntent.started) pendingFilterIntent.cancelled = true
+  pendingFilterIntent = null
+  settingsSnapshots.clearOwner(filterIntentOwner)
+  exitTagGroupSortMode()
+  disposePresenceMotion()
+  clearTimeout(notesChangedTimer)
+  clearTimeout(tagsChangedTimer)
+  clearTimeout(_customSyncTimer)
+  stopNotesChanged?.()
+  stopSettingsChanged?.()
+  stopTagsChanged?.()
+  closeTagGroupContextMenu()
+})
+
+// 统一响应式入口：排序模式 / 标签 / 状态任一变化 → 重载 + 持久化
+// （切换按钮只翻转 sortMode，加载与持久化都由这里负责，二者与按钮解耦）
+// Protect user values in the same stack; keep asynchronous query/motion batching below.
+watch(
+  [sortMode, tagFilterIds, statusFilter],
+  () => {
+    if (!restoring && !querySession.disposed) protectFilterIntent()
+  },
+  { deep: true, flush: 'sync' }
+)
+watch(
+  [sortMode, tagFilterIds, statusFilter],
+  ([nextMode], [previousMode]) => {
+    if (restoring) return
+    if (nextMode !== 'tag-group') exitTagGroupSortMode()
+    if (nextMode !== previousMode) {
+      if (!modePresenceSwitching) switchMode(nextMode)
+    } else refreshInBackground()
+    saveFilterState() // 持久化筛选条件
+  },
+  { deep: true }
+)
+
+// ============================================================
+// 工具栏面板按 out-in 交换；与列表分组使用同一高度节奏。
+// ============================================================
+const PANEL_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)'
+const panelMotions = new Map()
+
+function animatePanel(el, done, open) {
+  const previous = panelMotions.get(el)
+  const height = previous || !open ? el.getBoundingClientRect().height : 0
+  const opacity = previous || !open ? getComputedStyle(el).opacity : '0'
+  previous?.cancel()
+  el.style.overflow = 'hidden'
+  const animation = el.animate(
+    [
+      { height: `${height}px`, opacity },
+      { height: open ? `${el.scrollHeight}px` : '0px', opacity: open ? 1 : 0 }
+    ],
+    { duration: open ? 260 : 200, easing: PANEL_EASING, fill: 'both' }
+  )
+  panelMotions.set(el, animation)
+  animation.finished.then(
+    () => {
+      if (panelMotions.get(el) !== animation) return
+      panelMotions.delete(el)
+      el.style.overflow = ''
+      done()
+      animation.cancel()
+    },
+    () => {}
+  )
+}
+
+const onPanelEnter = (el, done) => animatePanel(el, done, true)
+const onPanelLeave = (el, done) => animatePanel(el, done, false)
+
+defineExpose({
+  refresh: refreshInBackground,
+  refreshOne
+})
+</script>
+
+<template>
+  <div class="note-list">
+    <!-- 操作组仅占当前可见宽度，其余空间由天气与宜忌平分。 -->
+    <div
+      class="nl-toolbar"
+      :class="{
+        'has-one-summary': weatherDisplayEnabled !== almanacEnabled,
+        'has-no-summaries': !weatherDisplayEnabled && !almanacEnabled
+      }"
+    >
+      <div class="nl-toolbar-controls">
+        <FilterTabs
+          :model-value="panelState"
+          :options="panelOptions"
+          :panel-open="panelState !== 'taiji' || panelLeaving"
+          :mode-label="sortModeLabel"
+          @update:model-value="onPanelClick"
+          @close-panel="panelState = 'taiji'"
+        />
+      </div>
+      <div v-if="weatherDisplayEnabled" class="nl-toolbar-left">
+        <DateContextSummary kind="weather" :forecast="weatherForecast" />
+      </div>
+      <div v-if="almanacEnabled" class="nl-toolbar-right">
+        <DateContextSummary kind="almanac" :forecast="weatherForecast" />
+      </div>
+    </div>
+    <!-- 工具栏面板（标签 / 状态 / 模式；太极=折叠态）—— 单一 out-in 过渡，避免两面板同时伸缩 -->
+    <Transition
+      :css="false"
+      mode="out-in"
+      @enter="onPanelEnter"
+      @before-leave="panelLeaving = true"
+      @leave="onPanelLeave"
+      @after-leave="panelLeaving = false"
+    >
+      <div v-if="panelState !== 'taiji'" :key="panelState" class="nl-panel-wrap">
+        <div class="nl-panel-inner">
+          <TagSelector
+            v-if="panelState === 'tags'"
+            v-model="tagFilterIds"
+            class="nl-tags"
+            @refresh="replayListRefresh"
+          />
+          <div v-else-if="panelState === 'status'" class="nl-status-filter">
+            <div class="nl-status-chips">
+              <button
+                v-for="(s, i) in statusOptions"
+                :key="s.value"
+                class="nl-status-chip nl-chip-anim"
+                :class="{ 'nl-status-chip--active': statusFilter.includes(s.value) }"
+                :style="{ animationDelay: staggerDelay(i) }"
+                @click="toggleStatus(s.value)"
+              >
+                {{ s.label }}
+              </button>
+            </div>
+          </div>
+          <div v-else class="nl-mode-panel nl-status-filter" role="group" aria-label="排列模式">
+            <div class="nl-status-chips">
+              <button
+                v-for="option in modeOptions"
+                :key="option.value"
+                type="button"
+                class="nl-status-chip nl-mode-option"
+                :class="{ 'nl-status-chip--active': option.value === sortMode }"
+                :aria-pressed="option.value === sortMode"
+                @click="selectSortMode(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 加载状态 -->
+    <div v-if="loading" class="nl-loading">加载中…</div>
+    <div v-else-if="loadError" class="nl-empty-state nl-load-error">
+      <span>{{ loadError }}</span>
+      <button @click="retryLoad">重试</button>
+    </div>
+
+    <!-- ======== 时间线模式（时间标记 + 统一待办流） ======== -->
+    <template v-else-if="sortMode === 'timeline'">
+      <div
+        ref="timelineScrollRef"
+        class="nl-timeline nl-list-scroll scroll-y"
+        @scroll="onTimelineScroll"
+      >
+        <div v-if="timelineIsEmpty" class="nl-empty-state">暂无待办</div>
+        <template v-else>
+          <div
+            v-for="g in recentTimelineGroups"
+            :key="g.group"
+            class="nl-group nl-section"
+            :class="{ 'nl-group--earlier-toggle': g.group === 'earlier' }"
+          >
+            <div
+              class="nl-group-label-row"
+              :class="{ 'nl-group-label-row--earlier': g.group === 'earlier' }"
+              :role="g.group === 'earlier' ? 'button' : undefined"
+              :tabindex="g.group === 'earlier' ? 0 : undefined"
+              :aria-expanded="g.group === 'earlier' ? !collapsedGroups.earlier : undefined"
+              :aria-controls="g.group === 'earlier' ? 'nl-earlier-content' : undefined"
+              @click="g.group === 'earlier' && toggleGroupCollapse('earlier')"
+              @keydown.enter.prevent="g.group === 'earlier' && toggleGroupCollapse('earlier')"
+              @keydown.space.prevent="g.group === 'earlier' && toggleGroupCollapse('earlier')"
+            >
+              <span class="nl-group-label">{{ g.label }}</span>
+              <span class="nl-group-count">· {{ g.count ?? g.items.length }}条</span>
+              <span v-if="lastRefreshLabel" class="nl-group-refresh-time">
+                · 刷新 {{ lastRefreshLabel }}
+              </span>
+              <svg
+                v-if="g.group === 'earlier'"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="nl-group-chevron"
+                :class="{ 'nl-group-chevron--collapsed': collapsedGroups['earlier'] }"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </div>
+            <template v-if="g.group !== 'earlier'">
+              <NoteCard
+                v-for="note in g.items"
+                :key="note.id"
+                :minimal="minimalMode"
+                :note="note"
+                :weather="weatherForNote(note)"
+                show-date-context
+                :status-transition="statusTransitionFor(note.id)"
+                @edit="emit('edit', $event)"
+                @status-action="onCardStatusAction"
+              />
+            </template>
+          </div>
+          <div
+            v-if="!collapsedGroups.earlier && earlierLoading && earlierOffset === 0"
+            class="nl-earlier-hint"
+          >
+            加载中…
+          </div>
+          <ListDisclosure
+            id="nl-earlier-content"
+            :open="!collapsedGroups.earlier && earlierOffset > 0"
+            @closed="clearCollapsedEarlier"
+          >
+            <div class="nl-earlier-content-inner">
+              <div v-for="g in earlierTimelineGroups" :key="g.group" class="nl-group nl-section">
+                <div class="nl-group-label-row">
+                  <span class="nl-group-label">{{ g.label }}</span>
+                  <span class="nl-group-count">· {{ g.items.length }}条</span>
+                  <span v-if="lastRefreshLabel" class="nl-group-refresh-time"
+                    >· 刷新 {{ lastRefreshLabel }}</span
+                  >
+                </div>
+                <NoteCard
+                  v-for="note in g.items"
+                  :key="note.id"
+                  :minimal="minimalMode"
+                  :note="note"
+                  :weather="weatherForNote(note)"
+                  show-date-context
+                  :status-transition="statusTransitionFor(note.id)"
+                  @edit="emit('edit', $event)"
+                  @status-action="onCardStatusAction"
+                />
+              </div>
+              <div v-if="earlierLoading" class="nl-earlier-hint">加载中…</div>
+              <div v-else-if="earlierHasData && !earlierHasMore" class="nl-earlier-hint">
+                没有更多待办
+              </div>
+            </div>
+          </ListDisclosure>
+        </template>
+      </div>
+      <!-- 底部计数 -->
+      <div v-if="!timelineIsEmpty || allNoteTotal > 0" class="nl-footer-count">
+        <span>当前{{ totalRendered }}条</span>
+        <span>共{{ allNoteTotal }}条</span>
+      </div>
+    </template>
+
+    <!-- ======== 标签分组模式 ======== -->
+    <template v-else-if="sortMode === 'tag-group'">
+      <div
+        ref="tagGroupScrollRef"
+        class="nl-tag-groups nl-list-scroll scroll-y"
+        @contextmenu="openTagGroupContextMenu"
+      >
+        <div class="nl-tag-group-tools">
+          <button
+            type="button"
+            class="nl-tag-group-sort-toggle"
+            :class="{
+              'nl-tag-group-sort-toggle--active': tagGroupSortMode || tagGroupSortPreparing
+            }"
+            :disabled="!tagGroupCanSort || tagGroupSortPreparing"
+            :aria-pressed="tagGroupSortMode"
+            :aria-busy="tagGroupSortPreparing || undefined"
+            @click="toggleTagGroupSortMode"
+          >
+            {{ tagGroupSortMode ? '完成标签排序' : '调整标签顺序' }}
+          </button>
+        </div>
+        <div v-if="tagGroups.length === 0" class="nl-empty-state">暂无标签组</div>
+        <draggable
+          v-model="tagGroups"
+          item-key="key"
+          handle=".nl-tag-group-sort-handle"
+          ghost-class="nl-tag-group-ghost"
+          chosen-class="nl-tag-group-chosen"
+          drag-class="nl-tag-group-dragging"
+          :animation="180"
+          :disabled="!tagGroupSortMode"
+          :move="canMoveTagGroup"
+          :scroll="true"
+          :scroll-sensitivity="56"
+          :scroll-speed="12"
+          @start="onTagGroupDragStart"
+          @end="onTagGroupDragEnd"
+        >
+          <template #item="{ element: group }">
+            <section class="nl-tag-group" :class="{ 'nl-tag-group--untagged': group.untagged }">
+              <div
+                class="nl-tag-group-header"
+                :class="{
+                  'nl-tag-group-header--expanded': group.expanded,
+                  'nl-tag-group-header--empty': group.total === 0,
+                  'nl-tag-group-header--sorting': tagGroupSortMode,
+                  'nl-tag-group-sort-handle': tagGroupSortMode && !group.untagged
+                }"
+              >
+                <button
+                  type="button"
+                  class="nl-tag-group-toggle"
+                  :aria-expanded="group.expanded"
+                  :aria-busy="group.opening || undefined"
+                  :aria-disabled="tagGroupSortMode || tagGroupSortPreparing || undefined"
+                  :aria-label="
+                    tagGroupSortMode && !group.untagged ? `拖动标签 ${group.name} 排序` : undefined
+                  "
+                  :tabindex="tagGroupSortMode ? -1 : 0"
+                  :aria-controls="`nl-tag-group-${group.id ?? 'untagged'}`"
+                  @click="toggleTagGroup(group)"
+                >
+                  <svg
+                    v-if="tagGroupSortMode && !group.untagged"
+                    class="nl-tag-group-row-grip"
+                    viewBox="0 0 16 16"
+                    aria-hidden="true"
+                  >
+                    <circle cx="5" cy="3.25" r="1.2" />
+                    <circle cx="11" cy="3.25" r="1.2" />
+                    <circle cx="5" cy="8" r="1.2" />
+                    <circle cx="11" cy="8" r="1.2" />
+                    <circle cx="5" cy="12.75" r="1.2" />
+                    <circle cx="11" cy="12.75" r="1.2" />
+                  </svg>
+                  <span
+                    v-else-if="tagGroupSortMode"
+                    class="nl-tag-group-row-grip-placeholder"
+                    aria-hidden="true"
+                  ></span>
+                  <span
+                    class="nl-tag-group-dot"
+                    :class="{ 'nl-tag-group-dot--untagged': group.untagged }"
+                    :style="group.color ? { backgroundColor: group.color } : null"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="nl-tag-group-name">{{ group.name }}</span>
+                  <svg
+                    v-if="!tagGroupSortMode"
+                    class="nl-tag-group-chevron"
+                    :class="{ 'nl-tag-group-chevron--open': group.expanded }"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="m6 4 4 4-4 4"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <span class="nl-tag-group-count">{{ group.total }}</span>
+              </div>
+              <div v-if="group.opening && group.expanded" class="nl-tag-group-hint">加载中…</div>
+              <ListDisclosure
+                :id="`nl-tag-group-${group.id ?? 'untagged'}`"
+                :open="group.expanded && !group.opening"
+                class="nl-tag-group-content"
+              >
+                <div class="nl-tag-group-content-inner">
+                  <div v-if="group.total === 0" class="nl-tag-group-empty">当前状态下暂无待办</div>
+                  <template v-else>
+                    <NoteCard
+                      v-for="note in group.notes"
+                      :key="note.id"
+                      :minimal="minimalMode"
+                      :note="note"
+                      :weather="weatherForNote(note)"
+                      show-date-context
+                      allow-create-tag
+                      :status-transition="statusTransitionFor(note.id)"
+                      @edit="emit('edit', $event)"
+                      @status-action="onCardStatusAction"
+                      @create-tag="openCreateTagManager"
+                    />
+                    <div v-if="group.loading" class="nl-tag-group-hint">加载中…</div>
+                    <button
+                      v-else-if="group.error"
+                      type="button"
+                      class="nl-tag-group-more"
+                      @click="retryTagGroup(group)"
+                    >
+                      加载失败，点击重试
+                    </button>
+                    <button
+                      v-else-if="group.hasMore"
+                      type="button"
+                      class="nl-tag-group-more"
+                      @click="loadTagGroupPage(group)"
+                    >
+                      显示更多
+                    </button>
+                  </template>
+                </div>
+              </ListDisclosure>
+            </section>
+          </template>
+        </draggable>
+      </div>
+      <div v-if="tagGroups.length > 0 || allNoteTotal > 0" class="nl-footer-count">
+        <span>{{ tagGroups.length }} 个标签组，{{ tagGroupMatchingTotal }} 条待办</span>
+      </div>
+
+      <Teleport to="body">
+        <Transition name="nl-tag-group-menu">
+          <div
+            v-if="tagGroupContextMenuVisible"
+            ref="tagGroupContextMenuRef"
+            class="nl-tag-group-menu-shell"
+            :style="tagGroupContextMenuStyle"
+            role="menu"
+            aria-label="标签分组操作"
+            @click.stop
+            @contextmenu.prevent
+          >
+            <div class="nl-tag-group-menu">
+              <button role="menuitem" @click="openCreateTagManager">新建标签分组</button>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
+
+      <TagManagerDialog
+        v-model:visible="tagManagerVisible"
+        :queue="tagManagerQueue"
+        create-on-open
+      />
+    </template>
+
+    <!-- ======== 自定义模式 ======== -->
+    <template v-else>
+      <div ref="customScrollRef" class="nl-custom nl-list-scroll scroll-y" @scroll="onCustomScroll">
+        <div v-if="customTotalRendered === 0" class="nl-empty-state">暂无待办</div>
+        <template v-else>
+          <!-- 置顶区 -->
+          <div v-if="customPinnedNotes.length > 0" class="nl-zone nl-section">
+            <div class="nl-zone-label">
+              <span>置顶</span>
+              <span class="nl-group-count">· {{ customPinnedNotes.length }}条</span>
+              <span v-if="lastRefreshLabel" class="nl-group-refresh-time">
+                · 刷新 {{ lastRefreshLabel }}
+              </span>
+            </div>
+            <draggable
+              v-model="customPinnedNotes"
+              :group="{ name: 'custom-pinned', pull: false, put: false }"
+              item-key="id"
+              class="nl-dropzone"
+              ghost-class="nl-ghost"
+              handle=".nl-drag-handle"
+              :animation="180"
+              @end="onCustomPinnedDragEnd"
+            >
+              <template #item="{ element: note }">
+                <NoteCard
+                  :minimal="minimalMode"
+                  :note="note"
+                  :weather="weatherForNote(note)"
+                  show-date-context
+                  draggable
+                  :status-transition="statusTransitionFor(note.id)"
+                  @edit="emit('edit', $event)"
+                  @status-action="onCardStatusAction"
+                />
+              </template>
+            </draggable>
+          </div>
+
+          <!-- 日常区 -->
+          <div class="nl-zone nl-section">
+            <div class="nl-zone-label">
+              <span>日常</span>
+              <span class="nl-group-count">· {{ customNormalTotal }}条</span>
+              <span v-if="lastRefreshLabel" class="nl-group-refresh-time">
+                · 刷新 {{ lastRefreshLabel }}
+              </span>
+            </div>
+            <draggable
+              v-model="customNormalNotes"
+              :group="{ name: 'custom-normal', pull: false, put: false }"
+              item-key="id"
+              class="nl-dropzone"
+              ghost-class="nl-ghost"
+              handle=".nl-drag-handle"
+              :animation="180"
+              @end="onCustomNormalDragEnd"
+            >
+              <template #item="{ element: note }">
+                <NoteCard
+                  :minimal="minimalMode"
+                  :note="note"
+                  :weather="weatherForNote(note)"
+                  show-date-context
+                  draggable
+                  :status-transition="statusTransitionFor(note.id)"
+                  @edit="emit('edit', $event)"
+                  @status-action="onCardStatusAction"
+                />
+              </template>
+            </draggable>
+            <div v-if="customNormalLoading" class="nl-earlier-hint">加载中…</div>
+            <div
+              v-else-if="customNormalNotes.length > 0 && !customNormalHasMore"
+              class="nl-earlier-hint"
+            >
+              没有更多待办
+            </div>
+          </div>
+        </template>
+      </div>
+      <!-- 底部计数 -->
+      <div v-if="customTotalRendered > 0 || allNoteTotal > 0" class="nl-footer-count">
+        <span>当前{{ customTotalRendered }}条</span>
+        <span>共{{ allNoteTotal }}条</span>
+      </div>
+    </template>
+    <ConfirmDialog
+      v-model:visible="earlyStartConfirmVisible"
+      title="提前执行待办？"
+      :message="earlyStartMessage"
+      confirm-text="提前执行"
+      cancel-text="取消"
+      @confirm="confirmEarlyStart"
+      @cancel="cancelEarlyStart"
+    />
+  </div>
+</template>
+
+<style scoped>
+/* ===== 布局 ===== */
+.note-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ===== 工具栏 ===== */
+.nl-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12rem;
+  padding: 8rem 0;
+  flex-shrink: 0;
+}
+.nl-toolbar-controls {
+  display: flex;
+}
+.nl-toolbar.has-one-summary {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.nl-toolbar.has-no-summaries {
+  grid-template-columns: auto;
+}
+.nl-toolbar-left,
+.nl-toolbar-right {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.nl-toolbar .date-context-summary {
+  flex: 1;
+}
+.nl-tag-group-tools {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 4rem;
+}
+.nl-tag-group-sort-toggle {
+  flex-shrink: 0;
+  width: auto;
+  min-height: 26rem;
+  display: grid;
+  place-items: center;
+  padding: 3rem 6rem;
+  border: 0;
+  border-radius: 6rem;
+  background: transparent;
+  color: var(--text-color-secondary);
+  font: inherit;
+  font-size: var(--fs-secondary);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    transform var(--motion-control) var(--ease-standard);
+}
+.nl-tag-group-sort-toggle:hover:not(:disabled),
+.nl-tag-group-sort-toggle:focus-visible {
+  outline: none;
+  background: var(--ui-fill-hover);
+  color: var(--text-color);
+}
+.nl-tag-group-sort-toggle--active {
+  background: var(--ui-fill-pressed);
+  color: var(--text-color);
+}
+.nl-tag-group-sort-toggle:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+/* ===== 加载状态 ===== */
+.nl-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40rem 20rem;
+  font-size: var(--fs-secondary);
+  color: var(--text-color-secondary);
+  gap: 12rem;
+  animation: nl-state-in var(--motion-control) ease both;
+}
+
+.nl-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 180rem;
+  padding: 32rem 20rem;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+  letter-spacing: 0.02em;
+  animation: nl-state-in var(--motion-control) ease both;
+}
+.nl-load-error {
+  gap: 10rem;
+}
+.nl-load-error button {
+  border: 0;
+  border-radius: 6rem;
+  padding: 5rem 12rem;
+  color: var(--text-color);
+  background: rgb(var(--bg-color) / 0.12);
+  cursor: pointer;
+}
+
+@keyframes nl-state-in {
+  from {
+    opacity: 0;
+    transform: translateY(4rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== 时间线 ===== */
+.nl-list-scroll {
+  padding-bottom: 30rem;
+}
+
+.nl-section + .nl-section {
+  margin-top: 16rem;
+}
+
+.nl-timeline {
+  flex: 1;
+  /* 滚动位置由列表快照恢复，避免浏览器先跟随移动的完成项调整一次。 */
+  overflow-anchor: none;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black calc(100% - 30rem),
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 30rem), transparent 100%);
+}
+
+/* 日期分组：用日期、数量和延伸线表达时间层级，不额外占用横向轨道。 */
+.nl-group-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6rem;
+  font-size: var(--fs-secondary);
+  font-weight: 500;
+  color: var(--text-color-secondary);
+  padding: 7rem 0 5rem;
+}
+/* 第一项（置顶）去除上内边距，贴顶 */
+.nl-group:first-child .nl-group-label-row {
+  padding-top: 0;
+}
+/* 更早标记行（可点击展开） */
+.nl-group-label-row--earlier {
+  cursor: pointer;
+  user-select: none;
+}
+.nl-group-label,
+.nl-group-count,
+.nl-group-refresh-time,
+.nl-group-chevron {
+  flex-shrink: 0;
+}
+.nl-group-count {
+  font-size: calc(var(--fs-secondary) * 0.82);
+  font-weight: 400;
+  opacity: 0.66;
+}
+.nl-group-refresh-time {
+  font-size: calc(var(--fs-secondary) * 0.78);
+  font-weight: 400;
+  opacity: 0.52;
+  white-space: nowrap;
+}
+.nl-earlier-content-inner {
+  padding-top: 8rem;
+}
+
+/* 折叠箭头：收起时旋转 -90° */
+.nl-group-chevron {
+  transition: transform 200ms ease;
+}
+.nl-group-chevron--collapsed {
+  transform: rotate(-90deg);
+}
+
+/* 更早区域加载/结束提示 */
+.nl-earlier-hint {
+  text-align: center;
+  padding: 12rem 0 6rem;
+  font-size: calc(var(--fs-secondary) * 0.85);
+  color: var(--text-color-secondary);
+}
+
+/* 底部计数（始终固定） */
+.nl-footer-count {
+  display: flex;
+  justify-content: center;
+  gap: 12rem;
+  flex-shrink: 0;
+  text-align: center;
+  padding: 10rem 0 4rem;
+  font-size: calc(var(--fs-secondary) * 0.85);
+  color: var(--text-color-secondary);
+  border-top: 1px solid var(--ui-border-divider);
+  margin-top: 4rem;
+}
+
+/* ===== 标签分组模式 ===== */
+.nl-tag-groups {
+  flex: 1;
+  overflow-anchor: none;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black calc(100% - 30rem),
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 30rem), transparent 100%);
+}
+.nl-tag-group + .nl-tag-group {
+  margin-top: 2rem;
+}
+.nl-tag-group-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7rem;
+  min-height: 34rem;
+  padding: 4rem 0;
+  border-radius: 7rem;
+  background: transparent;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+  transition: color var(--motion-control) ease;
+}
+.nl-tag-group-toggle {
+  display: flex;
+  min-width: 0;
+  min-height: 26rem;
+  flex: 1;
+  align-items: center;
+  gap: 7rem;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nl-tag-group-toggle:focus-visible {
+  outline: 1px solid var(--ui-border-hover);
+  outline-offset: 1px;
+  border-radius: 5rem;
+}
+.nl-tag-group-header:hover {
+  color: var(--text-color);
+}
+.nl-tag-group-header:active {
+  transform: none;
+}
+.nl-tag-group-toggle:active {
+  transform: none;
+}
+.nl-tag-group-header--expanded {
+  color: var(--text-color);
+}
+.nl-tag-group-header--empty {
+  opacity: 0.58;
+}
+.nl-tag-group-sort-handle,
+.nl-tag-group-sort-handle .nl-tag-group-toggle {
+  cursor: grab;
+  user-select: none;
+}
+.nl-tag-group-sort-handle:active,
+.nl-tag-group-sort-handle:active .nl-tag-group-toggle,
+.nl-tag-group-dragging .nl-tag-group-toggle {
+  cursor: grabbing;
+}
+.nl-tag-group-row-grip,
+.nl-tag-group-row-grip-placeholder {
+  width: 14rem;
+  height: 16rem;
+  flex: 0 0 auto;
+}
+.nl-tag-group-row-grip {
+  fill: currentColor;
+  opacity: 0.68;
+}
+.nl-tag-group-dot {
+  width: 8rem;
+  height: 8rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-color-secondary);
+}
+.nl-tag-group-dot--untagged {
+  opacity: 0.48;
+}
+.nl-tag-group-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.nl-tag-group-count {
+  flex: 0 0 auto;
+  color: var(--text-color-secondary);
+  font-size: calc(var(--fs-secondary) * 0.82);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+}
+.nl-tag-group-ghost {
+  opacity: 0.34;
+}
+.nl-tag-group-chosen .nl-tag-group-header,
+.nl-tag-group-dragging .nl-tag-group-header {
+  color: var(--text-color);
+}
+.nl-tag-group-menu-shell {
+  position: fixed;
+  z-index: var(--z-global-popover);
+  width: 148rem;
+  overflow: hidden;
+  border-radius: 10rem;
+  box-shadow: 0 12rem 34rem rgb(0 0 0 / 0.22);
+}
+.nl-tag-group-menu {
+  display: grid;
+  padding: 5rem;
+  border: 1px solid var(--surface-float-border);
+  border-radius: inherit;
+  background: var(--surface-float);
+}
+.nl-tag-group-menu button {
+  width: 100%;
+  padding: 7rem 9rem;
+  border: 0;
+  border-radius: 6rem;
+  background: transparent;
+  color: var(--text-color);
+  font: inherit;
+  font-size: var(--fs-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.nl-tag-group-menu button:hover,
+.nl-tag-group-menu button:focus-visible {
+  outline: none;
+  background: var(--ui-fill-hover);
+}
+.nl-tag-group-menu-enter-active,
+.nl-tag-group-menu-leave-active {
+  transition:
+    opacity 130ms ease,
+    transform 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.nl-tag-group-menu-enter-from,
+.nl-tag-group-menu-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+}
+.nl-tag-group-chevron {
+  flex: 0 0 auto;
+  opacity: 0.64;
+  transform: rotate(0deg);
+  transition: transform var(--motion-control) var(--ease-standard);
+}
+.nl-tag-group-chevron--open {
+  transform: rotate(90deg);
+}
+.nl-tag-group-content {
+  min-height: 0;
+}
+.nl-tag-group-content-inner {
+  padding: 7rem 0 2rem 18rem;
+}
+.nl-tag-group-empty,
+.nl-tag-group-hint {
+  padding: 14rem 0 10rem;
+  color: var(--text-color-secondary);
+  font-size: calc(var(--fs-secondary) * 0.85);
+  text-align: center;
+}
+.nl-tag-group-more {
+  display: block;
+  margin: 6rem auto 2rem;
+  padding: 7rem 12rem;
+  border: 0;
+  border-radius: 7rem;
+  background: transparent;
+  color: var(--text-color-secondary);
+  font: inherit;
+  font-size: calc(var(--fs-secondary) * 0.85);
+  cursor: pointer;
+  transition:
+    color var(--motion-control) ease,
+    transform var(--motion-control) var(--ease-standard);
+}
+.nl-tag-group-more:hover {
+  color: var(--text-color);
+}
+.nl-tag-group-more:active {
+  transform: scale(0.98);
+}
+
+/* ===== 自定义模式 ===== */
+.nl-custom {
+  flex: 1;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black calc(100% - 30rem),
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 30rem), transparent 100%);
+}
+.nl-zone--archived {
+  opacity: 0.6;
+}
+.nl-zone-label {
+  display: flex;
+  align-items: center;
+  gap: 6rem;
+  font-size: var(--fs-secondary);
+  font-weight: 500;
+  color: var(--text-color-secondary);
+  padding: 6rem 0 4rem;
+}
+.nl-zone:first-child .nl-zone-label {
+  padding-top: 0;
+}
+.nl-dropzone {
+  min-height: 10rem;
+}
+.nl-zone-empty {
+  font-size: calc(var(--fs-secondary) * 0.85);
+  color: var(--text-color-secondary);
+  text-align: center;
+  padding: 20rem 0;
+}
+.nl-ghost {
+  opacity: 0.3;
+  transform: scale(0.985);
+}
+
+/* 状态 chip 逐个淡入上浮；与待办列表的进出场动画互不关联。 */
+.nl-chip-anim {
+  animation: nl-chip-in 250ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes nl-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== 展开面板容器（标签 / 状态）===== */
+/* 动画元素本身不留内边距：全局 box-sizing:border-box 下，height:0 会被 padding 撑住无法归零，
+   导致收拢末段视觉卡在 padding 高度、随后被 Vue 直接移除而“突然消失”。
+   把间距放到内层 .nl-panel-inner，其高度仍计入外层 scrollHeight，动画即可平滑收到 0。
+   外层 overflow 由 onPanelEnter / onPanelLeave 钩子在动画期间接管，动画结束后还原，
+   避免常驻裁剪掉选中标签的 box-shadow 光晕。 */
+
+/* ===== 标签筛选栏 ===== */
+.nl-tags {
+  flex-shrink: 0;
+  padding: 0 0 8rem;
+}
+
+/* ===== 状态筛选栏 ===== */
+.nl-status-filter {
+  flex-shrink: 0;
+  padding: 0 0 8rem;
+}
+.nl-status-chips {
+  display: flex;
+  align-items: center;
+  gap: 8rem;
+  flex-wrap: wrap;
+}
+.nl-status-chip {
+  padding: 5rem 14rem;
+  font-size: calc(var(--fs-secondary) * 0.85);
+  font-family: inherit;
+  font-weight: 400;
+  border: 1px solid var(--ui-border-control);
+  border-radius: 16rem;
+  background: transparent;
+  color: var(--text-color-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-control) ease,
+    border-color var(--motion-control) ease,
+    color var(--motion-control) ease,
+    transform var(--motion-control) var(--ease-standard);
+  white-space: nowrap;
+}
+.nl-status-chip:hover {
+  border-color: var(--ui-border-hover);
+  color: var(--text-color);
+}
+.nl-status-chip--active {
+  background: #007aff;
+  border-color: #007aff;
+  color: #fff;
+  font-weight: 500;
+}
+.nl-status-chip--active:hover {
+  background: #0066d6;
+  border-color: #0066d6;
+}
+.nl-status-chip:active {
+  transform: scale(0.98);
+  transition-duration: 70ms;
+}
+/* Content reflows instead of shrinking its font with the window. */
+@media (max-width: 420px) {
+  .nl-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .nl-toolbar.has-one-summary,
+  .nl-toolbar.has-no-summaries {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .nl-toolbar-controls {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+}
+</style>

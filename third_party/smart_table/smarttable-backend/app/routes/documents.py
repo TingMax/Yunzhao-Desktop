@@ -1,0 +1,521 @@
+"""
+文档 REST API 路由模块
+提供文档的 CRUD 和导出功能
+"""
+import tempfile
+from datetime import datetime, timezone
+
+from flask import Blueprint, request, g, send_file
+
+from app.services.document_service import DocumentService
+from app.services.document_export_service import DocumentExportService
+from app.services.permission_service import PermissionService
+from app.models.base import MemberRole
+from app.utils.response import success_response as api_response, error_response as api_error
+from app.utils.decorators import jwt_required
+
+documents_bp = Blueprint('documents', __name__, url_prefix='/api')
+document_service = DocumentService()
+document_export_service = DocumentExportService()
+permission_service = PermissionService()
+
+
+def _to_utc(dt):
+    """把 datetime 统一转换为 UTC aware，避免 naive/aware 直接比较抛异常"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _is_same_updated_at(current, expected):
+    """
+    比较文档的 updated_at 与前端传入的 expected_updated_at 是否一致（秒级精度）。
+
+    expected 支持：ISO 字符串、以 Z 结尾的字符串、秒/毫秒时间戳。
+    """
+    if current is None:
+        return False
+
+    current_utc = _to_utc(current)
+    raw = str(expected).strip()
+
+    # 纯数字：按时间戳处理（自动识别秒 / 毫秒）
+    if raw.isdigit():
+        timestamp = int(raw)
+        if timestamp > 10_000_000_000:
+            timestamp //= 1000
+        return int(current_utc.timestamp()) == timestamp
+
+    try:
+        expected_dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    except ValueError:
+        # 无法解析为时间，退化为字符串比较
+        return current_utc.isoformat() == raw
+
+    return current_utc.replace(microsecond=0) == _to_utc(expected_dt).replace(microsecond=0)
+
+
+@documents_bp.route('/bases/<base_id>/documents', methods=['GET'])
+@jwt_required
+def get_documents(base_id):
+    """
+    获取 Base 下的文档列表
+    ---
+    tags:
+      - Documents
+    security:
+      - Bearer: []
+    parameters:
+      - name: base_id
+        in: path
+        type: string
+        required: true
+        description: 数据基础 ID
+    responses:
+      200:
+        description: 文档列表，包含 items 和 total 字段
+        schema:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 200
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        description: 文档 ID
+                      base_id:
+                        type: string
+                        description: 所属数据基础 ID
+                      name:
+                        type: string
+                        description: 文档名称
+                      content:
+                        type: string
+                        description: 文档内容
+                      content_format:
+                        type: string
+                        enum: [delta, markdown]
+                        description: 内容格式
+                      order:
+                        type: integer
+                        description: 排序序号
+                      is_pinned:
+                        type: boolean
+                        description: 是否置顶
+                      created_by:
+                        type: string
+                        description: 创建者 ID
+                      updated_by:
+                        type: string
+                        description: 最后更新者 ID
+                      created_at:
+                        type: string
+                        format: date-time
+                        description: 创建时间
+                      updated_at:
+                        type: string
+                        format: date-time
+                        description: 更新时间
+                total:
+                  type: integer
+                  description: 文档总数
+      403:
+        description: 无权访问该数据基础
+      500:
+        description: 服务器内部错误
+    """
+    try:
+        user_id = g.user_id
+        if not permission_service.check_permission(base_id, user_id, MemberRole.VIEWER):
+            return api_error('no_permission_access', 403)
+
+        docs = document_service.get_list_by_base(base_id)
+        return api_response({
+            'items': [d.to_dict() for d in docs],
+            'total': len(docs)
+        })
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+@documents_bp.route('/bases/<base_id>/documents', methods=['POST'])
+@jwt_required
+def create_document(base_id):
+    """
+    创建新文档
+    ---
+    tags:
+      - Documents
+    security:
+      - Bearer: []
+    parameters:
+      - name: base_id
+        in: path
+        type: string
+        required: true
+        description: 数据基础 ID
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+              description: 文档名称（可选，默认"未命名文档"）
+            content:
+              type: string
+              description: 文档内容（可选，默认空字符串）
+            content_format:
+              type: string
+              enum: [delta, markdown]
+              description: 内容格式（可选，默认"delta"）
+    responses:
+      201:
+        description: 创建成功的文档详情
+        schema:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 201
+            data:
+              type: object
+              description: 完整文档对象（包含 content 字段）
+      400:
+        description: 每个数据基础最多创建 10 个文档
+      403:
+        description: 无权编辑该数据基础
+      500:
+        description: 服务器内部错误
+    """
+    try:
+        user_id = g.user_id
+        # 创建文档需要 ADMIN 或更高权限
+        if not permission_service.check_permission(base_id, user_id, MemberRole.ADMIN):
+            return api_error('no_permission_create_document_administrator_rights_required', 403)
+
+        data = request.get_json()
+        count = document_service.get_count_by_base(base_id)
+        if count >= 10:
+            return api_error('each_base_most_documents', 400)
+
+        doc = document_service.create(
+            base_id=base_id,
+            name=data.get('name', '未命名文档'),
+            content=data.get('content', ''),
+            content_format=data.get('content_format', 'delta'),
+            created_by=user_id
+        )
+        return api_response(doc.to_dict(include_content=True), 201)
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+@documents_bp.route('/documents/<doc_id>', methods=['GET'])
+@jwt_required
+def get_document(doc_id):
+    """
+    获取单个文档详情
+    ---
+    tags:
+      - Documents
+    security:
+      - Bearer: []
+    parameters:
+      - name: doc_id
+        in: path
+        type: string
+        required: true
+        description: 文档 ID
+    responses:
+      200:
+        description: 文档详情（包含完整内容）
+      403:
+        description: 无权访问该文档所在的数据基础
+      404:
+        description: 文档不存在
+      500:
+        description: 服务器内部错误
+    """
+    try:
+        user_id = g.user_id
+        doc = document_service.get_by_id(doc_id)
+        if not doc:
+            return api_error('document_does_not_exist', 404)
+
+        if not permission_service.check_permission(doc.base_id, user_id, MemberRole.VIEWER):
+            return api_error('no_permission_access', 403)
+
+        return api_response(doc.to_dict(include_content=True))
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+@documents_bp.route('/documents/<doc_id>', methods=['PUT'])
+@jwt_required
+def update_document(doc_id):
+    """
+    更新文档
+    ---
+    tags:
+      - Documents
+    security:
+      - Bearer: []
+    parameters:
+      - name: doc_id
+        in: path
+        type: string
+        required: true
+        description: 文档 ID
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+              description: 文档名称
+            content:
+              type: string
+              description: 文档内容
+            content_format:
+              type: string
+              enum: [delta, markdown]
+              description: 内容格式
+            is_pinned:
+              type: boolean
+              description: 是否置顶
+            order:
+              type: integer
+              description: 排序序号
+            expected_updated_at:
+              type: string
+              format: date-time
+              description: 乐观锁：上次更新时间的 ISO 格式，用于检测冲突
+    responses:
+      200:
+        description: 更新成功的文档详情（包含完整内容）
+      403:
+        description: 无权编辑该文档所在的数据基础
+      404:
+        description: 文档不存在
+      409:
+        description: 文档已被他人修改，请刷新后重试（乐观锁冲突）
+      500:
+        description: 服务器内部错误
+    """
+    try:
+        user_id = g.user_id
+        doc = document_service.get_by_id(doc_id)
+        if not doc:
+            return api_error('document_does_not_exist', 404)
+
+        # 更新文档（含重命名）需要 EDITOR 或更高权限
+        if not permission_service.check_permission(doc.base_id, user_id, MemberRole.EDITOR):
+            return api_error('no_permission_modify_document_administrator_rights_required', 403)
+
+        data = request.get_json()
+        expected_updated_at = data.pop('expected_updated_at', None)
+
+        # 乐观锁检查：前端传 expected_updated_at（ISO 字符串或时间戳），
+        # 比较前统一归一化到 UTC，避免 naive/aware 混用导致的误判
+        if expected_updated_at and not _is_same_updated_at(doc.updated_at, expected_updated_at):
+            return api_error('document_been_modified_someone_else_refresh_try_again', 409)
+
+        updated = document_service.update(doc_id=doc_id, user_id=user_id, **data)
+        return api_response(updated.to_dict(include_content=True))
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+@documents_bp.route('/documents/<doc_id>', methods=['DELETE'])
+@jwt_required
+def delete_document(doc_id):
+    """
+    删除文档
+    ---
+    tags:
+      - Documents
+    security:
+      - Bearer: []
+    parameters:
+      - name: doc_id
+        in: path
+        type: string
+        required: true
+        description: 文档 ID
+    responses:
+      204:
+        description: 删除成功，无返回内容
+      403:
+        description: 无权编辑该文档所在的数据基础
+      404:
+        description: 文档不存在
+      500:
+        description: 服务器内部错误
+    """
+    try:
+        user_id = g.user_id
+        doc = document_service.get_by_id(doc_id)
+        if not doc:
+            return api_error('document_does_not_exist', 404)
+
+        # 删除文档需要 ADMIN 或更高权限
+        if not permission_service.check_permission(doc.base_id, user_id, MemberRole.ADMIN):
+            return api_error('no_permission_delete_document_administrator_rights_required', 403)
+
+        document_service.delete(doc_id)
+        return api_response(None, 204)
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+@documents_bp.route('/documents/<doc_id>/export-pdf', methods=['POST'])
+@jwt_required
+def export_pdf(doc_id):
+    """
+    导出 PDF（后端渲染或前端渲染）
+    ---
+    tags:
+      - Documents
+    security:
+      - Bearer: []
+    parameters:
+      - name: doc_id
+        in: path
+        type: string
+        required: true
+        description: 文档 ID
+      - name: body
+        in: body
+        required: false
+        schema:
+          type: object
+          properties:
+            export_type:
+              type: string
+              enum: [backend, frontend]
+              description: 导出方式（可选，默认"backend"。backend 直接返回下载 URL，frontend 返回 HTML 内容供前端渲染）
+    responses:
+      200:
+        description: 导出结果。backend 模式返回下载 URL 和文件名；frontend 模式返回 HTML 内容和文件名
+        schema:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 200
+            data:
+              type: object
+              properties:
+                type:
+                  type: string
+                  description: 导出方式（仅 frontend 模式返回）
+                html:
+                  type: string
+                  description: HTML 内容（仅 frontend 模式返回）
+                download_url:
+                  type: string
+                  description: 文件下载 URL（仅 backend 模式返回）
+                filename:
+                  type: string
+                  description: 导出文件名
+      403:
+        description: 无权访问该文档所在的数据基础
+      404:
+        description: 文档不存在
+      500:
+        description: 服务器内部错误
+    """
+    try:
+        user_id = g.user_id
+        doc = document_service.get_by_id(doc_id)
+        if not doc:
+            return api_error('document_does_not_exist', 404)
+
+        if not permission_service.check_permission(doc.base_id, user_id, MemberRole.VIEWER):
+            return api_error('no_permission_access', 403)
+
+        data = request.get_json() or {}
+        export_type = data.get('export_type', 'backend')
+
+        result = document_export_service.export_pdf(doc, export_type)
+
+        if result['type'] == 'frontend':
+            return api_response(result)
+
+        return api_response({
+            'download_url': result['download_url'],
+            'filename': result['filename']
+        })
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+@documents_bp.route('/documents/<doc_id>/download-pdf', methods=['GET'])
+@jwt_required
+def download_pdf(doc_id):
+    """
+    下载 PDF 文件（后端渲染）
+    ---
+    tags:
+      - Documents
+    security:
+      - Bearer: []
+    parameters:
+      - name: doc_id
+        in: path
+        type: string
+        required: true
+        description: 文档 ID
+    responses:
+      200:
+        description: 返回 PDF 文件二进制流
+        produces:
+          - application/pdf
+      403:
+        description: 无权访问该文档所在的数据基础
+      404:
+        description: 文档不存在
+      503:
+        description: PDF 导出功能暂不可用，缺少 WeasyPrint 依赖
+      500:
+        description: 服务器内部错误
+    """
+    try:
+        user_id = g.user_id
+        doc = document_service.get_by_id(doc_id)
+        if not doc:
+            return api_error('document_does_not_exist', 404)
+
+        if not permission_service.check_permission(doc.base_id, user_id, MemberRole.VIEWER):
+            return api_error('no_permission_access', 403)
+
+        html_content = document_export_service._convert_to_html(doc)
+
+        try:
+            from weasyprint import HTML as WeasyHTML
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                WeasyHTML(string=html_content).write_pdf(tmp.name)
+                return send_file(
+                    tmp.name,
+                    mimetype='application/pdf',
+                    as_attachment=True,
+                    download_name=f'{doc.name}.pdf'
+                )
+        except ImportError:
+            return api_error('pdf_export_unavailable_install_weasyprint_dependency', 503)
+    except Exception as e:
+        return api_error(str(e), 500)

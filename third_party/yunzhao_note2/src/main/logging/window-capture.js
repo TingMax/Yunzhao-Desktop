@@ -1,0 +1,266 @@
+import { writeLog } from './logger.js'
+import { getRecentCrashDumps } from './process-capture.js'
+import { isDeepDiagnosticMode } from './diagnostic-state.js'
+import { diagnosticText } from '../../shared/diagnostic-sanitize.js'
+
+const contexts = new WeakMap()
+const attached = new WeakSet()
+const structuredConsoleMessages = new WeakMap()
+const STRUCTURED_CONSOLE_DEDUPE_MS = 2_000
+const pendingConsole = new WeakMap()
+const windowIdentities = new WeakMap()
+
+function contextFor(win) {
+  return contexts.get(win) || { role: 'unknown-window' }
+}
+
+function callSafely(target, method, fallback = null) {
+  try {
+    return typeof target?.[method] === 'function' ? target[method]() : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function readPropertySafely(target, property, fallback = null) {
+  try {
+    return target?.[property] ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * 收集能够把 renderer 异常定位到具体窗口的最小运行态。
+ * 不包含页面正文、表单值等用户内容。
+ */
+export function getWindowDiagnosticContext(win, webContents) {
+  webContents ??= readPropertySafely(win, 'webContents')
+  const identity = windowIdentities.get(win)
+  const windowId = readPropertySafely(win, 'id', identity?.browserWindowId)
+  const windowContext = win ? { ...contextFor(win) } : { role: 'unknown-window' }
+  return {
+    windowContext,
+    browserWindowId: Number.isSafeInteger(windowId) ? windowId : null,
+    rendererProcessId: callSafely(webContents, 'getOSProcessId'),
+    url: callSafely(webContents, 'getURL', ''),
+    windowState: win
+      ? {
+          bounds: callSafely(win, 'getBounds'),
+          visible: callSafely(win, 'isVisible'),
+          focused: callSafely(win, 'isFocused'),
+          minimized: callSafely(win, 'isMinimized')
+        }
+      : null
+  }
+}
+
+function isExpectedViteDevelopmentMessage(context, details) {
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL
+  if (!rendererUrl) return false
+
+  const sourceId = String(details?.sourceId || '')
+  const message = String(details?.message || '')
+  if (!sourceId.includes('/@vite/client')) return false
+
+  if (
+    message === '[vite] connecting...' ||
+    message === '[vite] connected.' ||
+    message.startsWith('[vite] hot updated:')
+  ) {
+    return true
+  }
+  if (context.role !== 'sticky' || !message.includes('Content Security Policy')) return false
+
+  try {
+    const host = new URL(rendererUrl).host
+    return (
+      message.includes("connect-src 'none'") &&
+      (message.includes(`ws://${host}`) || message.includes(`wss://${host}`))
+    )
+  } catch {
+    return false
+  }
+}
+
+export function noteStructuredRendererConsole(win, payload = {}) {
+  if (!win || win.isDestroyed()) return
+  const level = payload.level === 'warn' ? 'warning' : payload.level
+  if (!['warning', 'error'].includes(level)) return
+  if (!String(payload.scope || '').includes(`console-${payload.level}`)) return
+  const now = Date.now()
+  const entries = structuredConsoleMessages.get(win) || []
+  entries.push({
+    level,
+    message: diagnosticText(payload.message || ''),
+    errorMessage: diagnosticText(payload.error?.message || ''),
+    recordedAt: now
+  })
+  structuredConsoleMessages.set(
+    win,
+    entries.filter((entry) => now - entry.recordedAt <= STRUCTURED_CONSOLE_DEDUPE_MS).slice(-20)
+  )
+}
+
+function isCapturedByStructuredRendererConsole(win, context, details) {
+  if (!['main', 'month', 'week'].includes(context.role)) return false
+  const level = String(details?.level || '')
+  const message = diagnosticText(details?.message || '')
+  const now = Date.now()
+  const entries = (structuredConsoleMessages.get(win) || []).filter(
+    (entry) => now - entry.recordedAt <= STRUCTURED_CONSOLE_DEDUPE_MS
+  )
+  const matchIndex = entries.findIndex(
+    (entry) =>
+      entry.level === level &&
+      (message === entry.message ||
+        (entry.message &&
+          message.includes(entry.message) &&
+          (!entry.errorMessage || message.includes(entry.errorMessage))))
+  )
+  if (matchIndex < 0) {
+    structuredConsoleMessages.set(win, entries)
+    return false
+  }
+  entries.splice(matchIndex, 1)
+  structuredConsoleMessages.set(win, entries)
+  return true
+}
+
+function recordWindowEvent(win, payload) {
+  const context = contextFor(win)
+  const diagnostic = getWindowDiagnosticContext(win)
+  writeLog({
+    process: 'renderer',
+    windowRole: context.role,
+    webContentsId: readPropertySafely(
+      readPropertySafely(win, 'webContents'),
+      'id',
+      windowIdentities.get(win)?.webContentsId
+    ),
+    ...payload,
+    metadata: {
+      ...(payload.metadata || {}),
+      ...diagnostic
+    }
+  })
+}
+
+export function setWindowLogContext(win, context) {
+  if (!win || win.isDestroyed()) return
+  contexts.set(win, { ...contextFor(win), ...context })
+}
+
+export function getWindowLogContext(win) {
+  if (!win || win.isDestroyed()) return { role: 'unknown-window' }
+  return { ...contextFor(win) }
+}
+
+export function attachWindowLogging(win) {
+  if (!win || win.isDestroyed() || attached.has(win)) return
+  attached.add(win)
+  const webContents = win.webContents
+  windowIdentities.set(win, {
+    browserWindowId: readPropertySafely(win, 'id'),
+    webContentsId: readPropertySafely(webContents, 'id')
+  })
+  const flushPendingConsole = () => {
+    for (const item of [...(pendingConsole.get(win) || [])]) item.emit()
+    pendingConsole.delete(win)
+    structuredConsoleMessages.delete(win)
+  }
+  // A console fallback can outlive its BrowserWindow during shutdown or view replacement.
+  webContents.once('destroyed', flushPendingConsole)
+
+  webContents.on('console-message', (details) => {
+    if (!['warning', 'error'].includes(details.level) && !isDeepDiagnosticMode()) return
+    const context = contextFor(win)
+    if (isExpectedViteDevelopmentMessage(context, details)) return
+    if (isCapturedByStructuredRendererConsole(win, context, details)) return
+    const levelMap = {
+      verbose: 'debug',
+      info: 'info',
+      warning: 'warn',
+      error: 'error',
+      debug: 'debug'
+    }
+    const payload = {
+      level: levelMap[details.level] || 'info',
+      scope: 'renderer.console',
+      message: diagnosticText(details.message || ''),
+      metadata: {
+        lineNumber: details.lineNumber,
+        sourceId: diagnosticText(details.sourceId)
+      }
+    }
+    if (!['warning', 'error'].includes(details.level)) {
+      recordWindowEvent(win, payload)
+      return
+    }
+    // preload 批次可能晚于 Chromium console 回调；短暂有界等待结构化主记录。
+    const pending = pendingConsole.get(win) || []
+    const item = { payload, details: { level: details.level, message: payload.message } }
+    let emitted = false
+    item.emit = () => {
+      if (emitted) return
+      emitted = true
+      clearTimeout(item.timer)
+      const index = pending.indexOf(item)
+      if (index >= 0) pending.splice(index, 1)
+      if (!isCapturedByStructuredRendererConsole(win, context, item.details))
+        recordWindowEvent(win, payload)
+    }
+    if (pending.length >= 20) pending[0].emit()
+    pending.push(item)
+    pendingConsole.set(win, pending)
+    item.timer = setTimeout(item.emit, 1250)
+    item.timer.unref?.()
+  })
+  webContents.on('preload-error', (_event, preloadPath, error) => {
+    recordWindowEvent(win, {
+      level: 'error',
+      scope: 'renderer.preload-error',
+      message: error?.message || '预加载脚本失败',
+      error,
+      metadata: { preloadPath },
+      dedupeKey: error?.stack || error?.message
+    })
+  })
+  webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame && errorCode === -3) return
+      recordWindowEvent(win, {
+        level: 'error',
+        scope: 'renderer.did-fail-load',
+        message: errorDescription,
+        metadata: { errorCode, validatedURL, isMainFrame }
+      })
+    }
+  )
+  webContents.on('render-process-gone', (_event, details) => {
+    flushPendingConsole()
+    const recentCrashDumps = details.reason === 'clean-exit' ? undefined : getRecentCrashDumps()
+    recordWindowEvent(win, {
+      level: details.reason === 'clean-exit' ? 'info' : 'fatal',
+      scope: 'renderer.render-process-gone',
+      message: `渲染进程已退出：${details.reason}`,
+      metadata: { ...details, ...(recentCrashDumps ? { recentCrashDumps } : {}) },
+      dedupeKey: `${details.reason}|${details.exitCode}`
+    })
+  })
+  win.on('unresponsive', () => {
+    recordWindowEvent(win, {
+      level: 'error',
+      scope: 'renderer.unresponsive',
+      message: '窗口无响应'
+    })
+  })
+  win.on('responsive', () => {
+    recordWindowEvent(win, {
+      level: 'info',
+      scope: 'renderer.responsive',
+      message: '窗口已恢复响应'
+    })
+  })
+}

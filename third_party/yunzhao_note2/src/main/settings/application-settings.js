@@ -1,0 +1,249 @@
+import {
+  getAllSettings,
+  setSettingsBatch,
+  resetSettingsGroup
+} from '../db/db-settings-repository.js'
+import {
+  APPLICATION_SETTING_DEFINITIONS,
+  APPLICATION_SETTING_IDS,
+  DEFAULT_SETTINGS,
+  normalizeViewMode,
+  projectApplicationSettings,
+  resolveSettingsRows,
+  serializeSetting,
+  VIEW_MODES,
+  WINDOW_Z_ORDER_MODES
+} from '../../shared/settings-schema.js'
+
+export const APPLICATION_SETTINGS_SCOPE = 'application'
+export const VIEW_SETTINGS_SCOPES = Object.freeze({
+  [VIEW_MODES.LIST]: 'main',
+  [VIEW_MODES.MONTH]: 'month',
+  [VIEW_MODES.WEEK]: 'week'
+})
+
+// Keep the public import used by coordinators; the schema owns membership.
+export { APPLICATION_SETTING_IDS }
+
+const ACTIVE_VIEW_ROW = Object.freeze({
+  type: 'application',
+  key: 'active_view',
+  remark: '当前主视图（list / month / week）'
+})
+
+const WEEK_SETTINGS_INITIALIZED_ROW = Object.freeze({
+  type: 'application',
+  key: 'week_settings_initialized',
+  value: 'true',
+  remark: '周视图已完成首次设置继承'
+})
+
+const RETIRED_APPLICATION_SETTING_DB_KEYS = Object.freeze([
+  'shortcuts:enabled', // Retired persistent gate must not enter per-view settings.
+  // Retired shortcuts remain excluded from per-view inheritance.
+  'shortcuts:clipboard_pin',
+  'shortcuts:toggle_pins',
+  'notes:auto_move_checked_date'
+])
+const APPLICATION_SETTING_DB_KEYS = new Set([
+  ...APPLICATION_SETTING_DEFINITIONS.map(({ db }) => `${db.type}:${db.key}`),
+  ...RETIRED_APPLICATION_SETTING_DB_KEYS
+])
+
+// 1.1.0 曾把常显小黑条拖动位置写入各视图。位置现在仅属于一次隐藏会话，
+// 旧行由共享 schema 忽略，首次创建周视图时也不能把它继续复制到新作用域。
+const OBSOLETE_VIEW_SETTING_DB_KEYS = new Set(['dock:dock_reveal_handle_positions'])
+
+function rowMap(rows) {
+  return new Map(rows.map((row) => [`${row.type}:${row.key}`, row.value]))
+}
+
+function parseStoredBoolean(value, fallback) {
+  if (value === true || value === 'true' || value === 1 || value === '1') return true
+  if (value === false || value === 'false' || value === 0 || value === '0') return false
+  return fallback
+}
+
+/**
+ * 公共设置优先从 application 作用域读取。旧版本只在 main 作用域保存远程开关，
+ * 因而缺值时做兼容回读；不批量改库，用户下次修改时自然写入新作用域。
+ */
+export function readApplicationSettings() {
+  const applicationSettingRows = getAllSettings(APPLICATION_SETTINGS_SCOPE)
+  const applicationRows = rowMap(applicationSettingRows)
+  const applicationResolved = resolveSettingsRows(applicationSettingRows)
+  const legacyRows = rowMap(getAllSettings(VIEW_SETTINGS_SCOPES[VIEW_MODES.LIST]))
+  const receiveNotices =
+    applicationRows.get('remote:receive_notices') ?? legacyRows.get('remote:receive_notices')
+  const uploadDeviceInfo =
+    applicationRows.get('remote:upload_device_info') ?? legacyRows.get('remote:upload_device_info')
+  const storedView = applicationRows.get(`${ACTIVE_VIEW_ROW.type}:${ACTIVE_VIEW_ROW.key}`)
+  const projected = projectApplicationSettings(applicationResolved)
+  // Preserve this read API's default session gate; runtime applies the actual
+  // current-session value last. It is never a persistent application setting.
+  projected.shortcuts.enabled = DEFAULT_SETTINGS.shortcuts.enabled
+
+  return {
+    activeView: normalizeViewMode(storedView),
+    ...projected,
+    remote: {
+      ...projected.remote,
+      receiveNotices: parseStoredBoolean(receiveNotices, DEFAULT_SETTINGS.remote.receiveNotices),
+      uploadDeviceInfo: parseStoredBoolean(
+        uploadDeviceInfo,
+        DEFAULT_SETTINGS.remote.uploadDeviceInfo
+      )
+    }
+  }
+}
+
+/**
+ * 导航栏的锁定与窗口层级从历史分视图状态收敛为应用级状态。
+ * 旧布尔置顶值天然映射为 top / normal；只在应用级记录缺失时读取一次当前视图，
+ * 不保留锁定和层级的版本回退镜像或额外迁移标记。
+ */
+export function ensureApplicationWindowSettingsInitialized(viewMode) {
+  const normalizedViewMode = normalizeViewMode(viewMode)
+  const applicationRows = rowMap(getAllSettings(APPLICATION_SETTINGS_SCOPE))
+  const lockDbKey = 'system:lock_state'
+  const zOrderDbKey = 'system:z_order_mode'
+  const needsLockState = !applicationRows.has(lockDbKey)
+  const needsZOrderMode = !applicationRows.has(zOrderDbKey)
+  if (!needsLockState && !needsZOrderMode) return false
+
+  const legacyRows = getAllSettings(getViewSettingsScope(normalizedViewMode))
+  const legacyRowMap = rowMap(legacyRows)
+  const resolvedLegacy = resolveSettingsRows(legacyRows, normalizedViewMode)
+  const entries = []
+
+  if (needsLockState) {
+    entries.push(serializeSetting('window.lockState', resolvedLegacy.window.lockState))
+  }
+  if (needsZOrderMode) {
+    const legacyAlwaysOnTop = parseStoredBoolean(legacyRowMap.get('system:always_on_top'), true)
+    entries.push(
+      serializeSetting(
+        'window.zOrderMode',
+        legacyAlwaysOnTop ? WINDOW_Z_ORDER_MODES.TOP : WINDOW_Z_ORDER_MODES.NORMAL
+      )
+    )
+  }
+
+  setSettingsBatch(APPLICATION_SETTINGS_SCOPE, entries)
+  return true
+}
+
+export function writeActiveView(viewMode) {
+  const normalized = normalizeViewMode(viewMode)
+  setSettingsBatch(APPLICATION_SETTINGS_SCOPE, [{ ...ACTIVE_VIEW_ROW, value: normalized }])
+  return normalized
+}
+
+/**
+ * 周视图第一次启用时，以月视图的持久化设置为起点。初始化标记保存在 application
+ * 作用域，因此用户之后即使恢复周视图默认设置（清空 week 作用域），也不会再次继承。
+ */
+export function ensureViewSettingsInitialized(viewMode) {
+  if (normalizeViewMode(viewMode) !== VIEW_MODES.WEEK) return false
+
+  const applicationRows = rowMap(getAllSettings(APPLICATION_SETTINGS_SCOPE))
+  if (parseStoredBoolean(applicationRows.get('application:week_settings_initialized'), false)) {
+    return false
+  }
+
+  const weekScope = VIEW_SETTINGS_SCOPES[VIEW_MODES.WEEK]
+  const existingWeekRows = getAllSettings(weekScope)
+  if (existingWeekRows.length === 0) {
+    const inheritedRows = getAllSettings(VIEW_SETTINGS_SCOPES[VIEW_MODES.MONTH]).filter((row) => {
+      const dbKey = `${row.type}:${row.key}`
+      return !APPLICATION_SETTING_DB_KEYS.has(dbKey) && !OBSOLETE_VIEW_SETTING_DB_KEYS.has(dbKey)
+    })
+    if (inheritedRows.length > 0) setSettingsBatch(weekScope, inheritedRows)
+  }
+
+  setSettingsBatch(APPLICATION_SETTINGS_SCOPE, [WEEK_SETTINGS_INITIALIZED_ROW])
+  return true
+}
+
+/**
+ * 视图切换前同步收敛设置。
+ *
+ * 窗口移动/缩放使用防抖写库；如果用户调整月视图后立即首次切到周视图，必须先把
+ * 尚未落库的真实边界写回 month 作用域，再执行周设置继承。否则 week 会复制旧几何，
+ * 而切换流程清理防抖定时器后，用户刚完成的尺寸也会永久丢失。
+ */
+export function prepareViewSettingsForSwitch({
+  sourceViewMode,
+  targetViewMode,
+  pendingGeometry = null
+}) {
+  let geometryPersisted = false
+  if (pendingGeometry) {
+    const bounds = {
+      x: Number(pendingGeometry.x),
+      y: Number(pendingGeometry.y),
+      width: Number(pendingGeometry.width),
+      height: Number(pendingGeometry.height)
+    }
+    if (!Object.values(bounds).every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) {
+      throw new Error('视图切换前的窗口几何信息无效')
+    }
+    setSettingsBatch(getViewSettingsScope(sourceViewMode), [
+      serializeSetting('geometry.posX', bounds.x),
+      serializeSetting('geometry.posY', bounds.y),
+      serializeSetting('geometry.width', bounds.width),
+      serializeSetting('geometry.height', bounds.height)
+    ])
+    geometryPersisted = true
+  }
+
+  return {
+    geometryPersisted,
+    targetInitialized: ensureViewSettingsInitialized(targetViewMode)
+  }
+}
+
+export function writeApplicationSetting(id, value) {
+  writeApplicationSettings([{ id, value }])
+}
+
+/** 将一组相关的应用级设置作为同一个数据库事务提交。 */
+export function writeApplicationSettings(entries) {
+  const serialized = entries.map(({ id, value }) => {
+    if (!APPLICATION_SETTING_IDS.includes(id)) {
+      throw new Error(`未知应用级设置项: ${id}`)
+    }
+    return serializeSetting(id, value)
+  })
+  if (serialized.length > 0) setSettingsBatch(APPLICATION_SETTINGS_SCOPE, serialized)
+}
+
+/** 原子地把全部用户可配置的应用级设置写回 schema 默认值。 */
+function defaultApplicationEntries() {
+  return APPLICATION_SETTING_IDS.map((id) => {
+    const defaultValue = id
+      .split('.')
+      .reduce((value, segment) => value?.[segment], DEFAULT_SETTINGS)
+    if (defaultValue === undefined) throw new Error(`应用级设置缺少默认值: ${id}`)
+    return serializeSetting(id, defaultValue)
+  })
+}
+
+export function resetApplicationSettingsToDefaults() {
+  const entries = defaultApplicationEntries()
+  setSettingsBatch(APPLICATION_SETTINGS_SCOPE, entries)
+  return entries.length
+}
+
+/** Reset is one UI command; a view deletion failure must not reset shared settings alone. */
+export function resetCurrentViewSettings(viewMode) {
+  return resetSettingsGroup({
+    viewScope: getViewSettingsScope(viewMode),
+    applicationScope: APPLICATION_SETTINGS_SCOPE,
+    applicationEntries: defaultApplicationEntries()
+  })
+}
+
+export function getViewSettingsScope(viewMode) {
+  return VIEW_SETTINGS_SCOPES[normalizeViewMode(viewMode)]
+}

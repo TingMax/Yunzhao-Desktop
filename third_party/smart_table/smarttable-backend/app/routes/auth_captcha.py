@@ -1,0 +1,76 @@
+"""
+认证验证码路由模块
+提供登录和注册的验证码功能
+"""
+import traceback
+from flask import Blueprint, request, g, current_app
+import base64
+
+from app.utils.response import success_response, error_response
+from app.utils.captcha import CaptchaService
+
+auth_captcha_bp = Blueprint('auth_captcha', __name__)
+auth_captcha_bp.strict_slashes = False
+
+
+@auth_captcha_bp.route('/auth/captcha', methods=['GET'])
+def get_auth_captcha() -> tuple:
+    """
+    获取登录/注册验证码（公开接口）
+    ---
+    tags:
+      - Auth Captcha
+    description: 获取用于登录和注册页面的图形验证码
+    parameters:
+      - name: key
+        in: query
+        type: string
+        description: 验证码标识（可选，用于区分不同场景，如 login/register）
+        example: "login"
+    responses:
+      200:
+        description: 验证码生成成功
+        schema:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 200
+            message:
+              type: string
+              example: "验证码生成成功"
+            data:
+              type: object
+              properties:
+                image:
+                  type: string
+                  description: Base64编码的验证码图片
+                  example: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+                expire:
+                  type: integer
+                  description: 验证码有效期（秒）
+                  example: 300
+      500:
+        description: 验证码生成失败
+    """
+    # 获取客户端IP作为验证码key的一部分
+    client_ip = request.remote_addr or 'unknown'
+    key = request.args.get('key', 'default')
+    token = f"auth:{key}:{client_ip}"
+    
+    try:
+        # 生成验证码
+        code, image_base64, mime_type = CaptchaService.generate_captcha(token)
+        
+        return success_response(
+            data={
+                'image': f'data:{mime_type};base64,{image_base64}',
+                'expire': 300  # 5分钟有效期
+            },
+            message='captcha_generated_successfully'
+        )
+    except Exception as e:
+        request_id = getattr(g, 'request_id', None)
+        current_app.logger.error(f'[{request_id}] 验证码生成失败: {str(e)}')
+        current_app.logger.error(f'[{request_id}] 堆栈跟踪: {traceback.format_exc()}')
+        return error_response('failed_generate_captcha_try_again_later', 500, error='internal_server_error', request_id=request_id)

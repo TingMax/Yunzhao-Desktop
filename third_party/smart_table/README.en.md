@@ -1,0 +1,880 @@
+![Smart Table](./smart-table/public/SmartTable.png)
+
+# Smart Table
+
+[中文](README.md) | English
+
+A smart multi-dimensional table system based on Vue 3 + Flask, similar to Airtable or Lark Base. Supports multiple views (table view, grouped view, kanban view, calendar view, Gantt view, form view, dashboard, etc.), with rich field types; supports markdown for writing rich text documents.
+
+## ✨ Features
+
+### 🎯 Core Features
+
+- **Base Management** - Create, edit, delete, star multi-dimensional tables with member management and sharing
+- **Table Management** - Support multiple tables with drag-sort, rename, delete, and duplicate
+- **Field Management** - Support **27 field types** with configuration, sorting, visibility control, and default values
+- **Record Management** - CRUD operations, batch actions, detail drawer, and change history tracking
+- **View Management** - **6 view types** with filtering, sorting, grouping, view switching, and column freezing
+- **Document Management** - Document CRUD, rich text editing (Quill), Markdown support, PDF export, version history
+- **Automation Workflow Management** - Workflow create/edit, node management, trigger management, and delivery record viewing
+- **Data Visualization** - Dashboard create/edit, chart components, grid layout, real-time data, and dashboard sharing
+- **Plugin System** - Plugin management page supports upload/install, enable/disable, upgrade/rollback/uninstall; supports UI plugins (iframe sandbox + Vue templates) and script plugins (restricted subprocess), can read table selected records for batch processing
+- **Audit Log** - Complete audit log system with trace tracking
+
+### 📝 Supported Field Types (27 Types)
+
+| Category            | Field Type       | Description                                                         | Status |
+| ------------------- | ---------------- | ------------------------------------------------------------------- | ------ |
+| **Text Types**      | Single Line Text | Short text input with validation rules                              | ✅      |
+| **Text Types**      | Long Text        | Long text/paragraph input with multi-line editing                   | ✅      |
+| **Text Types**      | Rich Text        | HTML rich text editor with formatting support                       | ✅      |
+| **Numeric Types**   | Number           | Integer/decimal with formatting (number/currency/percent)           | ✅      |
+| **Date Types**      | Date             | Date picker supporting multiple date formats                        | ✅      |
+| **Date Types**      | Date Time        | DateTime picker accurate to seconds                                 | ✅      |
+| **Selection Types** | Single Select    | Dropdown single select with custom options and colors               | ✅      |
+| **Selection Types** | Multi Select     | Tag-style multi select with custom options                          | ✅      |
+| **Selection Types** | Checkbox         | Boolean toggle                                                      | ✅      |
+| **People Types**    | Member           | User selection with current user default value                      | ✅      |
+| **Contact Types**   | Phone            | Phone number input and formatted display                            | ✅      |
+| **Contact Types**   | Email            | Email address input and validation                                  | ✅      |
+| **Contact Types**   | URL              | URL link with click-to-navigate                                     | ✅      |
+| **Media Types**     | Attachment       | File upload/download with image preview and thumbnails              | ✅      |
+| **Computed Types**  | Formula          | 76 built-in functions with field references, cross-table column references, and nested calculations | ✅      |
+| **Relation Types**  | Link             | Table relationships supporting one-to-one/one-to-many/many-to-many  | ✅      |
+| **Lookup Types**    | Lookup           | Cross-table queries with aggregation (sum/avg/count/etc.)           | ✅      |
+| **System Types**    | Created By       | Auto-record record creator                                          | ✅      |
+| **System Types**    | Created Time     | Auto-record creation timestamp                                      | ✅      |
+| **System Types**    | Updated By       | Auto-record last modifier                                           | ✅      |
+| **System Types**    | Updated Time     | Auto-record last modification time                                  | ✅      |
+| **System Types**    | Auto Number      | Auto-increment with prefix/suffix/date format/padding               | ✅      |
+| **Geolocation**     | Geolocation      | Province/city/district, country/region, lat-lng, map picker, multi-language | ✅      |
+| **Others**          | Rating           | Star rating component                                               | ✅      |
+| **Others**          | Progress         | Progress bar/percentage display                                     | ✅      |
+
+### 🎨 Supported View Types (7 Types)
+
+| View Type            | Description                                                            | Status |
+| -------------------- | ---------------------------------------------------------------------- | ------ |
+| **Table View**       | Classic table display with virtual scroll, column freeze, field filter | ✅     |
+| **Grouped View**     | Group by field display with multi-level grouping and filtering         | ✅     |
+| **Kanban View**      | Card-based display with drag-sort and grouping                         | ✅     |
+| **Calendar View**    | Time-based display grouped by date                                     | ✅     |
+| **Gantt View**       | Project timeline display with task dependencies                        | ✅     |
+| **Form View**        | Data collection form with public sharing and customization             | ✅     |
+| **Gallery View**     | Image card grid display for media content                              | ✅     |
+
+### 🚀 Advanced Features
+
+#### Data Processing
+
+- **Data Filtering** - Multi-condition combined filtering with AND/OR logic, 20+ operators
+- **Data Sorting** - Multi-field sorting with ascending/descending order, drag to adjust priority
+- **Data Grouping** - Group by field with multi-level grouping (up to 3 levels), group statistics
+- **Formula Engine** - **76 built-in functions** for math, text, date, logic, and statistics, plus `[Table].[Field]` cross-table column references and conditional aggregation (FILTER / COUNTIF / SUMIF / AVERAGEIF + CurrentValue)
+- **Streaming Data Loading** - First-screen rendering in seconds for 10k+ records, async background loading of remaining pages, non-blocking operations
+- **Data Import** - Support Excel, CSV, JSON formats with multi-sheet, can import to create new tables
+- **Data Export** - Support Excel, CSV, JSON formats with custom field selection
+
+#### 🔄 Workflow Automation Engine (New in v1.6.0)
+
+- **Trigger System**
+  - **Scheduled Time Trigger** - One-time and recurring triggers (daily/weekly/monthly/yearly/custom), deadline configuration supported
+  - **Record Creation Trigger** - Auto-trigger on new record creation, supports filter conditions (AND/OR multi-condition combination)
+  - **Record Update Trigger** - Auto-trigger on record update, supports listening to specified fields, supports filter conditions
+- **Node System**
+  - **Create Record Node** - Auto-create records in target table, supports field value mapping (static value/reference expression)
+  - **Update Record Node** - Auto-update source record field values, supports static values and expressions
+  - **Webhook Node** - Call external HTTP endpoints, supports selecting existing config or inline config
+  - **Condition Node** - Branch based on conditions, supports AND/OR condition combination
+  - **Node Sorting** - Manual adjustment of node execution order (drag-and-drop sorting)
+- **Version Management** - Workflow version snapshots, version history viewing and rollback
+- **Management Features** - Workflow create, edit, delete, pause, resume, binding relationship with data tables
+
+#### 🪝 Webhook Delivery Management (New in v1.6.0)
+
+- **Webhook Configuration** - Supports name, URL, HTTP method, headers, request body template
+- **Retry Strategy** - Supports max retry count, retry interval configuration
+- **Test Feature** - Test whether Webhook configuration is valid
+- **Delivery Records** - View delivery record list, details (request params, response status code, response body, etc.)
+
+#### 🔌 Plugin System (Extensible Capabilities)
+
+- **Dual-form Plugins**
+  - **UI Plugin** - Runs in an iframe sandbox (`sandbox="allow-scripts"`, opaque origin, cannot access host Cookie/DOM); the host injects the Vue 3 runtime and supports standard Vue template syntax (`v-model` / `v-for` / `@click` / data reactivity), developable as a zero-build single file
+  - **Script Plugin** - Runs in a restricted subprocess with a module whitelist and dangerous builtins disabled; data operations are proxied and executed under the **triggering user's identity** with double authentication
+- **Lifecycle Management** - Upload/install, global enable/disable, Base-level install/enable/disable/remove, upgrade, rollback to historical versions, and uninstall — all done by admins on the plugin management page (the Base page has zero-install interaction, ready to use on open)
+- **Two-level Configuration** - `global` and `base` scope config (base deep-merges global), validated against the plugin's declared `configSchema` on write
+- **Two-layer Permissions** - Plugin manifest permission declaration plus user RBAC, deny by default, host-side per-method authentication, unauthorized calls return `PERMISSION_DENIED`
+- **Selection Data Channel** - Table selected records are passed to the plugin as an open-time snapshot (record IDs only, capped at 1000, with select-all/truncation flags); extension points may declare `requiresSelection` / `maxSelection`, and the host disables the entry and prompts when unmet
+- **Security & Stability** - Short-lived signed URL for sandbox loading, zip path-traversal and zip-bomb protection, script timeout and concurrency limits, automatic error state on consecutive failures
+- **Runtime Logs** - Records running status, duration, output, results, and exception stacks; supports querying by Base, result popups, and log detail viewing
+
+#### Collaboration & Sharing
+
+- **Base Sharing** - Base-level sharing with link sharing and permission control
+- **Form Sharing** - Form view public sharing with submission options configuration
+- **Dashboard Sharing** - Dashboard public sharing with real-time data display
+- **Member Management** - Base-level member list, add members, role assignment
+- **Real-time Collaboration** - WebSocket-based multi-user real-time collaboration (optional)
+  - Online presence display
+  - View sync (scroll position, view switching)
+  - Cell locking (prevent conflict editing)
+  - Conflict detection & resolution (optimistic locking)
+  - Offline queue (auto-cache on disconnect, auto-replay on reconnect)
+  - Graceful degradation (auto-switch to normal mode when unavailable)
+- **Request Tracking System** - Request ID full-chain tracing, unified error handling, standardized API response
+- **Local Cache System** - Collaboration state, user auth, system config caching; config requests reduced by 90%+
+
+#### Permissions & Security
+
+- **User Authentication** - JWT Token authentication with refresh token, email verification, password reset
+- **Role-Based Access Control (RBAC)**:
+  - Owner - Full control permissions
+  - Admin - Management permissions (except deletion)
+  - Editor - Edit permissions
+  - Commenter - Comment and view permissions
+  - Viewer - Read-only permissions
+- **Security Config Management** - Dynamic password rules, registration toggle, session timeout config, public config endpoint
+- **Sensitive Info Protection** - 30+ log sanitization fix points auto-masking passwords/tokens/phones/emails
+- **Security Protection** - XSS protection, CSRF protection, security headers, API rate limiting, file upload validation
+- **Operation Logs** - Complete operation audit logs
+
+#### User Experience
+
+- **Drag Sorting** - Drag to sort tables, fields, views, Kanban cards
+- **Star Feature** - Quick access to frequently used tables and dashboards
+- **Search Feature** - Quick search for table names and record content
+- **Element Plus Icons** - Unified icon system for visual consistency
+- **Keyboard Shortcuts** - Common operation keyboard shortcuts
+
+#### Dashboard System
+
+- **Multiple Chart Components** - Number cards, clock, date, KPI cards, marquee, real-time charts, etc.
+- **Dashboard Templates** - Save and reuse dashboard configurations as templates
+- **Grid Layout** - Flexible grid layout system with customizable rows/columns
+- **Real-time Data** - Real-time data updates and dynamic charts
+- **Sharing Feature** - Dashboard public sharing with embed support for external websites
+
+#### Email System (Optional)
+
+- **SMTP Configuration** - Custom SMTP server support
+- **Email Templates** - Customizable email templates (registration verification, password reset, etc.)
+- **Email Queue** - Async email sending queue with retry mechanism
+- **Email Logs** - Complete email sending logs and statistics
+- **Admin Panel** - Email configuration management and monitoring interface
+
+#### 📄 Document Management (v1.4.0)
+
+- **Document CRUD** - Create, edit, delete, query documents with Base-associated permissions
+- **Rich Text Editor** - Quill-based with bold/italic/lists/links/tables formatting
+- **Markdown Support** - Markdown syntax with real-time rendering
+- **Version History** - Version tracking and rollback, comparison view, creator tracking
+- **PDF Export** - Export documents as PDF with DOM direct parsing for accurate styling
+
+#### 🔌 Third-Party App Integration (New in v1.6.5)
+
+- **Third-Party App Integration** - Added OAuth2 third-party app integration with open API authentication and access
+- **Application Audit Log** - Implemented complete application audit logging of key third-party app operations
+- **App Integration Docs** - Added app integration documentation detailing the integration flow and usage examples
+
+## 📸 Feature Preview
+
+| Feature            | Preview                                           | Feature            | Preview                                         |
+| ------------------ | ------------------------------------------------- | ------------------ | ----------------------------------------------- |
+| Login              | ![](./doc/img/login.png)                          | Register           | ![](./doc/img/register.png)                     |
+| Home               | ![Home](./doc/img/home.jpeg)                      | All Home           | ![Home2](./doc/img/home-all.jpeg)               |
+| Table View         | ![Table View](./doc/img/TableView.jpeg)           | Grouped Table      | ![Grouped Table](./doc/img/TableViewGroup.jpeg) |
+| Table Fields       | ![Table Fields](./doc/img/TableViewFields.jpeg)   | Kanban View        | ![Kanban View](./doc/img/KanbanView.jpeg)       |
+| Calendar View      | ![Calendar View](./doc/img/CalendarView.jpeg)     | Gantt View         | ![Gantt View](./doc/img/GanttView.jpeg)         |
+| Form View          | ![Form View](./doc/img/FormView.jpeg)             | Dashboard          | ![Dashboard](./doc/img/Dashboard.jpeg)          |
+| Sharing            | ![Sharing](./doc/img/sharing.png)                 | Document Management| ![Document Management](./doc/img/Document.png)  |
+| Workflow Automation| ![Workflow Automation](./doc/img/Workflow.jpeg)   | Workflow Instance  | ![Workflow Instance](./doc/img/Workflow2.jpeg)  |
+| Webhook            | ![Webhook](./doc/img/WebHook.jpeg)                | Plugin System      | ![Plugin System](./doc/img/plugin-manager.png) |
+
+## 🛠️ Tech Stack
+
+### Frontend Tech Stack
+
+| Category             | Technology              | Version         | Description                                        |
+| -------------------- | ----------------------- | --------------- | -------------------------------------------------- |
+| Frontend Framework   | Vue 3                   | ^3.5.30         | Composition API                                    |
+| Language             | TypeScript              | \~5.9.3         | Type safety                                        |
+| State Management     | Pinia                   | ^2.3.1          | Lightweight state management                       |
+| Router               | Vue Router              | ^4.6.4          | SPA routing                                        |
+| UI Component Library | Element Plus            | ^2.13.6         | Enterprise UI components                           |
+| Table Component      | vxe-table               | ^4.18.7         | High-performance virtual scroll table (v1.4 and earlier) |
+| Table Component      | vtable                  | ^1.26.3         | High-performance canvas table (v1.5 and later)    |
+| Charts               | echarts + vue-echarts   | ^5.6.0 / ^6.7.3 | Data visualization                                 |
+| Date Processing      | dayjs                   | ^1.11.20        | Lightweight date library                           |
+| Drag Sorting         | sortablejs              | ^1.15.7         | Drag functionality                                 |
+| HTTP Client          | axios                   | ^1.14.0         | HTTP requests                                      |
+| Local Database       | Dexie                   | ^3.2.7          | IndexedDB wrapper                                  |
+| WebSocket            | socket.io-client        | ^4.8.3          | Real-time communication                            |
+| Utilities            | lodash-es, @vueuse/core | -               | Utility function sets                              |
+| Rich Text            | tinyeditor              | ^4.0.0          | Rich text editor                                   |
+| Spreadsheet          | xlsx                    | ^0.18.5         | Excel parsing/generation                           |
+| Build Tool           | Vite                    | ^8.0.1          | Ultra-fast build tool                              |
+| Testing              | Vitest                  | ^3.2.4          | Unit testing                                       |
+
+### Backend Tech Stack (Optional)
+
+| Category            | Technology                       | Version               | Description                   |
+| ------------------- | -------------------------------- | --------------------- | ----------------------------- |
+| Framework           | Flask                            | 3.0.0                 | Python Web framework          |
+| Database            | SQLite (Default) / PostgreSQL    | 3.x / 16+             | Relational database           |
+| ORM                 | SQLAlchemy                       | 2.0.23                | Python ORM                    |
+| Database Migration  | Alembic (Flask-Migrate)          | 4.0.5                 | Database version management   |
+| Authentication      | JWT (Flask-JWT-Extended)         | 4.6.0                 | Token authentication          |
+| Password Encryption | Flask-Bcrypt, bcrypt             | 1.0.1 / 4.1.2         | Password hashing              |
+| Form Validation     | Flask-WTF                        | 1.2.1                 | CSRF protection               |
+| CORS                | Flask-CORS                       | 4.0.0                 | Cross-origin support          |
+| Caching             | Flask-Caching (+ Redis Optional) | 2.1.0                 | Caching acceleration          |
+| WebSocket           | Flask-SocketIO                   | 5.3.6                 | Real-time communication       |
+| Async Support       | eventlet                         | 0.36.1                | Async processing              |
+| Data Serialization  | marshmallow                      | 3.20.1                | Data validation/serialization |
+| Import/Export       | pandas, openpyxl, xlrd           | 2.1.4 / 3.1.2 / 2.0.1 | Data processing               |
+| Image Processing    | Pillow                           | 10.4.0                | Image thumbnails              |
+| Object Storage      | MinIO (Optional)                 | -                     | File object storage           |
+| Encryption          | cryptography                     | 42.0.5                | Encryption algorithms         |
+| API Documentation   | Flasgger                         | 0.9.7b2               | Swagger UI                    |
+| WSGI Server         | Eventlet WSGI Server             | 0.36.1                | Production server             |
+| Deployment          | Docker, Nginx                    | -                     | Containerized deployment      |
+
+### Data Storage Options
+
+| Mode                   | Technology         | Description                                                                                        |
+| ---------------------- | ------------------ | -------------------------------------------------------------------------------------------------- |
+| **Pure Frontend Mode** | Dexie (IndexedDB)  | Data stored locally in browser as cache                                 |
+| **Backend Mode**       | SQLite + Flask     | Default uses SQLite, lightweight without additional database installation |
+| **Production Mode**    | PostgreSQL + Flask | Supports PostgreSQL, suitable for multi-user concurrency and production environments |
+
+## 🚀 Quick Start
+
+### One-click Start (Recommended)
+
+Download the latest release package, extract it and start with one click:
+
+> To get the default account email and password: Follow the official WeChat official account and reply with 'SmartTable' in private message.
+
+```bash
+# Windows PowerShell
+.\start.bat
+
+# Linux/macOS
+./start.sh
+```
+
+<br />
+
+> This one-click startup package requires no external dependencies, just double-click to run.
+>
+> **No need to install any dependencies, no need to manually create an account.**
+>
+> After startup, the browser will open automatically, then log in with the default account email and password to try it out.
+> To get the default account email and password: Follow the official WeChat official account and reply with 'SmartTable' in private message.
+
+### Docker Start
+
+> To get the default account email and password: Follow the official WeChat official account and reply with 'SmartTable' in private message.
+
+Start with the official Docker image:
+
+```bash
+docker run -d \
+  --name smarttable \
+  -p 80:80 \
+  -e SECRET_KEY=YouMustChangeThisKey \
+  -e JWT_SECRET_KEY=YouMustChangeThisKey \
+  -v /app/SmartTableData/data:/app/data \
+  -v /app/SmartTableData/uploads:/app/uploads \
+  -v /app/SmartTableData/redis:/data/redis \
+  ygbinac/smarttable:latest
+```
+
+* Or use docker compose, just create the following docker-compose.yml:
+
+```bash
+services:
+  smarttable:
+    image: ygbinac/smarttable:latest
+    container_name: smarttable
+    ports:
+      - "80:80"
+    environment:
+      SECRET_KEY: YouMustChangeThisKey
+      JWT_SECRET_KEY: YouMustChangeThisKey
+    volumes:
+      - /app/SmartTableData/data:/app/data
+      - /app/SmartTableData/uploads:/app/uploads
+      - /app/SmartTableData/redis:/data/redis
+      - /app/SmartTableData/logs/app/app:/app/logs
+      - /app/SmartTableData/logs/app/nginx:/var/log/nginx
+      - /app/SmartTableData/logs/app/supervisor:/var/log/supervisor
+    restart: unless-stopped
+```
+
+
+## Development Environment
+
+### Requirements
+
+- Node.js >= 18
+- pnpm >= 9
+- Python >= 3.11 (Only for backend mode)
+
+### Frontend Development
+
+#### Install Dependencies
+
+```bash
+cd smart-table
+pnpm install
+```
+
+#### Development Mode
+
+```bash
+pnpm run dev
+```
+
+Visit <http://localhost:5173>
+
+#### Build for Production
+
+```bash
+pnpm run build
+```
+
+#### Preview Production Build
+
+```bash
+pnpm run preview
+```
+
+#### Run Tests
+
+```bash
+# Run all tests
+pnpm run test
+
+# Watch mode (for development)
+pnpm run test:watch
+
+# Generate test coverage report
+pnpm run test:coverage
+```
+
+### Backend Service (Optional)
+
+#### Using Docker Compose (Recommended)
+
+```bash
+cd smarttable-backend
+
+# Copy environment variables configuration
+cp .env.example .env
+# Edit .env file to configure database connection (default uses SQLite)
+
+# Start all services (SQLite mode)
+docker-compose up -d
+
+# Or use PostgreSQL + Redis (for production environment)
+# v1.4.0 optimization: Docker deployment embeds Redis, no separate Redis container needed
+docker-compose -f docker-compose.dev.yml up -d
+
+# Run database migrations
+docker-compose exec backend flask db upgrade
+
+# View logs
+docker-compose logs -f backend
+
+# Access API documentation
+# http://localhost:5000/apidocs  (Swagger UI)
+```
+
+#### Local Development
+
+```bash
+cd smarttable-backend
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# Windows:
+venv\Scripts\activate
+# Linux/macOS:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Copy environment variables configuration
+cp .env.example .env
+# Default uses SQLite, no need to modify DATABASE_URL
+
+# Initialize database
+flask db upgrade
+
+# Start development server (real-time collaboration disabled by default)
+flask run --reload
+
+# Or use run.py to start (supports more options)
+python run.py
+
+# Enable real-time collaboration
+python run.py --enable-realtime
+# Or use short flag
+python run.py -r
+```
+
+#### Backend Features
+
+✅ **Default Database**: SQLite (lightweight, no additional installation required)\
+✅ **Optional Database**: PostgreSQL (configurable via `DATABASE_URL` environment variable)\
+✅ **Authentication**: JWT Token authentication with refresh token, email verification\
+✅ **Permission Management**: Role-based access control (RBAC)\
+✅ **Database Migration**: Alembic migration tool\
+✅ **API Documentation**: Complete Swagger/OpenAPI documentation (Flasgger)\
+✅ **Real-time Collaboration**: Optional WebSocket real-time collaboration (enable via `--enable-realtime`)\
+✅ **Email System**: Optional SMTP email sending\
+✅ **Object Storage**: Optional MinIO file storage\
+✅ **Security Protection**: XSS protection, rate limiting, security headers
+
+## 🔢 Formula Engine
+
+### Formula Usage Examples
+
+```javascript
+// Math calculation
+{Unit Price} * {Quantity}
+
+// Discount calculation
+{Original Price} * (1 - {Discount})
+
+// Conditional judgment (nested IF)
+IF({Score} >= 90, "Excellent", IF({Score} >= 60, "Pass", "Fail"))
+
+// Text concatenation
+CONCAT({First Name}, {Last Name})
+
+// Date calculation
+DATEDIF({Start Date}, {End Date}, "D")
+
+// Statistical calculation
+SUMIF({Department}, "Sales", {Sales Amount})
+
+// Cross-table column reference (within the same Base)
+SUM([Sales].[Amount])
+
+// Cross-table conditional aggregation (CurrentValue is the current element being visited)
+COUNTIF([Sales].[City], "Beijing")
+SUMIF([Sales].[City], CurrentValue = "Beijing", [Sales].[Amount])
+
+// Filter then aggregate
+SUM(FILTER([Sales].[Amount], CurrentValue > 100))
+
+// Lookup reference
+LOOKUP({Related Table.Related Records}, {Target Field})
+```
+
+### Cross-Table Column References
+
+Formula fields support the `[Table Name].[Field Name]` syntax to reference the entire column of values of a field in another table within the same Base, combined with statistical functions for report-style cross-table calculations:
+
+- Table and field names are case-insensitive; references to the current table must still include the full table name.
+- Cross-Base or missing tables evaluate to 0/null; renaming a table or field requires manually updating the formula.
+- Any raw-value field can be referenced; formula, lookup and link fields cannot be referenced yet.
+- Computed in real time by the server — refresh after the source table changes to see the latest results.
+
+### Supported Functions (76 Total)
+
+#### 📊 Math Functions (18)
+
+| Function  | Description    | Example                   |
+| --------- | -------------- | ------------------------- |
+| `SUM`     | Sum            | `SUM({Field1}, {Field2})` |
+| `AVG`     | Average        | `AVG({Score})`            |
+| `MAX`     | Maximum        | `MAX({Age})`              |
+| `MIN`     | Minimum        | `MIN({Price})`            |
+| `ROUND`   | Round          | `ROUND({Value}, 2)`       |
+| `CEILING` | Round up       | `CEILING({Value})`        |
+| `FLOOR`   | Round down     | `FLOOR({Value})`          |
+| `ABS`     | Absolute value | `ABS({Difference})`       |
+| `MOD`     | Modulo         | `MOD({Value}, 2)`         |
+| `POWER`   | Power          | `POWER({Base}, 2)`        |
+| `SQRT`    | Square root    | `SQRT({Value})`           |
+| `LN`      | Natural log    | `LN({Value})`             |
+| `LOG`     | Logarithm      | `LOG(100, 10)`            |
+| `EXP`     | Exponential    | `EXP({Value})`            |
+| `PI`      | Pi             | `PI()`                    |
+| `E`       | Euler's number | `E()`                     |
+| `RAND`    | Random number  | `RAND()`                  |
+| `RANDBETWEEN` | Random integer in range | `RANDBETWEEN(1, 10)` |
+
+#### 📝 Text Functions (14)
+
+| Function     | Description      | Example                            |
+| ------------ | ---------------- | ---------------------------------- |
+| `CONCAT`     | Concatenate text | `CONCAT({First}, {Last})`          |
+| `LEFT`       | Left extract     | `LEFT({Text}, 3)`                  |
+| `RIGHT`      | Right extract    | `RIGHT({Text}, 3)`                 |
+| `MID`        | Middle extract   | `MID({Text}, 2, 3)`                |
+| `LEN`        | Text length      | `LEN({Description})`               |
+| `UPPER`      | To uppercase     | `UPPER({Text})`                    |
+| `LOWER`      | To lowercase     | `LOWER({Text})`                    |
+| `TRIM`       | Trim spaces      | `TRIM({Text})`                     |
+| `SUBSTITUTE` | Replace text     | `SUBSTITUTE({Text}, "Old", "New")` |
+| `REPLACE`    | Replace position | `REPLACE({Text}, 1, 3, "New")`     |
+| `FIND`       | Find position    | `FIND("Substring", {Text})`        |
+| `REPT`       | Repeat text      | `REPT("★", {Rating})`              |
+| `TEXT`       | Format as text   | `TEXT({Value}, "0.00")`            |
+| `VALUE`      | Text to number   | `VALUE({Text})`                    |
+
+#### 📅 Date Functions (15)
+
+| Function          | Description                        | Example                                         |
+| ----------------- | ---------------------------------- | ----------------------------------------------- |
+| `TODAY`           | Today's date                       | `TODAY()`                                       |
+| `NOW`             | Current time                       | `NOW()`                                         |
+| `YEAR`            | Extract year                       | `YEAR({Date})`                                  |
+| `MONTH`           | Extract month                      | `MONTH({Date})`                                 |
+| `DAY`             | Extract day                        | `DAY({Date})`                                   |
+| `HOUR`            | Extract hour                       | `HOUR({Time})`                                  |
+| `MINUTE`          | Extract minute                     | `MINUTE({Time})`                                |
+| `SECOND`          | Extract second                     | `SECOND({Time})`                                |
+| `WEEKDAY`         | Day of week (1=Monday, 7=Sunday)   | `WEEKDAY({Date})`                               |
+| `DATETIME_FORMAT` | Format datetime                    | `DATETIME_FORMAT({DateTime}, "YYYY-MM-DD")`      |
+| `FROMUNIXTIME`    | Timestamp to datetime (ms)         | `FROMUNIXTIME(1704067200000)`                   |
+| `UNIXTIMESTAMP`   | Datetime to timestamp (ms)         | `UNIXTIMESTAMP({DateTime})`                     |
+| `DATEDIF`         | Date difference (`DATEDIFF` alias) | `DATEDIF({Start}, {End}, "D")`                  |
+| `DATEDIFF`        | Date difference (day/month/year)   | `DATEDIFF({End}, {Start}, "days")`              |
+| `DATEADD`         | Date add/subtract, `DATEADD(date, amount, unit)` | `DATEADD({Date}, 7, "D")`                       |
+
+> **Note**: `DATEADD` signature is `DATEADD(date, amount, unit)`, e.g. `DATEADD(TODAY(), 7, "D")`. Unit is case-sensitive: `M` = month, `m` = minute; `D/d` = day, `H/h` = hour, `S/s` = second. `DATEDIF` and `DATEDIFF` are aliases.
+
+#### 🧠 Logic Functions (16)
+
+| Function  | Description       | Example                            |
+| --------- | ----------------- | ---------------------------------- |
+| `IF`      | Conditional       | `IF({Condition}, "True", "False")` |
+| `AND`     | Logical AND       | `AND({Cond1}, {Cond2})`            |
+| `OR`      | Logical OR        | `OR({Cond1}, {Cond2})`             |
+| `XOR`     | Exclusive OR      | `XOR({Cond1}, {Cond2})`            |
+| `NOT`     | Logical NOT       | `NOT({Condition})`                 |
+| `IFERROR` | Error handling    | `IFERROR({Formula}, "Default")`    |
+| `IFS`     | Multi-condition   | `IFS({C1}, {V1}, {C2}, {V2})`      |
+| `SWITCH`  | Multi-value match | `SWITCH({Field}, "A", 1, "B", 2)`  |
+| `ISBLANK` | Is blank          | `ISBLANK({Field})`                 |
+| `ISERROR` | Is error          | `ISERROR({a}/{b})`                 |
+| `ISNUMBER` | Is number        | `ISNUMBER({Field})`                |
+| `ISTEXT`  | Is text           | `ISTEXT({Field})`                  |
+| `ISDATE`  | Is date           | `ISDATE({Field})`                  |
+| `BLANK`   | Blank value       | `BLANK()`                          |
+| `NA`      | N/A value         | `NA()`                             |
+| `ERROR`   | Raise error       | `ERROR("Message")`                 |
+
+#### 📈 Statistical Functions (13)
+
+| Function    | Description         | Example                                    |
+| ----------- | ------------------- | ------------------------------------------ |
+| `COUNT`     | Count               | `COUNT({Field})`                           |
+| `COUNTA`    | Non-empty count     | `COUNTA({Field})`                          |
+| `COUNTBLANK` | Empty count        | `COUNTBLANK({Field1}, {Field2})`           |
+| `COUNTIF`   | Conditional count   | `COUNTIF([Sales].[City], "Beijing")`       |
+| `SUMIF`     | Conditional sum     | `SUMIF([Sales].[City], CurrentValue = "Beijing", [Sales].[Amount])` |
+| `AVERAGEIF` | Conditional average | `AVERAGEIF([Sales].[Amount], CurrentValue > 100)` |
+| `FILTER`    | Conditional filter (returns array) | `SUM(FILTER([Sales].[Amount], CurrentValue > 100))` |
+| `STDEV`     | Standard deviation  | `STDEV([Sales].[Amount])`                  |
+| `VAR`       | Variance            | `VAR([Sales].[Amount])`                    |
+| `MEDIAN`    | Median              | `MEDIAN([Sales].[Amount])`                 |
+| `MODE`      | Mode                | `MODE([Sales].[Amount])`                   |
+| `RANK`      | Ranking             | `RANK({Score}, [Exam].[Score])`            |
+| `UNIQUE`    | Deduplicate         | `UNIQUE([Sales].[City])`                   |
+
+> **Cross-table conditional aggregation**: `COUNTIF` / `SUMIF` / `AVERAGEIF` / `FILTER` support `[Table Name].[Field Name]` column references combined with `CurrentValue` traversal to aggregate data from other tables in the same Base. `CurrentValue` represents the current element being visited and is only allowed in the criteria argument of these four functions. See the [formula field docs](docs/en-US/user-guide/field-types/formula-field.md).
+
+## 🌐 RESTful API Endpoints
+
+### API Basics
+
+- **Base URL**: `http://localhost:5000/api`
+- **Authentication**: Bearer Token (JWT)
+- **Data Format**: JSON
+- **API Documentation**:
+  - Swagger UI: `http://localhost:5000/apidocs`
+
+    <br />
+
+## ⚡ Real-time Collaboration Configuration
+
+Real-time collaboration is based on WebSocket (Socket.IO), supporting multiple users editing the same table simultaneously.
+
+### Startup Parameters
+
+```bash
+# Enable real-time collaboration
+python run.py --enable-realtime
+> Or configure real-time collaboration via .env `ENABLE_REALTIME=True`
+
+# python run.py --enable-realtime
+# # Or use short flag
+# python run.py -r
+# 
+
+# Disable real-time collaboration (default behavior)
+python run.py
+```
+
+### Environment Variables
+
+```env
+# Enable real-time collaboration
+ENABLE_REALTIME=true
+
+# SocketIO message queue (recommended when using Redis, for multi-process deployment)
+SOCKETIO_MESSAGE_QUEUE=redis://localhost:6379/1
+
+# SocketIO heartbeat configuration
+SOCKETIO_PING_TIMEOUT=60
+SOCKETIO_PING_INTERVAL=25
+```
+
+### Docker Deployment
+
+Add to `docker-compose.yml` or `.env` file:
+
+```yaml
+environment:
+  - ENABLE_REALTIME=true
+  - SOCKETIO_MESSAGE_QUEUE=redis://redis:6379/1
+```
+
+### Feature Overview
+
+| Feature                  | Description                                                                      |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| **Online Presence**      | Display users currently editing the same table with cursor positions             |
+| **View Sync**            | Real-time sync of other users' view switching and scroll positions               |
+| **Cell Locking**         | Automatically lock cells being edited to prevent conflicts                       |
+| **Conflict Detection**   | Optimistic locking-based conflict detection, returns 409 Conflict status code    |
+| **Offline Queue**        | Operations auto-cached when disconnected, auto-replayed in order on reconnection |
+| **Graceful Degradation** | Auto-degrade to normal HTTP polling when WebSocket unavailable                   |
+
+### Socket.IO Events
+
+| Event Category      | Event Name                        | Description                        |
+| ------------------- | --------------------------------- | ---------------------------------- |
+| **Room Management** | `room:join` / `room:leave`        | Join/leave collaboration room      |
+| **Presence**        | `presence:view_changed`           | View switch notification           |
+| <br />              | `presence:cell_selected`          | Cell selection notification        |
+| <br />              | `presence:user_joined`            | User joined notification           |
+| <br />              | `presence:user_left`              | User left notification             |
+| **Cell Locking**    | `lock:acquire` / `lock:release`   | Acquire/release cell lock          |
+| <br />              | `lock:acquired` / `lock:released` | Lock/unlock broadcast notification |
+| **Data Sync**       | `data:record_updated`             | Record update push                 |
+| <br />              | `data:record_created`             | Record creation push               |
+| <br />              | `data:record_deleted`             | Record deletion push               |
+| <br />              | `data:field_updated`              | Field update push                  |
+| <br />              | `data:view_updated`               | View update push                   |
+| <br />              | `data:table_updated`              | Table update push                  |
+| <br />              | `data:table_created`              | Table creation push                |
+| <br />              | `data:table_deleted`              | Table deletion push                |
+
+## 🐳 Docker Deployment
+
+### Quick Deploy (Official Image One-click Start)
+
+Directly start:
+
+```bash
+docker run -d \
+  --name smarttable \
+  -p 80:80 \
+  -e SECRET_KEY=YouMustChangeThisKey \
+  -e JWT_SECRET_KEY=YouMustChangeThisKey \
+  -v /app/SmartTableData/data:/app/data \
+  -v /app/SmartTableData/uploads:/app/uploads \
+  -v /app/SmartTableData/redis:/data/redis \
+  ygbinac/smarttable:latest
+```
+
+* Or use docker compose, just create the following docker-compose.yml:
+```bash
+services:
+  smarttable:
+    image: ygbinac/smarttable:latest
+    container_name: smarttable
+    ports:
+      - "80:80"
+    environment:
+      SECRET_KEY: YouMustChangeThisKey
+      JWT_SECRET_KEY: YouMustChangeThisKey
+    volumes:
+      - /app/SmartTableData/data:/app/data
+      - /app/SmartTableData/uploads:/app/uploads
+      - /app/SmartTableData/redis:/data/redis
+      - /app/SmartTableData/logs/app/app:/app/logs
+      - /app/SmartTableData/logs/app/nginx:/var/log/nginx
+      - /app/SmartTableData/logs/app/supervisor:/var/log/supervisor
+    restart: unless-stopped
+```
+
+### Source Deploy
+
+```bash
+# Clone repository
+git clone https://github.com/ldbinac/smart_table.git
+cd smart-table-spec
+
+# Copy environment variables configuration
+cp .env.example .env
+# Edit .env file, modify configuration as needed
+
+# Start all services (frontend + backend + database) with one command
+docker-compose up -d
+
+# Check service status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+```
+
+Access URLs:
+
+- Frontend: <http://localhost>
+- Backend API: <http://localhost:5000/api>
+- API Docs: <http://localhost:5000/apidocs>
+
+### Production Deployment (PostgreSQL + Redis)
+
+```bash
+# Use production configuration
+docker-compose -f docker-compose.full.yml up -d
+
+# Or start separately
+docker-compose -f docker-compose.dev.yml up -d
+```
+
+### Docker Compose Service Architecture
+
+```
+smart-table-spec/
+├── docker-compose.yml              # Development (SQLite)
+├── docker-compose.full.yml         # Production (PostgreSQL + Redis + MinIO)
+├── docker-compose.dev.yml          # Development (PostgreSQL + Redis)
+├── Dockerfile                      # Frontend build + Nginx
+├── smarttable-backend/
+│   ├── Dockerfile                  # Backend application
+│   └── docker-compose.yml          # Backend standalone orchestration
+└── docker/
+    ├── nginx/
+    │   └── nginx.conf              # Nginx configuration
+    └── supervisor/
+        └── supervisord.conf        # Process manager configuration
+```
+
+### Environment Variable Configuration
+
+See [.env.example](.env.example) and [smarttable-backend/.env.example](smarttable-backend/.env.example)
+
+Key configuration items:
+
+| Variable               | Description                    | Default                   | Required                  |
+| ---------------------- | ------------------------------ | ------------------------- | ------------------------- |
+| `SECRET_KEY`           | Flask secret key               | -                         | ✅ Production              |
+| `JWT_SECRET_KEY`       | JWT secret key                 | -                         | ✅ Production              |
+| `DATABASE_URL`         | Database connection            | sqlite:///smarttable.db   | ❌                         |
+| `REDIS_URL`            | Redis address                  | redis\://localhost:6379/0 | ❌                         |
+| `ENABLE_REALTIME`      | Enable real-time collaboration | false                     | ❌                         |
+| `MAIL_SERVER`          | SMTP server                    | -                         | ❌ (email feature needed)  |
+| `MINIO_ENDPOINT`       | MinIO address                  | -                         | ❌ (object storage needed) |
+
+## 🌍 Browser Support
+
+| Browser | Minimum Version |
+| ------- | --------------- |
+| Chrome  | >= 90           |
+| Firefox | >= 88           |
+| Safari  | >= 14           |
+| Edge    | >= 90           |
+
+> 💡 **Tip**: Recommended to use the latest version of Chrome or Edge for best experience
+
+## 🤝 Contributing
+
+Welcome to submit Issues and Pull Requests!
+
+### Development Workflow
+
+1. Fork this repository
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Develop and test
+4. Commit your changes (`git commit -m 'feat: Add some AmazingFeature'`)
+5. Push to the branch (`git push origin feature/AmazingFeature`)
+6. Create a Pull Request with detailed description
+
+### Commit Message Convention
+
+We follow [Conventional Commits](https://www.conventionalcommits.org/) specification:
+
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation update
+- `style`: Code format changes (no functional impact)
+- `refactor`: Code refactoring (neither new feature nor fix)
+- `perf`: Performance optimization
+- `test`: Test related
+- `chore`: Build/tool/auxiliary tool changes
+
+### Code Standards
+
+- Frontend follows ESLint + Prettier configuration
+- Backend follows PEP 8 standards
+- Ensure all tests pass before committing: `pnpm run test` (frontend) / `pytest` (backend)
+- Ensure TypeScript type checking passes: `vue-tsc --noEmit`
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
+
+***
+
+## 🙏 Acknowledgments
+
+Thanks to all developers and users who contributed to this project!
+
+Special thanks to:
+
+- Vue.js team for the excellent frontend framework
+- Element Plus team for the comprehensive UI component library
+- Flask community for the flexible backend framework
+- TinyEditor team for the powerful text editor component
+- Vxe-Table team for the high-performance virtual scroll table component
+- Vtable team for the high-performance canvas table component
+- All Issue submitters and PR contributors
+
+***
+
+## 📞 Contact Us
+
+- 📧 Email: <ldengbin@126.com>
+- 💬 Issues: [GitHub Issues](https://github.com/ldbinac/smart_table/issues)
+- 📖 Documentation: [User-Manual](https://my-smart-table.github.io/smart-table-docs)
+- Follow the author on WeChat:
+  ![](./doc/img/wechat_official_account.png)
+
+- Buy us a coffee:
+
+  | WeChat | Alipay |
+  | -------- | -------- |
+  | ![](./doc/img/wechat_pay.png) | ![](./doc/img/alipay_pay.png) |
+
+
+
+***
+
+**⭐ If this project helps you, please give us a Star! ⭐**
+
+**Made with ❤️ by Smart Table Team**

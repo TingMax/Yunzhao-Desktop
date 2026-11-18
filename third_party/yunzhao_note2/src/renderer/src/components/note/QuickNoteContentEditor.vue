@@ -1,0 +1,367 @@
+<script setup>
+import { editingDataGeneration, useDraftProtection } from '../../composables/useDraftProtection.js'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, useId } from 'vue'
+import { useMessage } from '../../composables/useMessage.js'
+import { quickNoteEditorPosition } from '../../utils/quickNoteEditorPosition.js'
+
+const props = defineProps({
+  note: { type: Object, required: true },
+  anchorRect: { type: Object, required: true }
+})
+const emit = defineEmits(['close', 'saved'])
+const { showMessage } = useMessage()
+const hintId = useId()
+const contentId = useId()
+const remarkId = useId()
+
+const editorRef = ref(null)
+const contentTextareaRef = ref(null)
+const originalContent = ref(String(props.note.content || ''))
+const originalRemark = ref(String(props.note.remark || ''))
+const contentDraft = ref(originalContent.value)
+const remarkDraft = ref(originalRemark.value)
+const conflict = ref(false)
+const positionStyle = reactive({ left: '12px', top: '12px', visibility: 'hidden' })
+const phase = ref('editing')
+let pendingSave = null
+let mounted = false
+let validationResetTimer = null
+const dataGeneration = editingDataGeneration.value
+const currentDraft = () => mounted && dataGeneration === editingDataGeneration.value
+
+function positionEditor() {
+  const editor = editorRef.value
+  if (!editor) return
+  const bounds = editor.getBoundingClientRect()
+  const anchor = props.anchorRect
+  const position = quickNoteEditorPosition(anchor, bounds, {
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight
+  })
+  positionStyle.left = `${position.left}px`
+  positionStyle.top = `${position.top}px`
+  positionStyle.visibility = 'visible'
+}
+
+function focusEditor() {
+  const textarea = contentTextareaRef.value
+  if (!textarea) return
+  textarea.focus({ preventScroll: true })
+  const caret = textarea.value.length
+  textarea.setSelectionRange(caret, caret)
+}
+
+async function closeEditor({ committed = false } = {}) {
+  if (phase.value === 'closed') return
+  const clearing = protectedDraft.clear()
+  phase.value = 'closed'
+  try {
+    await clearing
+  } catch (error) {
+    if (!currentDraft()) return
+    if (!committed) {
+      phase.value = 'editing'
+      showMessage('error', error.message || '草稿清除失败，请重试')
+      return false
+    }
+    showMessage('warning', '待办已保存，但旧草稿未能清除，请核对后再编辑。')
+  }
+  if (currentDraft()) emit('close')
+  return true
+}
+
+async function commit() {
+  if (phase.value === 'closed') return true
+  if (phase.value === 'saving') return pendingSave
+  if (phase.value === 'invalid' || conflict.value) return false
+  const prepared = await protectedDraft.flush()
+  if (!currentDraft() || phase.value === 'closed') return true
+  if (phase.value === 'saving') return pendingSave
+  if (!prepared.persisted || phase.value === 'invalid' || conflict.value) return false
+
+  const content = contentDraft.value.replace(/\r\n?/g, '\n')
+  const remark = remarkDraft.value.replace(/\r\n?/g, '\n')
+  if (!content.trim() && Number(props.note.attachment_count) <= 0) {
+    phase.value = 'invalid'
+    showMessage('warning', '请输入待办内容或保留至少一张图片')
+    await nextTick()
+    if (mounted) focusEditor()
+    validationResetTimer = setTimeout(() => {
+      validationResetTimer = null
+      if (phase.value === 'invalid') phase.value = 'editing'
+    }, 0)
+    return false
+  }
+  if (content === originalContent.value && remark === originalRemark.value) {
+    return closeEditor()
+  }
+
+  phase.value = 'saving'
+  pendingSave = window.api
+    .updateNote(props.note.id, { content, remark }, originalContent.value, originalRemark.value)
+    .then(async (updated) => {
+      if (!updated) throw new Error('待办不存在或已被删除')
+      if (!currentDraft()) return true
+      showMessage('success', '待办已保存')
+      emit('saved', updated)
+      await closeEditor({ committed: true })
+      return true
+    })
+    .catch(async (error) => {
+      if (!currentDraft()) return false
+      console.error('[QuickNoteContentEditor] 保存失败:', props.note.id, error)
+      phase.value = 'editing'
+      conflict.value = true
+      showMessage('error', error.message || '保存失败，请重试')
+      await nextTick()
+      if (mounted) focusEditor()
+      return false
+    })
+    .finally(() => {
+      pendingSave = null
+    })
+  return pendingSave
+}
+
+function cancel(event) {
+  if (event.isComposing || phase.value !== 'editing') return
+  event.preventDefault()
+  event.stopPropagation()
+  void closeEditor()
+}
+
+function onFocusOut(event) {
+  if (editorRef.value?.contains(event.relatedTarget)) return
+  void commit()
+}
+
+function onDocumentPointerDown(event) {
+  if (editorRef.value?.contains(event.target)) return
+  void commit()
+}
+
+function onViewportChange(event) {
+  if (editorRef.value?.contains(event?.target)) return
+  void commit()
+}
+
+onMounted(async () => {
+  mounted = true
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
+  window.addEventListener('blur', commit)
+  window.addEventListener('resize', onViewportChange)
+  window.addEventListener('scroll', onViewportChange, true)
+  await nextTick()
+  positionEditor()
+  requestAnimationFrame(focusEditor)
+})
+
+onBeforeUnmount(() => {
+  mounted = false
+  if (validationResetTimer) clearTimeout(validationResetTimer)
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
+  window.removeEventListener('blur', commit)
+  window.removeEventListener('resize', onViewportChange)
+  window.removeEventListener('scroll', onViewportChange, true)
+})
+const protectedDraft = useDraftProtection({
+  key: 'quick:' + props.note.id,
+  // 保留 draft 键，兼容已经落盘的快速编辑正文草稿。
+  fields: { draft: contentDraft, remarkDraft, originalContent, originalRemark },
+  dirty: () =>
+    contentDraft.value !== originalContent.value || remarkDraft.value !== originalRemark.value,
+  busy: () => phase.value === 'saving'
+})
+function retrySave() {
+  conflict.value = false
+  void commit()
+}
+
+async function loadLatest() {
+  try {
+    const current = await window.api.getNote(props.note.id)
+    if (!current) {
+      showMessage('error', '待办已删除，草稿仍保留')
+      return
+    }
+    originalContent.value = current.content
+    originalRemark.value = String(current.remark || '')
+    contentDraft.value = current.content
+    remarkDraft.value = originalRemark.value
+    conflict.value = false
+  } catch (error) {
+    showMessage('error', error.message || '加载失败，草稿仍保留')
+  }
+}
+async function copyDraft() {
+  try {
+    const text = remarkDraft.value
+      ? `${contentDraft.value}\n\n备注：\n${remarkDraft.value}`
+      : contentDraft.value
+    await window.api.writeClipboardText(text)
+    showMessage('success', '草稿已复制')
+  } catch {
+    showMessage('error', '复制失败，请选中内容手动复制')
+  }
+}
+</script>
+
+<template>
+  <Teleport to="body">
+    <Transition name="quick-note-editor" appear>
+      <section
+        ref="editorRef"
+        class="quick-note-editor"
+        :class="{ 'is-saving': phase === 'saving' }"
+        :style="positionStyle"
+        role="dialog"
+        aria-label="快速修改待办正文和备注"
+        @focusout="onFocusOut"
+        @keydown.esc="cancel"
+      >
+        <div class="quick-note-editor__field">
+          <label :for="contentId">正文</label>
+          <textarea
+            :id="contentId"
+            ref="contentTextareaRef"
+            v-model="contentDraft"
+            :aria-describedby="hintId"
+            :disabled="phase === 'saving'"
+            spellcheck="true"
+          />
+        </div>
+        <div class="quick-note-editor__divider" aria-hidden="true" />
+        <div class="quick-note-editor__field quick-note-editor__field--remark">
+          <label :for="remarkId">备注</label>
+          <textarea
+            :id="remarkId"
+            v-model="remarkDraft"
+            :aria-describedby="hintId"
+            :disabled="phase === 'saving'"
+            placeholder="添加备注"
+            spellcheck="true"
+          />
+        </div>
+        <div v-if="conflict" class="quick-note-editor__recovery">
+          <span>保存未完成，草稿已保留。</span>
+          <button type="button" @click="copyDraft">复制草稿</button>
+          <button type="button" @click="retrySave">重试保存</button>
+          <button type="button" @click="loadLatest">放弃草稿并加载最新内容</button>
+        </div>
+        <div :id="hintId" class="quick-note-editor__hint" aria-live="polite">
+          {{ phase === 'saving' ? '正在保存…' : '失焦自动保存 · Esc 取消' }}
+        </div>
+      </section>
+    </Transition>
+  </Teleport>
+</template>
+
+<style scoped>
+.quick-note-editor__recovery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+}
+.quick-note-editor__recovery span {
+  flex-basis: 100%;
+  color: var(--text-color-secondary);
+}
+.quick-note-editor__recovery button {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--ui-fill-passive);
+  color: var(--text-color);
+  font: inherit;
+  cursor: pointer;
+}
+.quick-note-editor__recovery button:hover {
+  background: var(--ui-fill-hover);
+}
+
+.quick-note-editor {
+  position: fixed;
+  z-index: var(--z-global-editor);
+  width: min(360px, calc(100vw - 24px));
+  padding: 12px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  border: 1px solid var(--ui-border-control);
+  border-radius: 14px;
+  background: var(--surface-float);
+  box-shadow:
+    0 14px 34px color-mix(in srgb, var(--text-color) 18%, transparent),
+    0 2px 8px color-mix(in srgb, var(--text-color) 10%, transparent);
+  color: var(--text-color);
+  transform-origin: top left;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.quick-note-editor__field label {
+  display: block;
+  padding: 2px 6px 4px;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+  line-height: 1.3;
+  user-select: none;
+}
+
+.quick-note-editor__field textarea {
+  display: block;
+  width: 100%;
+  min-height: 84px;
+  border-radius: 8px;
+  max-height: min(210px, calc(100vh - 180px));
+  padding: 5px 6px;
+  overflow: auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.quick-note-editor__field--remark textarea {
+  min-height: 58px;
+  max-height: min(150px, calc(100vh - 220px));
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+}
+
+.quick-note-editor__divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--ui-border-divider);
+}
+
+.quick-note-editor.is-saving textarea {
+  opacity: 0.66;
+}
+
+.quick-note-editor__hint {
+  padding: 4px 6px 1px;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+  line-height: 1.3;
+  text-align: right;
+  user-select: none;
+}
+
+.quick-note-editor-enter-active,
+.quick-note-editor-leave-active {
+  transition:
+    opacity 160ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.quick-note-editor-enter-from,
+.quick-note-editor-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+}
+</style>

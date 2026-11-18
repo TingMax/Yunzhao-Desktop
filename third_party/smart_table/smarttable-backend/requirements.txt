@@ -1,0 +1,67 @@
+# Flask 核心依赖
+Flask==3.0.0
+
+# 数据库相关
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.23
+Flask-Migrate==4.0.5
+alembic==1.13.1
+# 注意：不要升级到 3.3.x —— 3.3 的 _acompat.py 使用 class Queue(queue.Queue[T])，
+# 在 eventlet.monkey_patch() 替换标准库 queue.Queue 后会导致
+# "TypeError: type 'Queue' is not subscriptable"，app-server 无法启动
+psycopg[binary,pool]==3.2.13
+
+# 认证与安全
+Flask-JWT-Extended==4.6.0
+Flask-Bcrypt==1.0.1
+Flask-WTF==1.2.1
+bcrypt==4.1.2
+
+# CORS 支持
+Flask-CORS==4.0.0
+
+# 缓存
+Flask-Caching==2.1.0
+redis==5.0.1
+
+# WebSocket 支持
+Flask-SocketIO==5.3.6
+eventlet==0.39.1
+
+# 工作流定时调度
+APScheduler==3.10.4
+
+# 数据序列化
+marshmallow==3.20.1
+marshmallow-sqlalchemy==0.29.0
+
+# 插件清单/配置校验
+jsonschema==4.26.0
+
+# 日期处理
+python-dateutil>=2.8.2
+
+# 导入导出相关
+pandas==2.1.4
+openpyxl==3.1.2
+xlrd==2.0.1
+
+# 图片处理
+Pillow==10.4.0
+
+# 环境变量
+python-dotenv==1.0.0
+
+# 加密
+cryptography==42.0.5
+
+# API 文档生成
+flasgger==0.9.7b2
+
+# HTTP 请求
+# 注意：2.32.4 为最后一个支持 Python 3.8 的版本（2.32.5 起 requires-python >=3.9），
+# 修复 CVE-2024-35195 / CVE-2024-47081；兼容部署环境为 Python 3.8.10，勿盲目升级
+requests==2.32.4
+
+# PDF 导出
+WeasyPrint==53.3

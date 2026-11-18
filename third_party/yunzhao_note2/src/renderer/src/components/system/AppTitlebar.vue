@@ -1,0 +1,1323 @@
+<script setup>
+/**
+ * AppTitlebar.vue — Microsoft 风格的自定义标题栏
+ *
+ * 职责：
+ *   1. 提供关闭、三态窗口层级、锁定窗口控制
+ *   2. 展示窗口标题文字
+ *   3. 通过 slot 支持在标题栏右侧插入自定义操作按钮
+ *   4. 除窗口缩放带和交互控件外，整个标题栏通过统一指针事务支持拖动与双击
+ */
+
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { WINDOW_Z_ORDER_MODES } from '../../../../shared/settings-schema.js'
+import { enterPopover, leavePopover } from '../../utils/popoverMotion.js'
+import AppIcon from '../ui/AppIcon.vue'
+import AtriumDock from './AtriumDock.vue'
+import ReminderChannelPicker from '../note/ReminderChannelPicker.vue'
+import { popoverStyle } from '../../utils/anchoredPopover.js'
+import { usePopoverLifecycle } from '../../composables/usePopoverLifecycle.js'
+import { isComposingInput } from '../../utils/inputComposition.js'
+import { createWindowDragDiagnostics } from '../../utils/windowDragDiagnostics.js'
+
+const props = defineProps({
+  title: {
+    type: String,
+    default: ''
+  },
+  locked: {
+    type: Boolean,
+    required: true
+  },
+  zOrderMode: {
+    type: String,
+    required: true,
+    validator: (value) => Object.values(WINDOW_Z_ORDER_MODES).includes(value)
+  }
+})
+
+const emit = defineEmits(['update:locked', 'update:zOrderMode', 'request:compact'])
+const atriumHosted = ref(false)
+const atriumLocked = ref(false)
+const atriumBoard = ref(0)
+const tableEditing = ref(false)
+const toolsOpen = ref(false)
+const toolsMenuRef = ref(null)
+const tools = [
+  { kind: 0, label: '倒计时' },
+  { kind: 1, label: '秒表' },
+  { kind: 2, label: '随机抽签' },
+  { kind: 3, label: '分组' },
+  { kind: 5, label: '定时任务' },
+  { kind: 4, label: '多维表格' }
+]
+const scheduleOpen = ref(false)
+const scheduleTime = ref('08:00')
+const scheduleChannels = ref(8)
+const pulling = ref(false)
+
+const WINDOW_CONTROL_GUARD_MS = 500
+const Z_ORDER_OPTIONS = Object.freeze([
+  {
+    value: WINDOW_Z_ORDER_MODES.TOP,
+    label: '始终置顶',
+    description: '保持在普通窗口上方'
+  },
+  {
+    value: WINDOW_Z_ORDER_MODES.NORMAL,
+    label: '正常层级',
+    description: '跟随 Windows 窗口顺序'
+  },
+  {
+    value: WINDOW_Z_ORDER_MODES.BOTTOM,
+    label: '始终置底',
+    description: '保持在普通窗口下方'
+  }
+])
+
+const zOrderTriggerRef = ref(null)
+const zOrderMenuRef = ref(null)
+const zOrderMenuOpen = ref(false)
+const zOrderMenuStyle = ref({})
+usePopoverLifecycle(zOrderMenuOpen, zOrderTriggerRef, zOrderMenuRef, updateZOrderMenuPosition)
+const zOrderChanging = ref(false)
+const lockChanging = ref(false)
+let zOrderGuardTimer = null
+let lockGuardTimer = null
+let titlebarDragFrame = null
+let titlebarDragPointerId = null
+let titlebarDragLatestPoint = null
+let titlebarPointerMoved = false
+let titlebarDragStartPromise = null
+let titlebarDragging = false
+let titlebarDragGeneration = 0
+let titlebarDragCaptureTarget = null
+let titlebarDragDiagnostic = null
+let titlebarDragSequence = 0
+let hostedMove = null
+let lastTitlebarPress = null
+let suppressTitlebarDomDoubleClickUntil = 0
+const titlebarMotionDiagnostics = createWindowDragDiagnostics({ api: window.api })
+const TITLEBAR_DOUBLE_CLICK_MS = 420
+const TITLEBAR_DOUBLE_CLICK_DISTANCE = 12
+const TITLEBAR_INTERACTIVE_SELECTOR =
+  'button, a, input, textarea, select, summary, [role="button"], [role="menu"], [contenteditable="true"], [data-no-compact]'
+
+const activeZOrderOption = computed(
+  () => Z_ORDER_OPTIONS.find((option) => option.value === props.zOrderMode) || Z_ORDER_OPTIONS[0]
+)
+const zOrderTitle = computed(() =>
+  zOrderChanging.value ? '正在切换窗口层级' : `窗口层级：${activeZOrderOption.value.label}`
+)
+
+function finishGuard(stateRef, timerName) {
+  const timer = setTimeout(() => {
+    stateRef.value = false
+    if (timerName === 'z-order') zOrderGuardTimer = null
+    else lockGuardTimer = null
+  }, WINDOW_CONTROL_GUARD_MS)
+  if (timerName === 'z-order') zOrderGuardTimer = timer
+  else lockGuardTimer = timer
+}
+
+function updateZOrderMenuPosition() {
+  const trigger = zOrderTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+  const font = parseFloat(getComputedStyle(trigger.parentElement).fontSize)
+  const width = Math.max(188 * rem, 10 * font)
+  const preferredLeft = rect.right - width
+  zOrderMenuStyle.value = popoverStyle(
+    { ...rect.toJSON(), left: preferredLeft },
+    width,
+    zOrderMenuRef.value ? zOrderMenuRef.value.scrollHeight + 2 : 180 * rem
+  )
+}
+
+async function focusActiveZOrderOption() {
+  await nextTick()
+  zOrderMenuRef.value
+    ?.querySelector(`[data-mode="${props.zOrderMode}"]`)
+    ?.focus({ preventScroll: true })
+}
+
+function toggleZOrderMenu() {
+  if (zOrderChanging.value) return
+  zOrderMenuOpen.value = !zOrderMenuOpen.value
+  if (zOrderMenuOpen.value) {
+    updateZOrderMenuPosition()
+    void focusActiveZOrderOption()
+  }
+}
+
+function closeZOrderMenu({ restoreFocus = false } = {}) {
+  if (!zOrderMenuOpen.value) return
+  zOrderMenuOpen.value = false
+  if (restoreFocus) zOrderTriggerRef.value?.focus({ preventScroll: true })
+}
+
+async function selectZOrderMode(mode) {
+  if (zOrderChanging.value) return
+  closeZOrderMenu({ restoreFocus: true })
+  // 同一选项也交给主进程核验并恢复实际层级，界面状态不能代表 HWND 状态。
+
+  zOrderChanging.value = true
+  try {
+    const result = await window.api.setWindowZOrderMode(mode)
+    if (result?.mode) {
+      emit('update:zOrderMode', result.mode)
+      if (atriumHosted.value) window.api.atriumCommand?.({ cmd: 'layer', layer: result.mode })
+    }
+  } catch (error) {
+    console.warn('[AppTitlebar] 切换窗口层级失败:', error)
+  } finally {
+    finishGuard(zOrderChanging, 'z-order')
+  }
+}
+
+function onZOrderMenuKeydown(event) {
+  if (isComposingInput(event)) return
+  const items = [...(zOrderMenuRef.value?.querySelectorAll('[role="menuitemradio"]') || [])]
+  if (!items.length) return
+  const currentIndex = Math.max(0, items.indexOf(document.activeElement))
+  let targetIndex = null
+  if (event.key === 'ArrowDown') targetIndex = (currentIndex + 1) % items.length
+  if (event.key === 'ArrowUp') targetIndex = (currentIndex - 1 + items.length) % items.length
+  if (event.key === 'Home') targetIndex = 0
+  if (event.key === 'End') targetIndex = items.length - 1
+  if (event.key === 'Tab') {
+    closeZOrderMenu({ restoreFocus: true })
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeZOrderMenu({ restoreFocus: true })
+    return
+  }
+  if (targetIndex === null) return
+  event.preventDefault()
+  items[targetIndex].focus({ preventScroll: true })
+}
+
+function onDocumentPointerDown(event) {
+  if (toolsOpen.value && !event.target.closest?.('.hosted-tools') && !toolsMenuRef.value?.contains(event.target))
+    toolsOpen.value = false
+  if (!zOrderMenuOpen.value) return
+  if (zOrderTriggerRef.value?.contains(event.target)) return
+  if (zOrderMenuRef.value?.contains(event.target)) return
+  closeZOrderMenu()
+}
+
+function onPopoverEnter(element, done) {
+  enterPopover(element, done, 'dropdown')
+}
+
+function onPopoverLeave(element, done) {
+  leavePopover(element, done, 'dropdown')
+}
+
+// ---- 窗口控制事件处理函数 ----
+/** 桌面日历不从这里关闭。 */
+const close = () => {
+  if (atriumHosted.value) return
+  window.api.closeWindow()
+}
+
+function openHostedNote() {
+  window.dispatchEvent(new CustomEvent('atrium-new-note'))
+}
+/** 切换锁定/解锁状态 */
+const toggleLock = async () => {
+  if (lockChanging.value) return
+  lockChanging.value = true
+  try {
+    const result = await window.api.toggleLock()
+    if (typeof result?.value === 'boolean') emit('update:locked', result.value)
+  } catch (e) {
+    console.warn('[AppTitlebar] 切换锁定失败:', e)
+  } finally {
+    finishGuard(lockChanging, 'lock')
+  }
+}
+
+function requestTitlebarDragUpdate() {
+  if (titlebarDragFrame) return
+  titlebarMotionDiagnostics.scheduleFrame()
+  titlebarDragFrame = requestAnimationFrame(() => {
+    titlebarDragFrame = null
+    window.api.updateTitlebarWindowDrag(
+      titlebarDragLatestPoint,
+      titlebarMotionDiagnostics.createUpdatePacket()
+    )
+  })
+}
+
+function compactAnchor(event) {
+  return {
+    x: Math.round(event.screenX),
+    y: Math.round(event.screenY)
+  }
+}
+
+function onTitlebarDoubleClick(event) {
+  // 桌面日历的顶栏空白是切换按钮两边的空位，双击不能收成便签小条。
+  if (atriumHosted.value) return
+  if (Date.now() < suppressTitlebarDomDoubleClickUntil) return
+  const target = event.target
+  if (!(target instanceof Element) || target.closest(TITLEBAR_INTERACTIVE_SELECTOR)) return
+  emit('request:compact', compactAnchor(event))
+}
+
+function setTitlebarPointerCapture(target, pointerId) {
+  try {
+    target.setPointerCapture?.(pointerId)
+  } catch {
+    // 合成输入或窗口切换期间指针可能已失效；主进程拖动事务仍可按坐标完成。
+  }
+}
+
+function releaseTitlebarPointerCapture(target, pointerId) {
+  try {
+    target.releasePointerCapture?.(pointerId)
+  } catch {
+    // lostpointercapture 与 pointerup 可能竞争，释放操作保持幂等。
+  }
+}
+
+function hasTitlebarPointerCapture(target, pointerId) {
+  try {
+    return Boolean(target?.hasPointerCapture?.(pointerId))
+  } catch {
+    return false
+  }
+}
+
+function titlebarPointerSnapshot(event = null, extra = {}) {
+  const diagnostic = titlebarDragDiagnostic
+  const pointerId = event?.pointerId ?? titlebarDragPointerId
+  return {
+    eventType: event?.type || null,
+    dragId: diagnostic?.dragId || null,
+    pointerId,
+    pointerType: event?.pointerType || diagnostic?.pointerType || null,
+    isPrimary: event?.isPrimary ?? diagnostic?.isPrimary ?? null,
+    button: event?.button ?? null,
+    buttons: event?.buttons ?? null,
+    screenPoint:
+      Number.isFinite(event?.screenX) && Number.isFinite(event?.screenY)
+        ? { x: Math.round(event.screenX), y: Math.round(event.screenY) }
+        : titlebarDragLatestPoint
+          ? {
+              x: Math.round(titlebarDragLatestPoint.x),
+              y: Math.round(titlebarDragLatestPoint.y)
+            }
+          : null,
+    hasPointerCapture:
+      pointerId === null ? false : hasTitlebarPointerCapture(titlebarDragCaptureTarget, pointerId),
+    dragging: titlebarDragging,
+    moved: titlebarPointerMoved,
+    moveCount: diagnostic?.moveCount || 0,
+    elapsedMs: diagnostic ? Math.max(0, Math.round(performance.now() - diagnostic.startedAt)) : 0,
+    locked: props.locked,
+    zOrderMode: props.zOrderMode,
+    documentHasFocus: document.hasFocus(),
+    visibilityState: document.visibilityState,
+    ...extra
+  }
+}
+
+function reportTitlebarDrag(level, message, event = null, extra = {}) {
+  window.api.reportLog?.({
+    level,
+    kind: level === 'info' ? 'trace' : 'event',
+    scope: 'titlebar.drag.renderer',
+    message,
+    metadata: titlebarPointerSnapshot(event, extra),
+    dedupeKey: titlebarDragDiagnostic?.dragId
+      ? `${titlebarDragDiagnostic.dragId}:${event?.type || message}`
+      : undefined
+  })
+}
+
+function addTitlebarPointerListeners() {
+  window.addEventListener('pointermove', onTitlebarPointerMove, true)
+  window.addEventListener('pointerup', onTitlebarPointerUp, true)
+  window.addEventListener('pointercancel', onTitlebarPointerCancel, true)
+  // 不使用捕获阶段：否则编辑器等子元素失焦也会被误判为整个窗口失焦，
+  // 导致一次正常拖动刚开始就被收口。
+  window.addEventListener('blur', onTitlebarWindowBlur)
+}
+
+function removeTitlebarPointerListeners() {
+  window.removeEventListener('pointermove', onTitlebarPointerMove, true)
+  window.removeEventListener('pointerup', onTitlebarPointerUp, true)
+  window.removeEventListener('pointercancel', onTitlebarPointerCancel, true)
+  window.removeEventListener('blur', onTitlebarWindowBlur)
+}
+
+function onTitlebarPointerDown(event) {
+  if (event.button !== 0 || titlebarDragPointerId !== null) return
+  const target = event.target
+  if (!(target instanceof Element) || target.closest(TITLEBAR_INTERACTIVE_SELECTOR)) return
+  // 导航栏由窗口拖动接管；禁止已有文字选区触发 Chromium 原生拖拽并取消指针事务。
+  event.preventDefault()
+  if (atriumHosted.value) {
+    if (atriumLocked.value) return
+    startHostedMove(event)
+    return
+  }
+  const now = Date.now()
+  const press = { at: now, x: event.screenX, y: event.screenY }
+  const isDoublePress =
+    lastTitlebarPress &&
+    now - lastTitlebarPress.at <= TITLEBAR_DOUBLE_CLICK_MS &&
+    Math.hypot(press.x - lastTitlebarPress.x, press.y - lastTitlebarPress.y) <=
+      TITLEBAR_DOUBLE_CLICK_DISTANCE
+  lastTitlebarPress = isDoublePress ? null : press
+  if (isDoublePress) {
+    const anchor = compactAnchor(event)
+    suppressTitlebarDomDoubleClickUntil = now + 500
+    event.preventDefault()
+    titlebarDragGeneration += 1
+    titlebarDragging = false
+    void window.api
+      .endTitlebarWindowDrag({ reason: 'titlebar-double-click' })
+      .catch(() => false)
+      .finally(() => emit('request:compact', anchor))
+    return
+  }
+  if (props.locked) return
+  const generation = ++titlebarDragGeneration
+  titlebarDragPointerId = event.pointerId
+  titlebarDragLatestPoint = { x: event.screenX, y: event.screenY }
+  titlebarPointerMoved = false
+  titlebarDragCaptureTarget = event.currentTarget
+  titlebarDragDiagnostic = {
+    dragId: `titlebar-${Date.now().toString(36)}-${++titlebarDragSequence}`,
+    startedAt: performance.now(),
+    pointerType: event.pointerType,
+    isPrimary: event.isPrimary,
+    moveCount: 0
+  }
+  const dragId = titlebarDragDiagnostic.dragId
+  const motionClock = titlebarMotionDiagnostics.begin(dragId)
+  setTitlebarPointerCapture(titlebarDragCaptureTarget, event.pointerId)
+  addTitlebarPointerListeners()
+  reportTitlebarDrag('info', '标题栏拖动指针已按下', event)
+  const task = window.api
+    .beginTitlebarWindowDrag(titlebarDragLatestPoint, {
+      dragId,
+      ...(motionClock ? { motionClock } : {})
+    })
+    .catch(() => false)
+  titlebarDragStartPromise = task
+  void task.then(async (result) => {
+    const started = titlebarMotionDiagnostics.acceptBegin(result, dragId)
+    if (titlebarDragStartPromise === task) titlebarDragStartPromise = null
+    reportTitlebarDrag('info', '标题栏拖动主进程响应', null, { started: Boolean(started) })
+    if (generation !== titlebarDragGeneration || titlebarDragPointerId === null) {
+      if (started) {
+        if (titlebarPointerMoved && titlebarDragLatestPoint) {
+          window.api.updateTitlebarWindowDrag(
+            titlebarDragLatestPoint,
+            titlebarMotionDiagnostics.createUpdatePacket({ source: 'final', dragId })
+          )
+        }
+        await window.api
+          .endTitlebarWindowDrag({
+            dragId: titlebarDragDiagnostic?.dragId || null,
+            reason: 'renderer-finished-before-main-begin'
+          })
+          .catch(() => false)
+      }
+      titlebarMotionDiagnostics.end('renderer-finished-before-main-begin', dragId)
+      return
+    }
+    titlebarDragging = Boolean(started)
+    if (titlebarDragging && titlebarPointerMoved) requestTitlebarDragUpdate()
+  })
+}
+
+function startHostedMove(event) {
+  const generation = ++titlebarDragGeneration
+  titlebarDragPointerId = event.pointerId
+  titlebarDragCaptureTarget = event.currentTarget
+  hostedMove = { generation, x: event.screenX, y: event.screenY, bounds: null }
+  void window.api.atriumSizing?.(true)
+  setTitlebarPointerCapture(titlebarDragCaptureTarget, event.pointerId)
+  addTitlebarPointerListeners()
+  void window.api.getWindowBounds().then((bounds) => {
+    if (!hostedMove || hostedMove.generation !== generation || !bounds) return
+    hostedMove.bounds = bounds
+  })
+}
+
+function onTitlebarPointerMove(event) {
+  if (titlebarDragPointerId === null || titlebarDragPointerId !== event.pointerId) return
+  if (hostedMove?.bounds) {
+    window.api.setWindowBounds({
+      x: Math.round(hostedMove.bounds.x + event.screenX - hostedMove.x),
+      y: Math.round(hostedMove.bounds.y + event.screenY - hostedMove.y),
+      width: hostedMove.bounds.width,
+      height: hostedMove.bounds.height
+    })
+    return
+  }
+  if (hostedMove) return
+  titlebarMotionDiagnostics.recordPointer(event)
+  titlebarDragLatestPoint = { x: event.screenX, y: event.screenY }
+  titlebarPointerMoved = true
+  if (titlebarDragDiagnostic) titlebarDragDiagnostic.moveCount += 1
+  if (titlebarDragging) requestTitlebarDragUpdate()
+}
+
+function onTitlebarLostPointerCapture(event) {
+  if (titlebarDragPointerId === null || titlebarDragPointerId !== event.pointerId) return
+  // Windows 置底层级和毛玻璃 Overlay 可能在移动 HWND 时短暂重排 Z 序。
+  // Chromium 偶发因此释放 DOM pointer capture；实际左键尚未松开时必须继续
+  // 使用 window 级监听，否则一次长拖只会留下捕获丢失前的很短位移。
+  reportTitlebarDrag('warn', '标题栏拖动期间指针捕获丢失，继续使用窗口级监听', event)
+}
+
+function onTitlebarPointerUp(event) {
+  reportTitlebarDrag('info', '标题栏拖动收到 pointerup', event)
+  void finishTitlebarPointer(event, 'pointerup')
+}
+
+function onTitlebarPointerCancel(event) {
+  if (titlebarDragPointerId === null || titlebarDragPointerId !== event.pointerId) return
+  reportTitlebarDrag('warn', '标题栏拖动收到 pointercancel，正在安全结束事务', event)
+  void finishTitlebarPointer(event, 'pointercancel')
+}
+
+function onTitlebarWindowBlur() {
+  reportTitlebarDrag('warn', '标题栏拖动期间窗口失焦，正在安全结束事务')
+  void finishTitlebarPointer(null, 'window-blur')
+}
+
+async function finishTitlebarPointer(event = null, reason = 'unknown') {
+  const pointerId = titlebarDragPointerId
+  if (pointerId === null) return
+  if (event?.pointerId !== undefined && event.pointerId !== pointerId) return
+  const diagnostic = titlebarDragDiagnostic
+  const rendererSummary = titlebarPointerSnapshot(event, { reason })
+  titlebarDragPointerId = null
+  titlebarDragGeneration += 1
+  removeTitlebarPointerListeners()
+  releaseTitlebarPointerCapture(titlebarDragCaptureTarget, pointerId)
+  titlebarDragCaptureTarget = null
+  if (titlebarDragFrame) {
+    cancelAnimationFrame(titlebarDragFrame)
+    titlebarDragFrame = null
+    titlebarMotionDiagnostics.cancelFrame()
+  }
+  if (hostedMove) {
+    hostedMove = null
+    void window.api.atriumSizing?.(false)
+    void window.api.finishWindowResize()
+    titlebarDragLatestPoint = null
+    titlebarPointerMoved = false
+    titlebarDragDiagnostic = null
+    return
+  }
+  if (titlebarDragStartPromise) await titlebarDragStartPromise.catch(() => false)
+  if (titlebarDragging) {
+    if (titlebarPointerMoved && titlebarDragLatestPoint) {
+      window.api.updateTitlebarWindowDrag(
+        titlebarDragLatestPoint,
+        titlebarMotionDiagnostics.createUpdatePacket({
+          source: 'final',
+          dragId: diagnostic?.dragId
+        })
+      )
+    }
+    titlebarDragging = false
+    await window.api
+      .endTitlebarWindowDrag({
+        dragId: diagnostic?.dragId || null,
+        reason,
+        renderer: rendererSummary
+      })
+      .catch(() => false)
+  }
+  titlebarMotionDiagnostics.end(reason, diagnostic?.dragId)
+  titlebarDragLatestPoint = null
+  titlebarPointerMoved = false
+  if (titlebarDragDiagnostic === diagnostic) titlebarDragDiagnostic = null
+}
+
+let stopAtriumLayer = null
+
+function applyAtriumBoard(state) {
+  atriumLocked.value = state?.lock === true
+  atriumBoard.value = Number(state?.board) === 2 ? 2 : 0
+  if (atriumBoard.value !== 2) tableEditing.value = false
+}
+
+function toggleTableEdit() {
+  tableEditing.value = !tableEditing.value
+  window.dispatchEvent(new CustomEvent('atrium-table-edit', { detail: tableEditing.value }))
+}
+
+async function chooseTool(kind) {
+  toolsOpen.value = false
+  if (kind === 5) {
+    const plan = await window.api.atriumDailyPlan?.()
+    scheduleTime.value = plan?.time || '08:00'
+    scheduleChannels.value = Number(plan?.channels) || 0
+    scheduleOpen.value = true
+    return
+  }
+  window.api.atriumCommand?.({ cmd: 'tool', kind })
+}
+
+async function saveSchedule() {
+  await window.api.atriumSaveDailyPlan?.({ time: scheduleTime.value, channels: scheduleChannels.value })
+  scheduleOpen.value = false
+}
+
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
+  stopAtriumLayer = window.api.onAtriumState?.((state) => {
+    applyAtriumBoard(state)
+    const layer = state?.layer === 'top' || state?.layer === 'bottom' ? state.layer : 'normal'
+    if (layer === props.zOrderMode) return
+    void window.api.setWindowZOrderMode(layer).then((result) => {
+      if (result?.mode) emit('update:zOrderMode', result.mode)
+    })
+  })
+  void window.api.atriumHosted?.().then(async (hosted) => {
+    atriumHosted.value = Boolean(hosted)
+    if (!hosted) return
+    if (await window.api.atriumPullPending?.()) {
+      pulling.value = true
+      const result = await window.api.atriumPull?.()
+      if (result === 'reload') {
+        window.location.reload()
+        return
+      }
+      pulling.value = false
+    }
+    const state = await window.api.atriumState?.()
+    applyAtriumBoard(state)
+    const layer = state?.layer === 'top' || state?.layer === 'bottom' ? state.layer : 'normal'
+    if (layer === props.zOrderMode) return
+    const result = await window.api.setWindowZOrderMode(layer)
+    if (result?.mode) emit('update:zOrderMode', result.mode)
+  })
+})
+
+onBeforeUnmount(() => {
+  stopAtriumLayer?.()
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
+  if (titlebarDragPointerId !== null) void finishTitlebarPointer(null, 'component-unmount')
+  else removeTitlebarPointerListeners()
+  titlebarMotionDiagnostics.dispose()
+  if (zOrderGuardTimer) clearTimeout(zOrderGuardTimer)
+  if (lockGuardTimer) clearTimeout(lockGuardTimer)
+})
+</script>
+
+<template>
+  <!-- 标题栏空白区统一由 JS 处理拖动和双击；按钮与最上沿缩放带保持独立。 -->
+  <header
+    class="app-titlebar app-titlebar--microsoft"
+    :class="{ locked: locked, 'app-titlebar--hosted': atriumHosted, 'app-titlebar--timetable': atriumHosted && atriumBoard === 2 }"
+    @dblclick="onTitlebarDoubleClick"
+    @pointerdown="onTitlebarPointerDown"
+    @dragstart.capture.prevent
+    @lostpointercapture="onTitlebarLostPointerCapture"
+  >
+    <!-- 红绿灯按钮组：设置 no-drag 使按钮可点击 -->
+    <div class="traffic-lights">
+      <button
+        v-if="atriumHosted && atriumBoard === 2"
+        class="light light-edit"
+        :class="{ 'is-on': tableEditing }"
+        :title="tableEditing ? '保存' : '编辑'"
+        @click="toggleTableEdit"
+      >
+        {{ tableEditing ? '保存' : '编辑' }}
+      </button>
+      <button
+        v-if="atriumHosted"
+        class="light light-add"
+        title="新建待办"
+        @click="openHostedNote"
+      >
+        新建待办
+      </button>
+      <button
+        v-if="!atriumHosted"
+        class="light light-close"
+        data-diagnostic-action="window.close"
+        title="关闭"
+        @click="close"
+      >
+        <AppIcon class="light-icon" name="close" alt="关闭" />
+      </button>
+      <button
+        v-if="!atriumHosted"
+        ref="zOrderTriggerRef"
+        class="light light-pin"
+        :class="{
+          pinned: zOrderMode === WINDOW_Z_ORDER_MODES.TOP,
+          bottomed: zOrderMode === WINDOW_Z_ORDER_MODES.BOTTOM,
+          'is-open': zOrderMenuOpen,
+          'is-changing': zOrderChanging
+        }"
+        :title="zOrderTitle"
+        aria-haspopup="menu"
+        :aria-expanded="zOrderMenuOpen"
+        :aria-disabled="zOrderChanging"
+        data-diagnostic-action="window.z-order.menu"
+        @click="toggleZOrderMenu"
+      >
+        <AppIcon
+          class="light-icon layer-mode-icon"
+          :class="{ 'is-bottom': zOrderMode === WINDOW_Z_ORDER_MODES.BOTTOM }"
+          name="pin"
+        />
+      </button>
+      <button
+        v-if="!atriumHosted"
+        class="light light-lock"
+        :class="{ locked: locked, 'is-changing': lockChanging }"
+        :title="lockChanging ? '正在切换锁定状态' : locked ? '解锁主窗口' : '锁定主窗口'"
+        :disabled="lockChanging"
+        data-diagnostic-action="window.lock.toggle"
+        @click="toggleLock"
+      >
+        <AppIcon class="light-icon" name="lock" alt="锁定" />
+      </button>
+    </div>
+    <!-- 中间弹性区只负责布局；指针事务由整个标题栏统一接管。 -->
+    <div class="app-titlebar-interaction-surface">
+      <div v-if="atriumHosted" class="hosted-cluster">
+        <AtriumDock>
+          <template #tools>
+            <div class="hosted-tools">
+              <button type="button" class="hosted-icon" title="小工具" @click.stop="toolsOpen = !toolsOpen">
+                <span class="mdl-glyph" aria-hidden="true">{{ toolsOpen ? '\uE70D' : '\uE76C' }}</span>
+              </button>
+              <div v-if="toolsOpen" ref="toolsMenuRef" class="hosted-tools-menu" @click.stop>
+                <button v-for="tool in tools" :key="tool.kind" type="button" @click="chooseTool(tool.kind)">
+                  {{ tool.label }}
+                </button>
+              </div>
+            </div>
+          </template>
+          <button
+            ref="zOrderTriggerRef"
+            class="hosted-icon"
+            :class="{
+              'is-on': zOrderMode === WINDOW_Z_ORDER_MODES.TOP || zOrderMode === WINDOW_Z_ORDER_MODES.BOTTOM,
+              'is-open': zOrderMenuOpen
+            }"
+            :title="zOrderTitle"
+            aria-haspopup="menu"
+            :aria-expanded="zOrderMenuOpen"
+            @click="toggleZOrderMenu"
+          >
+            <span class="mdl-glyph" aria-hidden="true">&#xE718;</span>
+          </button>
+        </AtriumDock>
+      </div>
+      <span v-else-if="title" class="app-titlebar-title">{{ title }}</span>
+    </div>
+    <!-- 右侧操作区域插槽，父组件可插入自定义按钮 -->
+    <div class="app-titlebar-actions">
+      <slot />
+    </div>
+  </header>
+
+  <Teleport to="body">
+    <Transition :css="false" @enter="onPopoverEnter" @leave="onPopoverLeave">
+      <div
+        v-if="zOrderMenuOpen"
+        ref="zOrderMenuRef"
+        class="z-order-menu"
+        :style="zOrderMenuStyle"
+        role="menu"
+        aria-label="主窗口层级"
+        @click.stop
+        @keydown="onZOrderMenuKeydown"
+      >
+        <button
+          v-for="option in Z_ORDER_OPTIONS"
+          :key="option.value"
+          class="z-order-option"
+          :class="{ 'is-active': zOrderMode === option.value }"
+          type="button"
+          role="menuitemradio"
+          :aria-checked="zOrderMode === option.value"
+          :aria-label="`${option.label}，${option.description}`"
+          :title="option.description"
+          :data-mode="option.value"
+          @click="selectZOrderMode(option.value)"
+        >
+          <span class="z-order-option-check" aria-hidden="true">✓</span>
+          <span class="z-order-option-label">{{ option.label }}</span>
+        </button>
+      </div>
+    </Transition>
+  </Teleport>
+  <div v-if="scheduleOpen" class="account-mask" @click.self="scheduleOpen = false">
+    <form class="account-card" @submit.prevent="saveSchedule">
+      <h3>定时任务</h3>
+      <label class="account-line">每日提醒时间<input v-model="scheduleTime" type="time" required /></label>
+      <ReminderChannelPicker v-model="scheduleChannels" help-text="到点后按这里选中的方式提醒今天的待办。" />
+      <div class="account-actions">
+        <button type="button" @click="scheduleOpen = false">取消</button>
+        <button type="submit" class="is-primary">保存</button>
+      </div>
+    </form>
+  </div>
+  <div v-if="pulling" class="account-mask">
+    <div class="account-card account-wait">
+      <span class="account-spin" />
+      <strong>正在从服务器拉取数据</strong>
+      <p>这个账号的待办、课表和表格会替换到当前窗口。</p>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+/* 标题栏容器：flex 响应式三栏布局，空白区域由统一 JS 指针事务拖动窗口
+ * 左（红绿灯）· 中（标题 flex:1）· 右（操作按钮），随窗口宽度自适应 */
+.app-titlebar {
+  position: relative;
+  display: flex;
+  align-items: center; /* 垂直居中对齐 */
+  padding: 14px 16px; /* 内边距，总高 14+18+14+1(border)=47rem ≈ 48px Apple 导航标准 */
+  -webkit-app-region: no-drag; /* 保留完整 DOM 指针事件，拖动由主进程事务完成 */
+  user-select: none; /* 导航栏不参与正文全选；原生拖拽另由 dragstart 拦截兜底。 */
+  flex-shrink: 0; /* 禁止在 flex 布局中被压缩 */
+  gap: 8px; /* 子元素间距 */
+  border-bottom: 1px solid var(--ui-border-divider); /* 标题栏底部分割线 */
+}
+
+/* Windows 11 / Fluent 取向：业务操作靠左，窗口操作靠右，关闭按钮位于最右端。 */
+.traffic-lights {
+  display: flex;
+  gap: 8px; /* 按钮间距 8px */
+  -webkit-app-region: no-drag; /* 取消拖拽，使按钮可以响应点击事件 */
+}
+
+/* 单个红绿灯按钮的基础样式 */
+.light {
+  width: min(var(--titlebar-apple-control-size, 18rem), calc(18rem + 12px));
+  height: min(var(--titlebar-apple-control-size, 18rem), calc(18rem + 12px));
+  border-radius: 50%; /* 圆形 */
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    width var(--motion-control) var(--ease-standard),
+    height var(--motion-control) var(--ease-standard),
+    opacity var(--motion-fast) ease,
+    background-color var(--motion-control) ease,
+    transform var(--motion-control) var(--ease-standard); /* 悬停与状态过渡 */
+}
+
+/* 按钮内的图标 */
+.light-icon {
+  width: min(var(--titlebar-apple-icon-size, 14rem), calc(14rem + 9.333px));
+  height: min(var(--titlebar-apple-icon-size, 14rem), calc(14rem + 9.333px));
+  opacity: 0; /* 默认隐藏图标 */
+  transition:
+    width var(--motion-control) var(--ease-standard),
+    height var(--motion-control) var(--ease-standard),
+    opacity 120ms ease,
+    transform var(--motion-control) var(--ease-standard);
+  display: block; /* 确保正确居中 */
+}
+
+/* 鼠标悬停在按钮组上时，显示所有图标（模拟 macOS 行为） */
+.traffic-lights:hover .light-icon {
+  opacity: 1;
+}
+.light:not(.light-pin):active:not(:disabled) {
+  transform: scale(0.98);
+  transition-duration: 70ms;
+}
+.light:disabled,
+.light[aria-disabled='true'] {
+  cursor: wait;
+  opacity: 0.58;
+}
+.light.pinned .light-icon,
+.light.locked .light-icon {
+  animation: light-state-in var(--motion-control) var(--ease-standard);
+}
+@keyframes light-state-in {
+  from {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 各按钮的默认背景色（模拟 macOS 红绿灯） */
+.light-close {
+  background-color: #ff5f57;
+} /* 红色 - 关闭 */
+.light-pin {
+  background-color: #8e8e93;
+} /* 灰色 - 未置顶 */
+.light-pin.pinned {
+  background-color: #febc2e;
+} /* 黄色 - 已置顶（原最小化色） */
+.light-pin.bottomed {
+  background-color: var(--ui-accent);
+}
+.layer-mode-icon.is-bottom {
+  transform: rotate(180deg);
+}
+.light-lock {
+  background-color: #28c840;
+} /* 绿色 - 未锁定 */
+
+/* 各按钮悬停时的加深背景色 */
+.light-close:hover {
+  background-color: #ff4136;
+}
+.light-pin:hover {
+  background-color: #7c7c80;
+}
+.light-pin.pinned:hover {
+  background-color: #f5a623;
+}
+.light-pin.bottomed:hover,
+.light-pin.bottomed.is-open {
+  background-color: color-mix(in srgb, var(--ui-accent) 84%, var(--text-color) 16%);
+}
+.light-lock:hover {
+  background-color: #1db954;
+}
+
+/* 锁定状态：按钮变橙色 */
+.light-lock.locked {
+  background-color: #ff9f0a;
+}
+.light-lock.locked:hover {
+  background-color: #e08e00;
+}
+
+/* 锁定状态下标题栏不可拖拽 */
+.app-titlebar.locked {
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar-interaction-surface {
+  display: flex;
+  align-self: stretch;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-width: 12px;
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+
+/* 标题文字：正文大小、居中 */
+.app-titlebar-title {
+  font-size: var(--fs-body); /* 正文字号（跟随 --font-size-base 响应式缩放） */
+  font-weight: 600; /* OPPOSans Bold，更圆润 */
+  color: var(--text-color); /* 使用全局文字颜色变量 */
+  width: 100%;
+  text-align: center; /* 文字在 flex 区域内居中 */
+}
+
+/* 右侧操作按钮区域 */
+.app-titlebar-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto; /* 标题移除后，仍保持靠右对齐 */
+  -webkit-app-region: no-drag; /* 取消拖拽，使操作按钮可点击 */
+}
+
+/* Windows 11 / Fluent 取向：业务操作靠左，窗口操作靠右，关闭按钮位于最右端。 */
+.app-titlebar--microsoft {
+  min-height: 47px;
+  padding: 8px 8px 8px 16px;
+  gap: 2rem;
+}
+.app-titlebar--microsoft .traffic-lights {
+  order: 3;
+  gap: 2rem;
+  margin-left: auto;
+}
+.app-titlebar--microsoft .app-titlebar-interaction-surface {
+  order: 2;
+}
+.app-titlebar--microsoft .app-titlebar-title {
+  order: 2;
+  position: absolute;
+  left: 50%;
+  max-width: 40%;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.app-titlebar--microsoft .app-titlebar-actions {
+  order: 1;
+  margin-left: 0;
+}
+.app-titlebar--microsoft .light {
+  width: 32rem;
+  height: 30rem;
+  border-radius: 4rem;
+  color: var(--text-color);
+  background-color: transparent;
+}
+.app-titlebar--microsoft .light-icon {
+  width: min(var(--titlebar-microsoft-icon-size, 15rem), 24rem);
+  height: min(var(--titlebar-microsoft-icon-size, 15rem), 24rem);
+  opacity: 0.72;
+}
+.app-titlebar--microsoft .traffic-lights:hover .light-icon {
+  opacity: 0.72;
+}
+.app-titlebar--microsoft .light:hover {
+  background-color: var(--ui-fill-hover);
+}
+.app-titlebar--microsoft .light:hover .light-icon {
+  opacity: 1;
+}
+.app-titlebar--microsoft .light-pin.pinned,
+.app-titlebar--microsoft .light-pin.bottomed,
+.app-titlebar--microsoft .light-lock.locked {
+  background-color: var(--ui-accent-subtle);
+}
+.app-titlebar--microsoft .light-pin.pinned:hover,
+.app-titlebar--microsoft .light-pin.bottomed:hover,
+.app-titlebar--microsoft .light-pin.is-open,
+.app-titlebar--microsoft .light-lock.locked:hover {
+  background-color: var(--ui-fill-pressed);
+}
+.app-titlebar--microsoft .light-close {
+  order: 3;
+}
+.app-titlebar--microsoft .light-add {
+  order: 0;
+  width: auto;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: #0a84ff;
+  background: rgba(10, 132, 255, 0.14);
+  font-size: 12px;
+  font-weight: 600;
+}
+.app-titlebar--hosted {
+  height: 48px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  background: #f6f6f8;
+  border-bottom: 1px solid #e5e5ea;
+  font-family: 'OPPOSans', 'Segoe UI', 'Microsoft YaHei', sans-serif;
+}
+.app-titlebar--hosted .traffic-lights {
+  gap: 8px;
+}
+.app-titlebar--hosted .hosted-cluster {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translate(-50%, -50%);
+}
+.app-titlebar--hosted .hosted-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #6e6e73;
+  cursor: pointer;
+}
+.app-titlebar--hosted .hosted-icon.is-on,
+.app-titlebar--hosted .hosted-icon.is-open {
+  color: #0a84ff;
+}
+.app-titlebar--timetable .app-titlebar-actions {
+  visibility: hidden;
+}
+.app-titlebar--hosted .hosted-tools {
+  position: relative;
+  z-index: 4;
+  margin-left: 4px;
+}
+.app-titlebar--hosted .hosted-tools-menu {
+  position: absolute;
+  top: 34px;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 112px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.app-titlebar--hosted .hosted-tools-menu button {
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #1d1d1f;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.app-titlebar--hosted .hosted-tools-menu button:hover {
+  background: #f2f2f7;
+}
+.app-titlebar--hosted .hosted-tools-menu button:active {
+  background: #e5e5ea;
+}
+.account-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+}
+.account-card {
+  width: min(420px, calc(100% - 32px));
+  padding: 20px;
+  border-radius: 16px;
+  background: #fff;
+  color: #1d1d1f;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
+}
+.account-card h3 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+.account-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.account-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.account-actions button {
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 14px;
+  background: #f2f2f7;
+  cursor: pointer;
+}
+.account-actions button:hover {
+  background: #e5e5ea;
+}
+.account-actions button.is-primary {
+  background: #0a84ff;
+  color: #fff;
+}
+.account-wait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.account-wait p {
+  margin: 8px 0 0;
+  color: #6e6e73;
+  font-size: 13px;
+}
+.account-spin {
+  width: 28px;
+  height: 28px;
+  margin-bottom: 12px;
+  border: 3px solid rgba(10, 132, 255, 0.2);
+  border-top-color: #0a84ff;
+  border-radius: 50%;
+  animation: account-spin 0.8s linear infinite;
+}
+@keyframes account-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.app-titlebar--hosted .light-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  color: #0a84ff;
+  background: rgba(10, 132, 255, 0.14);
+  font-size: 12px;
+  font-weight: 600;
+}
+.app-titlebar--hosted .light-edit.is-on {
+  color: #fff;
+  background: #0a84ff;
+}
+.app-titlebar--hosted .light-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  font-family: 'OPPOSans', 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+.app-titlebar--hosted .light-pin,
+.app-titlebar--hosted.app-titlebar--microsoft .light-pin {
+  width: 32px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(29, 29, 31, 0.06);
+}
+.app-titlebar--hosted .mdl-glyph {
+  font-family: "Segoe MDL2 Assets", sans-serif;
+  font-size: 16px;
+  line-height: 1;
+  color: inherit;
+}
+.app-titlebar--hosted.app-titlebar--microsoft .light-pin.pinned,
+.app-titlebar--hosted.app-titlebar--microsoft .light-pin.bottomed,
+.app-titlebar--hosted.app-titlebar--microsoft .light-pin.is-open,
+.app-titlebar--hosted.app-titlebar--microsoft .light-pin.pinned:hover,
+.app-titlebar--hosted.app-titlebar--microsoft .light-pin.bottomed:hover {
+  background: #0a84ff;
+}
+.app-titlebar--hosted .light-pin.pinned .mdl-glyph,
+.app-titlebar--hosted .light-pin.bottomed .mdl-glyph,
+.app-titlebar--hosted .light-pin.is-open .mdl-glyph {
+  color: #fff;
+}
+.app-titlebar--hosted :deep(.atrium-dock) {
+  position: static;
+  transform: none;
+}
+.app-titlebar--microsoft .light-close:hover {
+  background-color: #c42b1c;
+}
+
+/* Teleport 到 body 的窗口层级菜单：采用 macOS 菜单的紧凑勾选布局。 */
+.z-order-menu {
+  position: fixed;
+  z-index: var(--z-global-popover);
+  display: grid;
+  gap: 1rem;
+  padding: 5rem;
+  color: var(--text-color);
+  background: var(--surface-float);
+  border: 1px solid var(--surface-float-border);
+  border-radius: var(--ui-menu-radius);
+  box-shadow: var(--ui-menu-shadow);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: top center;
+  will-change: opacity, transform;
+  -webkit-app-region: no-drag;
+}
+
+.z-order-option {
+  display: grid;
+  grid-template-columns: 18rem minmax(0, 1fr);
+  align-items: center;
+  gap: 6rem;
+  width: 100%;
+  min-height: var(--ui-menu-row-height);
+  padding: 5rem 8rem;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 7rem;
+  cursor: pointer;
+  outline: none;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease;
+}
+
+.z-order-option:hover,
+.z-order-option:focus-visible {
+  color: var(--ui-menu-on-highlight);
+  background: var(--ui-menu-highlight);
+}
+
+.z-order-option-label {
+  font-size: var(--fs-body);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.z-order-option.is-active .z-order-option-label {
+  font-weight: 600;
+}
+
+.z-order-option-check {
+  justify-self: start;
+  width: 14rem;
+  font-size: 13rem;
+  line-height: 1;
+  color: var(--ui-accent);
+  opacity: 0;
+}
+
+.z-order-option.is-active .z-order-option-check {
+  opacity: 1;
+}
+
+.z-order-option:hover .z-order-option-check,
+.z-order-option:focus-visible .z-order-option-check {
+  color: currentColor;
+}
+@media (max-width: 420px) {
+  .app-titlebar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .traffic-lights,
+  .app-titlebar-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  .app-titlebar-interaction-surface {
+    min-width: 12px;
+  }
+}
+</style>

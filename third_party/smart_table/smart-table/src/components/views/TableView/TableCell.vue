@@ -1,0 +1,1253 @@
+<script setup lang="ts">
+import { computed, ref, nextTick, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import dayjs from "dayjs";
+import type { FieldEntity, RecordEntity } from "@/db/schema";
+import type { CellValue, FieldOptions } from "@/types";
+import MultiSelectField from "@/components/fields/MultiSelectField.vue";
+import LinkField from "@/components/fields/LinkField/LinkField.vue";
+import DateInput from "@/components/fields/DateInput.vue";
+import MemberDisplay from "@/components/common/MemberDisplay.vue";
+import MemberSelect from "@/components/common/MemberSelect.vue";
+import {
+  FormulaEngine,
+  type FormulaError,
+  type FormulaTableContext,
+} from "@/utils/formula/engine";
+import { formatFormulaDateByConfig } from "@/utils/formula/formatFormula";
+import { isFieldRequired, isValueEmpty } from "@/utils/validation";
+import { useTableStore } from "@/stores/tableStore";
+import { ElMessage, ElTooltip } from "element-plus";
+import { FieldType } from "@/types/fields";
+import { getSystemFieldDisplayValue, isSystemValueType } from "@/utils/systemFields";
+import { useUserCacheStore } from "@/stores/userCacheStore";
+import type { LinkedRecord, RelationshipType } from "@/types/link";
+import { linkApiService } from "@/services/api/linkApiService";
+import { truncateRichText } from "@/utils/helpers";
+import { formatDateTime, formatDate } from "@/utils/timezone";
+import { formatNumberField } from "@/utils/numberFormat";
+
+interface Props {
+  record: RecordEntity;
+  field: FieldEntity;
+  readonly?: boolean;
+  selected?: boolean;
+  fields?: FieldEntity[]; // 所有字段，用于公式计算
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  readonly: false,
+  selected: false,
+});
+
+const emit = defineEmits<{
+  (e: "update", value: CellValue): void;
+  (e: "edit", active: boolean): void;
+  (e: "open-detail"): void;
+}>();
+
+const { t } = useI18n();
+
+const tableStore = useTableStore();
+const userCacheStore = useUserCacheStore();
+
+/**
+ * 构造公式整列引用（[表].[字段]）所需的表上下文：
+ * 本表字段 + 全表记录。表格视图持有全表数据，无需额外请求。
+ */
+const buildFormulaTableContext = (): FormulaTableContext | undefined => {
+  const tableName = tableStore.currentTable?.name;
+  if (!tableName || !props.fields?.length) return undefined;
+  return {
+    tableName,
+    tables: new Map([
+      [
+        tableName.toLowerCase(),
+        { fields: props.fields, records: tableStore.records },
+      ],
+    ]),
+  };
+};
+
+const isEditing = ref(false);
+const editValue = ref<string | number | boolean | string[] | null>(null);
+const dateEditValue = ref<Date | null>(null);
+const inputRef = ref<HTMLInputElement | HTMLTextAreaElement | null>(null);
+
+// 关联字段相关
+const linkedRecords = ref<LinkedRecord[]>([]);
+const isLoadingLinks = ref(false);
+
+// 加载关联记录详情
+const loadLinkedRecords = async () => {
+  if (props.field.type !== FieldType.LINK) return;
+  
+  const linkedIds = cellValue.value as string[] | null;
+  if (!linkedIds || linkedIds.length === 0) {
+    linkedRecords.value = [];
+    return;
+  }
+
+  isLoadingLinks.value = true;
+  try {
+    // 获取记录的关联数据
+    const links = await linkApiService.getRecordLinks(props.record.id);
+    
+    // 找到当前字段的关联数据
+    const fieldLinks = links.outbound.find(l => l.field_id === props.field.id)
+      || links.inbound.find(l => l.field_id === props.field.id);
+    if (fieldLinks && fieldLinks.linked_records && fieldLinks.linked_records.length > 0) {
+      linkedRecords.value = fieldLinks.linked_records.map(r => ({
+        record_id: r.record_id,
+        display_value: r.display_value,
+      }));
+    } else {
+      // 如果没有从API获取到，使用ID列表创建简单的记录
+      linkedRecords.value = linkedIds.map(id => ({
+        record_id: id,
+        display_value: id,
+      }));
+    }
+  } catch (error) {
+    console.error("[TableCell] 加载关联记录失败:", error);
+    // 失败时使用ID列表
+    linkedRecords.value = linkedIds.map(id => ({
+      record_id: id,
+      display_value: id,
+    }));
+  } finally {
+    isLoadingLinks.value = false;
+  }
+};
+
+const cellValue = computed(() => {
+  return props.record.values[props.field.id] ?? null;
+});
+
+// 系统字段（创建人/创建时间/更新人/更新时间）：值来自记录元数据，只读
+const systemDisplayValue = computed(() => {
+  if (!isSystemValueType(props.field.type)) return null;
+  return getSystemFieldDisplayValue(props.record, props.field.type, (id) => {
+    const cached = userCacheStore.getCachedUser(id);
+    return cached?.name || id;
+  });
+});
+
+// 监听关联字段值的变化，重新加载关联记录
+watch(
+  () => [props.record.id, props.field.id, cellValue.value],
+  () => {
+    if (props.field.type === FieldType.LINK) {
+      loadLinkedRecords();
+    }
+  },
+  { immediate: true }
+);
+
+// 创建一个响应式的记录值引用，用于触发公式重新计算
+// F8 优化：用便宜的 values hash 替代 JSON.stringify — 后者每次渲染都做完整序列化
+// 旧实现 14 字段 × 30 可见行 = 420 次 JSON.stringify/render
+const recordValuesHash = computed(() => {
+  const values = props.record.values;
+  if (!values) return '';
+  const keys = Object.keys(values);
+  let h = '';
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const v = values[k];
+    // 原始类型直接拼，对象/数组用 JSON.stringify 代价太大 — 只取类型+长度
+    if (v === null || v === undefined) h += k + ':n,';
+    else if (typeof v === 'object') h += k + ':o' + (Array.isArray(v) ? v.length : '{}') + ',';
+    else h += k + ':' + v + ',';
+  }
+  return h;
+});
+
+// 获取字段配置
+const fieldOptions = computed(() => {
+  const opts = props.field.options as FieldOptions | undefined;
+  return opts;
+});
+
+// 数值字段精度配置
+const numberPrecision = computed(() => {
+  return fieldOptions.value?.precision ?? 0;
+});
+
+// 日期字段类型判断
+const isDateTimeField = computed(() => {
+  return props.field?.type === FieldType.DATE_TIME;
+});
+
+// 日期显示格式与选择器类型由 DateInput 根据 field.options.dateFormat 统一处理
+
+// 公式字段计算结果 - 使用独立的 computed 来确保响应性
+const formulaValue = computed(() => {
+  // 依赖 recordValuesHash，确保任何字段值变化都会重新计算
+  // 使用 hash 值作为依赖，当任何字段值变化时，hash 会改变，触发重新计算
+  recordValuesHash.value; // 依赖触发重算
+  return calculateFormula();
+});
+
+const displayValue = computed(() => {
+  const value = cellValue.value;
+  const type = props.field.type;
+  const options = fieldOptions.value;
+
+  switch (type) {
+    case FieldType.CREATED_BY:
+    case FieldType.CREATED_TIME:
+    case FieldType.UPDATED_BY:
+    case FieldType.UPDATED_TIME:
+      // 系统字段：显示记录元数据值（records.created_by/updated_by/created_at/updated_at）
+      return systemDisplayValue.value ?? "";
+    case FieldType.SINGLE_LINE_TEXT:
+    case FieldType.EMAIL:
+    case FieldType.URL:
+    case FieldType.PHONE: {
+      if (value === null || value === undefined) return "";
+      return String(value);
+    }
+    case FieldType.LONG_TEXT: {
+      if (value === null || value === undefined) return "";
+      return String(value);
+    }
+    case FieldType.RICH_TEXT: {
+      if (value === null || value === undefined) return "";
+      // 富文本类型：去除HTML标签并截取30字符
+      return truncateRichText(String(value), 30);
+    }
+    case "number":
+      if (typeof value === "number") {
+        return formatNumberField(value, {
+          precision: options?.precision ?? 0,
+          format: options?.format ?? "number",
+          currencySymbol: options?.currencySymbol,
+          prefix: options?.prefix,
+          suffix: options?.suffix,
+          thousandsSeparator: options?.thousandsSeparator,
+        });
+      }
+      return value === null || value === undefined ? "" : String(value);
+    case "single_select": {
+      if (value === null || value === undefined) return "";
+      // 兼容两种格式：choices 和 options
+      const opts = (options?.choices || options?.options || []) as Array<{
+        id: string;
+        name: string;
+        color?: string;
+      }>;
+      const opt = opts.find((o) => o.id === value || o.name === value);
+      return opt?.name || String(value);
+    }
+    case "multi_select": {
+      if (!Array.isArray(value) || value.length === 0) return "";
+      // 兼容两种格式：choices 和 options
+      const opts = (options?.choices || options?.options || []) as Array<{
+        id: string;
+        name: string;
+        color?: string;
+      }>;
+      return value
+        .map((v) => {
+          const opt = opts.find((o) => o.id === v || o.name === v);
+          return opt?.name || String(v);
+        })
+        .join(", ");
+    }
+    case "checkbox":
+      return value ? "✓" : "";
+    case "date":
+    case "date_time": {
+      if (!value) return "";
+      // 根据字段类型显示日期或日期时间
+      const isDateTime = type === "date_time";
+      if (isDateTime) return formatDateTime(value as string | number | Date | null | undefined);
+
+      // 普通日期：按字段配置的 dateFormat 显示
+      const fmt = (options?.dateFormat as string) || "YYYY-MM-DD";
+      if (fmt === "YYYY-MM-DD") return formatDate(value as string | number | Date | null | undefined);
+      if (typeof value === "string") {
+        const s = value.trim();
+        if (fmt === "MMDD" && /^\d{4}$/.test(s)) return value;
+        if (fmt === "MM-DD" && /^\d{2}-\d{2}$/.test(s)) return value;
+        if (fmt === "YYYYMMDD" && /^\d{8}$/.test(s)) return value;
+        if (fmt === "YYYYMM" && /^\d{6}$/.test(s)) return value;
+        if (fmt === "YYYY-MM" && /^\d{4}-\d{2}$/.test(s)) return value;
+      }
+      const date = value instanceof Date ? value : new Date(typeof value === "number" ? value : Date.parse(value as string));
+      if (isNaN(date.getTime())) return String(value);
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      if (fmt === "YYYY-MM") return `${y}-${m}`;
+      if (fmt === "YYYYMM") return `${y}${m}`;
+      if (fmt === "MMDD") return `${m}${d}`;
+      if (fmt === "MM-DD") return `${m}-${d}`;
+      if (fmt === "YYYYMMDD") return `${y}${m}${d}`;
+      return formatDate(value as string | number | Date | null | undefined);
+    }
+    case "rating": {
+      const maxRating = options?.maxRating || 5;
+      const rating = Math.max(0, Math.min(Number(value) || 0, maxRating));
+      return "★".repeat(rating) + "☆".repeat(maxRating - rating);
+    }
+    case "progress": {
+      const progress = Number(value) || 0;
+      return `${progress}%`;
+    }
+    case "member": {
+      // 成员字段使用 MemberDisplay 组件显示，这里返回空字符串
+      return "";
+    }
+    case "attachment": {
+      if (!Array.isArray(value)) return "";
+      return t("view.fileCount", { count: value.length });
+    }
+    case "formula": {
+      // 公式字段使用独立的 computed 属性
+      return formulaValue.value;
+    }
+    case "auto_number":
+      // 自动编号字段直接显示值（值已在后端格式化）
+      return value === null || value === undefined ? "" : String(value);
+    default:
+      return value === null || value === undefined ? "" : String(value);
+  }
+});
+
+// 计算公式字段值
+const calculateFormula = (): string => {
+  const formula = fieldOptions.value?.formula as string;
+  if (!formula) return "";
+
+  // 优先使用后端预计算结果
+  const computedValues = (props.record as any).computed_values;
+  
+  if (computedValues && typeof computedValues === 'object') {
+    // computed_values 使用字段名作为 key
+    const fieldName = props.field.name;
+    const precomputed = computedValues[fieldName];
+
+    // 后端计算报错（"#ERROR: ..."）时回退前端引擎兜底计算，而非直接展示错误串
+    const isBackendError =
+      typeof precomputed === 'string' && precomputed.startsWith('#ERROR');
+    if (precomputed !== null && precomputed !== undefined && !isBackendError) {
+      // 配置了日期/日期时间显示格式时，严格按配置格式化
+      const dateFormatted = formatFormulaDateByConfig(precomputed, fieldOptions.value);
+      if (dateFormatted !== null) return dateFormatted;
+      // 如果后端返回的是 datetime 字符串，格式化显示
+      if (typeof precomputed === 'string') {
+        // 尝试解析为日期
+        const dateMatch = precomputed.match(/^\d{4}-\d{2}-\d{2}/);
+        if (dateMatch) {
+          return precomputed.split('T')[0]; // 只返回日期部分
+        }
+        return precomputed;
+      }
+      // 数字格式化
+      if (typeof precomputed === 'number') {
+        // 根据公式类型决定格式化方式
+        const resultType = FormulaEngine.inferResultType(formula);
+        // 日期时间类型：YYYY-MM-DD HH:mm:ss
+        if (resultType === "datetime") {
+          return formatDateTime(precomputed);
+        }
+        // 日期类型：YYYY-MM-DD
+        if (resultType === "date") {
+          return formatDate(precomputed);
+        }
+        // 数字类型：带精度格式化
+        const precision = fieldOptions.value?.precision ?? 2;
+        return precomputed.toLocaleString("zh-CN", {
+          minimumFractionDigits: precision,
+          maximumFractionDigits: precision,
+        });
+      }
+      return String(precomputed);
+    }
+  }
+
+  // 回退到前端计算
+  try {
+    // 获取所有字段（从父组件传入）
+    const allFields = props.fields;
+    if (!allFields || allFields.length === 0) {
+      return "";
+    }
+    
+    const engine = new FormulaEngine(allFields, buildFormulaTableContext());
+    const result = engine.calculate(props.record, formula);
+
+    // 引擎返回 FormulaError 对象时透出具体失败原因（如"未找到字段: xxx"）
+    if (result && typeof result === "object" && "message" in result) {
+      return String((result as FormulaError).message) || t("view.calcError");
+    }
+
+    if (result === "#ERROR") {
+      return t("view.calcError");
+    }
+
+    // 配置了日期/日期时间显示格式时，严格按配置格式化
+    const dateFormatted = formatFormulaDateByConfig(result, fieldOptions.value);
+    if (dateFormatted !== null) return dateFormatted;
+
+    // 数字格式化
+    if (typeof result === "number") {
+      // 根据公式类型决定格式化方式
+      const resultType = FormulaEngine.inferResultType(formula);
+      // 日期时间类型：YYYY-MM-DD HH:mm:ss
+      if (resultType === "datetime") {
+        return formatDateTime(result);
+      }
+      // 日期类型：YYYY-MM-DD
+      if (resultType === "date") {
+        return formatDate(result);
+      }
+      // 数字类型：带精度格式化
+      const precision = fieldOptions.value?.precision ?? 2;
+      return result.toLocaleString("zh-CN", {
+        minimumFractionDigits: precision,
+        maximumFractionDigits: precision,
+      });
+    }
+
+    return String(result);
+  } catch (error) {
+    console.error("Formula calculation error:", error);
+    return t("view.calcError");
+  }
+};
+
+const fieldType = computed(() => props.field.type);
+
+const isEditable = computed(() => {
+  // 主键字段不可编辑
+  if (props.field.isPrimary) return false;
+
+  // 自动编号字段不可编辑
+  if (props.field.type === FieldType.AUTO_NUMBER) return false;
+
+  // 系统字段（创建人/创建时间/更新人/更新时间）不可编辑，值由记录元数据维护
+  if (isSystemValueType(props.field.type)) return false;
+
+  return !props.readonly && props.field.type !== FieldType.FORMULA;
+});
+
+// 关联字段配置
+const linkFieldConfig = computed(() => {
+  if (props.field.type !== FieldType.LINK) return null;
+  const config = props.field.config as Record<string, unknown>;
+  return {
+    targetTableId: config?.linkedTableId as string,
+    relationshipType:
+      (config?.relationshipType as RelationshipType) ||
+      "one_to_many",
+    displayFieldId: config?.displayFieldId as string,
+  };
+});
+
+// 处理关联字段值更新
+const handleLinkFieldChange = async (value: string[], records: LinkedRecord[]) => {
+  linkedRecords.value = records;
+  // 通过专用接口更新关联值，同时同步 LinkValue 表与 values JSON
+  try {
+    await linkApiService.updateRecordLink(props.record.id, props.field.id, {
+      target_record_ids: value,
+    });
+    emit("update", value as CellValue);
+  } catch (error) {
+    console.error("[TableCell] 更新关联字段失败:", error);
+    ElMessage.error(t("view.linkUpdateFailed"));
+  }
+  isEditing.value = false;
+};
+
+// 处理关联字段删除单个关联
+const handleLinkRemove = async (recordId: string) => {
+  try {
+    await linkApiService.deleteRecordLink(
+      props.record.id,
+      props.field.id,
+      recordId,
+    );
+
+    linkedRecords.value = linkedRecords.value.filter(
+      (r) => r.record_id !== recordId,
+    );
+    const newValue = (cellValue.value as string[])?.filter(
+      (id) => id !== recordId,
+    );
+    emit("update", newValue as CellValue);
+    ElMessage.success(t("view.linkUnlinked"));
+  } catch (error) {
+    console.error("[TableCell] 解除关联失败:", error);
+    ElMessage.error(t("view.linkUnlinkFailed"));
+  }
+};
+
+// 监听 selected 属性变化，当外部（如右键菜单）触发编辑时自动进入编辑模式
+watch(
+  () => props.selected,
+  (newVal) => {
+    if (newVal && !isEditing.value) {
+      void startEdit();
+    } else if (!newVal && isEditing.value) {
+      finishEdit();
+    }
+  },
+);
+
+const startEdit = async () => {
+  if (!isEditable.value) return;
+
+  isEditing.value = true;
+  const cv = cellValue.value;
+  if (fieldType.value === "multi_select") {
+    editValue.value = Array.isArray(cv)
+      ? cv.map((v) => (typeof v === "string" ? v : v.id))
+      : [];
+  } else if (fieldType.value === "date" || fieldType.value === "date_time") {
+    // 日期/日期时间字段特殊处理
+    if (cv) {
+      const timestamp = typeof cv === "string" ? Number(cv) : cv;
+      if (typeof timestamp === "number" && !isNaN(timestamp)) {
+        dateEditValue.value = new Date(timestamp);
+      } else if (typeof cv === "string") {
+        dateEditValue.value = new Date(cv);
+      } else {
+        dateEditValue.value = null;
+      }
+    } else {
+      dateEditValue.value = null;
+    }
+  } else if (fieldType.value === FieldType.LINK) {
+    // 关联字段特殊处理
+    editValue.value = (Array.isArray(cv) ? cv : cv ? [cv] : []) as any;
+    // 这里可以加载已关联的记录详情
+  } else {
+    editValue.value = cv as string | number | boolean | null;
+  }
+  emit("edit", true);
+
+  await nextTick();
+  inputRef.value?.focus();
+};
+
+const finishEdit = () => {
+  if (!isEditing.value) return;
+
+  isEditing.value = false;
+  emit("edit", false);
+
+  // 日期/日期时间字段使用 dateEditValue 进行比较和更新
+  if (fieldType.value === "date" || fieldType.value === "date_time") {
+    let newValue: CellValue = null;
+    if (dateEditValue.value) {
+      if (isDateTimeField.value) {
+        newValue = dayjs(dateEditValue.value).toISOString();
+      } else {
+        newValue = dayjs(dateEditValue.value).format("YYYY-MM-DD");
+      }
+    }
+    if (newValue !== cellValue.value) {
+      emit("update", newValue);
+    }
+  } else {
+    // 检查必填字段
+    if (isFieldRequired(props.field) && isValueEmpty(editValue.value)) {
+      ElMessage.error(t('view.requiredFieldMsg', { name: props.field.name }));
+      cancelEdit();
+      return;
+    }
+    if (editValue.value !== cellValue.value) {
+      emit("update", editValue.value as CellValue);
+    }
+  }
+};
+
+const cancelEdit = () => {
+  isEditing.value = false;
+  emit("edit", false);
+  editValue.value = null;
+};
+
+const handleKeydown = (event: KeyboardEvent) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    finishEdit();
+  } else if (event.key === "Escape") {
+    cancelEdit();
+  }
+};
+
+const handleCellDateInput = (val: CellValue) => {
+  isEditing.value = false;
+  emit("edit", false);
+  if (val !== cellValue.value) {
+    emit("update", val);
+  }
+};
+
+const handleDoubleClick = () => {
+  // 附件字段双击时打开详情对话框
+  if (fieldType.value === "attachment") {
+    emit("open-detail");
+    return;
+  }
+  startEdit();
+};
+
+// 切换复选框状态
+const toggleCheckbox = () => {
+  if (!isEditable.value) return;
+  const newValue = !cellValue.value;
+  emit("update", newValue as CellValue);
+};
+
+const getSelectOptions = computed(() => {
+  const options = fieldOptions.value;
+  return options?.choices || [];
+});
+
+const getOptionColor = (optionId: string) => {
+  const options = fieldOptions.value;
+  const opts = options?.choices || options?.options || [];
+  return (
+    opts.find((o) => o.id === optionId || o.name === optionId)?.color ||
+    "#6B7280"
+  );
+};
+
+const multiSelectDisplayValues = computed(() => {
+  if (!Array.isArray(cellValue.value)) return [];
+  return cellValue.value.map((v) => (typeof v === "string" ? v : v.id));
+});
+</script>
+
+<template>
+  <div
+    class="table-cell"
+    :class="{
+      'is-editing': isEditing,
+      'is-selected': selected,
+      'is-readonly': !isEditable,
+    }"
+    :data-field-type="fieldType"
+    @dblclick="handleDoubleClick">
+    <template v-if="isEditing">
+      <!-- 单行文本 -->
+      <template v-if="fieldType === FieldType.SINGLE_LINE_TEXT">
+        <input
+          ref="inputRef"
+          :value="editValue as string"
+          type="text"
+          class="cell-input"
+          :maxlength="(field.options?.maxLength as number | undefined)"
+          @input="editValue = ($event.target as HTMLInputElement).value"
+          @blur="finishEdit"
+          @keydown="handleKeydown" />
+      </template>
+      <!-- 多行文本 -->
+      <template v-else-if="fieldType === FieldType.LONG_TEXT">
+        <textarea
+          ref="inputRef"
+          :value="editValue as string"
+          class="cell-input textarea"
+          :maxlength="(field.options?.maxLength as number | undefined)"
+          @input="editValue = ($event.target as HTMLTextAreaElement).value"
+          @blur="finishEdit"
+          @keydown="handleKeydown" />
+      </template>
+      <!-- 富文本 - 在表格中使用纯文本编辑 -->
+      <template v-else-if="fieldType === FieldType.RICH_TEXT">
+        <textarea
+          ref="inputRef"
+          :value="editValue as string"
+          class="cell-input textarea"
+          :maxlength="(field.options?.maxLength as number | undefined)"
+          @input="editValue = ($event.target as HTMLTextAreaElement).value"
+          @blur="finishEdit"
+          @keydown="handleKeydown" />
+      </template>
+
+      <template v-else-if="fieldType === 'number'">
+        <el-input-number
+          ref="inputRef"
+          v-model="editValue as number"
+          :precision="numberPrecision"
+          :controls="false"
+          class="cell-number-input"
+          @blur="finishEdit"
+          @keydown="handleKeydown" />
+      </template>
+
+      <template v-else-if="fieldType === 'single_select'">
+        <el-select
+          ref="inputRef"
+          v-model="editValue"
+          class="cell-select"
+          @change="finishEdit"
+          @blur="finishEdit">
+          <el-option value="" :label="t('common.none')" />
+          <el-option
+            v-for="opt in getSelectOptions"
+            :key="opt.id"
+            :label="opt.name"
+            :value="opt.id">
+            <span class="option-color-dot" :style="{ backgroundColor: opt.color }" />
+            <span class="option-label">{{ opt.name }}</span>
+          </el-option>
+        </el-select>
+      </template>
+
+      <template v-else-if="fieldType === 'multi_select'">
+        <MultiSelectField
+          v-model="editValue as string[]"
+          :field="field"
+          @blur="finishEdit" />
+      </template>
+
+      <template v-else-if="fieldType === 'checkbox'">
+        <input
+          ref="inputRef"
+          v-model="editValue"
+          type="checkbox"
+          class="cell-checkbox"
+          @change="finishEdit" />
+      </template>
+
+      <template v-else-if="fieldType === 'date' || fieldType === 'date_time'">
+        <DateInput
+          :field="props.field"
+          :model-value="cellValue"
+          :placeholder="isDateTimeField ? t('view.selectDateTime') : t('view.selectDate')"
+          class="cell-date-picker"
+          @update:model-value="handleCellDateInput" />
+      </template>
+
+      <template v-else-if="fieldType === 'rating'">
+        <div class="rating-editor">
+          <span
+            v-for="i in (field.options as FieldOptions)?.maxRating || 5"
+            :key="i"
+            class="rating-star"
+            :class="{ active: i <= ((editValue as number) || 0) }"
+            @click="editValue = i"
+            >★</span
+          >
+          <button class="clear-btn" @click="editValue = 0">{{ t('field.clear') }}</button>
+        </div>
+      </template>
+
+      <!-- 成员字段编辑 -->
+      <template v-else-if="fieldType === 'member'">
+        <MemberSelect
+          v-model="editValue as string[]"
+          :placeholder="t('view.selectMember')"
+          :allow-multiple="false"
+          class="cell-member-select"
+          @update:model-value="finishEdit" />
+      </template>
+
+      <template v-else-if="fieldType === 'progress'">
+        <input
+          ref="inputRef"
+          :value="editValue as number"
+          type="range"
+          min="0"
+          max="100"
+          class="cell-range"
+          @input="editValue = Number(($event.target as HTMLInputElement).value)"
+          @blur="finishEdit" />
+      </template>
+
+      <template v-else-if="fieldType === FieldType.LINK">
+        <LinkField
+          :value="(editValue as string[]) || []"
+          :linked-records="linkedRecords"
+          :target-table-id="linkFieldConfig?.targetTableId"
+          :display-field-id="linkFieldConfig?.displayFieldId"
+          :relationship-type="linkFieldConfig?.relationshipType"
+          :is-editing="true"
+          :readonly="readonly"
+          :record-id="record.id"
+          :field-id="field.id"
+          :is-self-link="linkFieldConfig?.targetTableId === props.field.tableId"
+          @change="handleLinkFieldChange"
+          @edit-end="cancelEdit"
+          @remove="handleLinkRemove" />
+      </template>
+
+      <template v-else>
+        <input
+          ref="inputRef"
+          :value="editValue as string"
+          type="text"
+          class="cell-input"
+          @input="editValue = ($event.target as HTMLInputElement).value"
+          @blur="finishEdit"
+          @keydown="handleKeydown" />
+      </template>
+    </template>
+
+    <template v-else>
+      <div class="cell-content">
+        <template v-if="fieldType === 'single_select' && cellValue">
+          <span
+            class="select-tag"
+            :style="{ backgroundColor: getOptionColor(cellValue as string) }">
+            {{ displayValue }}
+          </span>
+        </template>
+
+        <template
+          v-else-if="
+            fieldType === 'multi_select' &&
+            Array.isArray(cellValue) &&
+            cellValue.length > 0
+          ">
+          <span
+            v-for="(val, idx) in multiSelectDisplayValues"
+            :key="`${field.id}-${idx}-${val}`"
+            class="select-tag"
+            :style="{ backgroundColor: getOptionColor(val) }">
+            {{
+              (field.options as FieldOptions)?.choices?.find(
+                (o) => o.id === val || o.name === val,
+              )?.name || val
+            }}
+          </span>
+        </template>
+
+        <template v-else-if="fieldType === 'checkbox'">
+          <div
+            class="switch-display"
+            :class="{ checked: cellValue }"
+            @click.stop="toggleCheckbox">
+            <div class="switch-slider"></div>
+          </div>
+        </template>
+
+        <template v-else-if="fieldType === 'progress'">
+          <div class="progress-display">
+            <div class="progress-bar">
+              <div
+                class="progress-fill"
+                :style="{ width: `${Number(cellValue) || 0}%` }" />
+            </div>
+            <span class="progress-text">{{ displayValue }}</span>
+          </div>
+        </template>
+
+        <template v-else-if="fieldType === 'rating'">
+          <span class="rating-display">{{ displayValue }}</span>
+        </template>
+
+        <template v-else-if="fieldType === 'member' && cellValue">
+          <MemberDisplay
+            :user-ids="cellValue as string[]"
+            mode="tag"
+            :max-display="2"
+            :avatar-size="20" />
+        </template>
+
+        <template v-else-if="fieldType === 'url' && cellValue">
+          <a
+            :href="String(cellValue)"
+            target="_blank"
+            class="url-link"
+            @click.stop>
+            {{ displayValue }}
+          </a>
+        </template>
+
+        <template v-else-if="fieldType === 'email' && cellValue">
+          <a :href="`mailto:${cellValue}`" class="email-link" @click.stop>
+            {{ displayValue }}
+          </a>
+        </template>
+
+        <template v-else-if="fieldType === FieldType.LINK">
+          <LinkField
+            :value="(cellValue as string[]) || []"
+            :linked-records="linkedRecords"
+            :target-table-id="linkFieldConfig?.targetTableId"
+            :display-field-id="linkFieldConfig?.displayFieldId"
+            :relationship-type="linkFieldConfig?.relationshipType"
+            :is-editing="false"
+            :readonly="readonly"
+            :record-id="record.id"
+            :field-id="field.id"
+            :is-self-link="linkFieldConfig?.targetTableId === props.field.tableId"
+            @edit-start="startEdit"
+            @remove="handleLinkRemove" />
+        </template>
+
+        <!-- 单行文本 -->
+        <template v-else-if="fieldType === FieldType.SINGLE_LINE_TEXT">
+          <span class="text-display">{{ displayValue || "" }}</span>
+        </template>
+        <!-- 多行文本 -->
+        <template v-else-if="fieldType === FieldType.LONG_TEXT">
+          <ElTooltip
+            v-if="displayValue"
+            :content="displayValue"
+            placement="top"
+            :show-after="500">
+            <span class="text-display multiline">{{ displayValue }}</span>
+          </ElTooltip>
+          <span v-else class="text-display">{{ displayValue || "" }}</span>
+        </template>
+        <!-- 富文本 -->
+        <template v-else-if="fieldType === FieldType.RICH_TEXT">
+          <ElTooltip
+            v-if="displayValue"
+            :content="displayValue"
+            placement="top"
+            :show-after="500">
+            <span class="text-display multiline">{{ displayValue }}</span>
+          </ElTooltip>
+          <span v-else class="text-display">{{ displayValue || "" }}</span>
+        </template>
+
+        <template v-else-if="fieldType === 'auto_number'">
+          <span class="text-display auto-number">{{ displayValue || "" }}</span>
+        </template>
+
+        <template v-else>
+          <span class="text-display">{{ displayValue || "" }}</span>
+        </template>
+      </div>
+    </template>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+@use "sass:color";
+@use "@/assets/styles/variables" as *;
+@use "@/assets/styles/mixins" as *;
+
+.table-cell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  cursor: default;
+  overflow: hidden;
+
+  &.is-selected {
+    background-color: rgba($primary-color, 0.1);
+  }
+
+  &.is-editing {
+    padding: 2px;
+
+    .cell-input,
+    .cell-select {
+      width: 100%;
+      height: 100%;
+      min-height: 28px;
+      padding: 4px 8px;
+      border: 1px solid $primary-color;
+      border-radius: $border-radius-sm;
+      font-size: $font-size-sm;
+      color: $text-primary;
+      background: $surface-color;
+      outline: none;
+
+      &:focus {
+        border-color: $primary-color;
+        box-shadow: 0 0 0 2px rgba($primary-color, 0.2);
+      }
+    }
+
+    .cell-input.textarea {
+      min-height: 60px;
+      resize: vertical;
+    }
+
+    .cell-checkbox {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .cell-range {
+      width: 100%;
+    }
+
+    .cell-number-input,
+    .cell-date-picker {
+      width: 100%;
+
+      :deep(.el-input__wrapper) {
+        border-radius: $border-radius-sm;
+      }
+    }
+  }
+}
+
+.cell-content {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  overflow: hidden;
+  color: $text-primary;
+}
+
+.text-display {
+  @include text-ellipsis;
+  width: 100%;
+
+  &.multiline {
+    white-space: pre-wrap;
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.4;
+    max-height: 2.8em;
+  }
+
+  &.auto-number {
+    font-family: "SF Mono", Monaco, monospace;
+    font-weight: 500;
+    color: $primary-color;
+    letter-spacing: 0.5px;
+  }
+}
+
+.select-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: $font-size-xs;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.checkbox-display {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid $border-color;
+  border-radius: 3px;
+  font-size: 12px;
+
+  &.checked {
+    background-color: $primary-color;
+    border-color: $primary-color;
+    color: #fff;
+  }
+}
+
+// 开关按钮样式
+.switch-display {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  background-color: #dcdfe6;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  flex-shrink: 0;
+
+  &:hover {
+    background-color: #c0c4cc;
+  }
+
+  &.checked {
+    background-color: $primary-color;
+
+    &:hover {
+      background-color: color.adjust($primary-color, $lightness: -10%);
+    }
+
+    .switch-slider {
+      transform: translateX(16px);
+    }
+  }
+
+  &:active .switch-slider {
+    width: 18px;
+  }
+
+  &.checked:active .switch-slider {
+    transform: translateX(14px);
+  }
+}
+
+.switch-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background-color: #fff;
+  border-radius: 50%;
+  transition:
+    transform 0.3s ease,
+    width 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.progress-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background-color: $bg-color;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: $primary-color;
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  font-size: $font-size-xs;
+  color: $text-secondary;
+  white-space: nowrap;
+}
+
+.rating-display {
+  color: #fbbf24;
+  letter-spacing: 1px;
+}
+
+.rating-editor {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+
+  .rating-star {
+    cursor: pointer;
+    color: #d1d5db;
+    font-size: 16px;
+    transition: color 0.15s;
+
+    &.active {
+      color: #fbbf24;
+    }
+
+    &:hover {
+      color: #fbbf24;
+    }
+  }
+
+  .clear-btn {
+    margin-left: 8px;
+    padding: 2px 6px;
+    font-size: $font-size-xs;
+    border: 1px solid $border-color;
+    border-radius: $border-radius-sm;
+    background: $surface-color;
+    cursor: pointer;
+  }
+}
+
+.multi-select-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  background: $surface-color;
+  border: 1px solid $border-color;
+  border-radius: $border-radius-sm;
+  box-shadow: $shadow-md;
+
+  .multi-select-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    cursor: pointer;
+
+    &:hover {
+      background-color: $bg-color;
+    }
+  }
+
+  .apply-btn {
+    margin-top: 4px;
+    padding: 4px 8px;
+    font-size: $font-size-xs;
+    background: $primary-color;
+    color: #fff;
+    border: none;
+    border-radius: $border-radius-sm;
+    cursor: pointer;
+  }
+}
+
+.url-link,
+.email-link {
+  color: $primary-color;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+// 成员选择器样式
+.option-color-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 8px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.option-label {
+  vertical-align: middle;
+}
+
+.cell-member-select {
+  width: 100%;
+
+  :deep(.member-select-trigger) {
+    min-height: 28px;
+    padding: 2px 6px;
+    border: 1px solid $primary-color;
+    background-color: white;
+    
+    &:hover {
+      border-color: $primary-color;
+    }
+    
+    .member-tag {
+      padding: 1px 6px;
+      
+      .member-avatar {
+        width: 18px;
+        height: 18px;
+      }
+      
+      .member-name {
+        font-size: 12px;
+      }
+    }
+  }
+}
+</style>

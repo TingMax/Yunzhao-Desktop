@@ -1,0 +1,1678 @@
+<script setup lang="ts">
+import { ref, computed, watch, onBeforeUnmount } from "vue";
+import { useI18n } from "vue-i18n";
+import type { RecordEntity, FieldEntity } from "@/db/schema";
+import { FieldType, type CellValue, type FieldTypeValue, getFieldTypeIconComponent } from "@/types";
+import MemberSelect from "@/components/common/MemberSelect.vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { generateId } from "@/utils/id";
+import dayjs from "dayjs";
+import { FormulaEngine } from "@/utils/formula/engine";
+import { formatNumberField, createNumberInputFormatter, createNumberInputParser, getNumberFieldPrefix, getNumberFieldSuffix } from "@/utils/numberFormat";
+import { isFieldRequired, isValueEmpty } from "@/utils/validation";
+import AttachmentField from "@/components/fields/AttachmentField.vue";
+import RichTextField from "@/components/fields/RichTextField.vue";
+import LinkField from "@/components/fields/LinkField/LinkField.vue";
+import GeoField from "@/components/fields/geo/GeoField.vue";
+import type { LinkedRecord, RelationshipType } from "@/types/link";
+import DateInput from "@/components/fields/DateInput.vue";
+import { useCollaborationStore } from "@/stores/collaborationStore";
+import { useAuthStore } from "@/stores/authStore";
+import { realtimeEventEmitter } from "@/services/realtime/eventEmitter";
+import type {
+  DataRecordUpdatedBroadcast,
+  DataRecordCreatedBroadcast,
+  DataRecordDeletedBroadcast,
+  DataFieldCreatedBroadcast,
+  DataFieldUpdatedBroadcast,
+  DataFieldDeletedBroadcast,
+} from "@/services/realtime/eventTypes";
+
+interface Props {
+  fields: FieldEntity[];
+  record?: RecordEntity;
+  readonly?: boolean;
+  title?: string;
+  description?: string;
+  submitButtonText?: string;
+  visibleFieldIds?: string[];
+  /** 每行显示的字段数量（1-4），用于一行显示多个字段 */
+  columns?: number;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  readonly: false,
+  title: "",
+  description: "",
+  submitButtonText: "",
+});
+
+const emit = defineEmits<{
+  (e: "submit", values: Record<string, CellValue>): void;
+  (e: "cancel"): void;
+}>();
+
+const { t } = useI18n();
+
+const formValues = ref<Record<string, CellValue>>({});
+const formErrors = ref<Record<string, string>>({});
+const isSubmitting = ref(false);
+const submitSuccess = ref(false);
+const newRecordId = ref(generateId());
+const authStore = useAuthStore();
+
+// 关联字段本地状态（新增模式下关联数据先暂存，提交后再建立关联）
+const linkFieldRecords = ref<Map<string, LinkedRecord[]>>(new Map());
+const editingLinkField = ref<string | null>(null);
+
+// 获取当前用户ID
+function getCurrentUserId(): string | null {
+  return authStore.user?.id || null;
+}
+
+const visibleFields = computed(() => {
+  // 首先过滤掉 isVisible 为 false 的字段
+  let fields = props.fields.filter((f) => f.isVisible !== false);
+
+  // 过滤掉 options.hidden 为 true 的字段
+  fields = fields.filter((f) => !f.options?.hidden);
+
+  // 如果指定了可见字段ID列表，则只显示这些字段
+  if (props.visibleFieldIds && props.visibleFieldIds.length > 0) {
+    fields = fields.filter((f) => props.visibleFieldIds?.includes(f.id));
+  }
+
+  // 过滤掉系统字段（创建人、创建时间、修改人、修改时间、自动编号）
+  if (!props.readonly) {
+    const systemFieldTypes: FieldTypeValue[] = [
+      FieldType.CREATED_BY,
+      FieldType.CREATED_TIME,
+      FieldType.UPDATED_BY,
+      FieldType.UPDATED_TIME,
+      FieldType.AUTO_NUMBER,
+    ];
+    fields = fields.filter(
+      (f) => !systemFieldTypes.includes(f.type as FieldTypeValue),
+    );
+  }
+
+  // 按配置中的可见字段顺序排序，确保表单字段按用户设定的前后顺序展示
+  if (props.visibleFieldIds && props.visibleFieldIds.length > 0) {
+    const orderMap = new Map(
+      props.visibleFieldIds.map((id, idx) => [id, idx]),
+    );
+    fields = fields
+      .map((f) => ({
+        field: f,
+        order: orderMap.has(f.id)
+          ? (orderMap.get(f.id) as number)
+          : Number.MAX_SAFE_INTEGER,
+      }))
+      .sort((a, b) => a.order - b.order)
+      .map((item) => item.field);
+  }
+
+  return fields;
+});
+
+// 每行显示字段数（1-4，超过 4 按 4 处理，不足 1 按 1 处理）
+const effectiveColumns = computed(() => {
+  const c = Math.round(Number(props.columns) || 1);
+  return Math.min(4, Math.max(1, c));
+});
+
+const isMultiColumn = computed(() => effectiveColumns.value > 1);
+
+// 以下字段类型内容较宽，自动占满整行，避免在多列布局下显示拥挤
+function isFullWidthField(field: FieldEntity): boolean {
+  return (
+    field.type === FieldType.LONG_TEXT ||
+    field.type === FieldType.RICH_TEXT ||
+    field.type === FieldType.ATTACHMENT ||
+    field.type === FieldType.LINK
+  );
+}
+
+// ==================== 关联字段（LINK）交互 ====================
+function getLinkFieldConfig(field: FieldEntity) {
+  if (field.type !== FieldType.LINK) return null;
+  const config = (field.config || {}) as Record<string, unknown>;
+  return {
+    targetTableId: config.linkedTableId as string,
+    relationshipType: (config.relationshipType as RelationshipType) || "one_to_many",
+    displayFieldId: config.displayFieldId as string,
+    isSelfLink: config.linkedTableId === field.tableId,
+  };
+}
+
+function getLinkedRecords(field: FieldEntity): LinkedRecord[] {
+  return linkFieldRecords.value.get(field.id) || [];
+}
+
+function handleLinkFieldEdit(fieldId: string) {
+  editingLinkField.value = fieldId;
+}
+
+function handleLinkFieldEditEnd() {
+  editingLinkField.value = null;
+}
+
+function handleLinkFieldChange(
+  field: FieldEntity,
+  value: string[],
+  records: LinkedRecord[],
+) {
+  formValues.value[field.id] = value as CellValue;
+  linkFieldRecords.value.set(field.id, records);
+  editingLinkField.value = null;
+}
+
+function handleLinkFieldRemove(field: FieldEntity, targetRecordId: string) {
+  const currentRecords = linkFieldRecords.value.get(field.id) || [];
+  linkFieldRecords.value.set(
+    field.id,
+    currentRecords.filter((r) => r.record_id !== targetRecordId),
+  );
+  const currentValue = (formValues.value[field.id] as string[]) || [];
+  formValues.value[field.id] = currentValue.filter(
+    (id) => id !== targetRecordId,
+  ) as CellValue;
+}
+
+const isValid = computed(() => {
+  return Object.keys(formErrors.value).length === 0;
+});
+
+const formTitle = computed(() => {
+  return props.title || t("view.formDefaultTitle");
+});
+
+watch(
+  () => props.record,
+  (newRecord) => {
+    if (newRecord) {
+      // 编辑模式：使用记录的值
+      formValues.value = { ...newRecord.values };
+    } else {
+      // 新建模式：应用默认值
+      resetForm();
+    }
+  },
+  { immediate: true },
+);
+
+function validateField(field: FieldEntity, value: CellValue): string | null {
+  // 必填验证 - 支持 field.isRequired 和 field.options.required
+  if (isFieldRequired(field) && isValueEmpty(value)) {
+    return t("view.formRequiredField", { name: field.name });
+  }
+
+  // 如果值为空且不是必填项，跳过其他验证
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  // 单行文本字段正则校验
+  if (field.type === FieldType.SINGLE_LINE_TEXT) {
+    const regexPattern = (field.options?.regex as string | undefined) || "";
+    if (regexPattern) {
+      try {
+        const regex = new RegExp(regexPattern);
+        if (!regex.test(String(value))) {
+          return (
+            (field.options?.regexMessage as string | undefined) ||
+            t("view.formFormatInvalid", { name: field.name })
+          );
+        }
+      } catch {
+        // 非法正则，放行
+      }
+    }
+  }
+
+  // 字段类型特定验证
+  switch (field.type) {
+    case FieldType.EMAIL:
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value))) {
+        return t("view.formInvalidEmail");
+      }
+      break;
+    case FieldType.PHONE:
+      if (!/^1[3-9]\d{9}$/.test(String(value))) {
+        return t("view.formInvalidPhone");
+      }
+      break;
+    case FieldType.URL:
+      try {
+        new URL(String(value));
+      } catch {
+        return t("view.formInvalidUrl");
+      }
+      break;
+    case FieldType.NUMBER:
+    case FieldType.RATING:
+      if (typeof value === "number" || !isNaN(Number(value))) {
+        const numValue = Number(value);
+        // 最小值验证
+        if (
+          field.options?.min !== undefined &&
+          numValue < Number(field.options.min)
+        ) {
+          return t("view.formCannotLessThan", { name: field.name, min: field.options.min });
+        }
+        // 最大值验证
+        if (
+          field.options?.max !== undefined &&
+          numValue > Number(field.options.max)
+        ) {
+          return t("view.formCannotGreaterThan", { name: field.name, max: field.options.max });
+        }
+      }
+      break;
+    case FieldType.SINGLE_LINE_TEXT:
+    case FieldType.LONG_TEXT:
+    case FieldType.RICH_TEXT:
+    case FieldType.MULTI_SELECT:
+      const strValue = String(value);
+      // 最小长度验证
+      if (
+        field.options?.minLength !== undefined &&
+        strValue.length < Number(field.options.minLength)
+      ) {
+        return t("view.formAtLeastChars", { name: field.name, count: field.options.minLength });
+      }
+      // 最大长度验证
+      if (
+        field.options?.maxLength !== undefined &&
+        strValue.length > Number(field.options.maxLength)
+      ) {
+        return t("view.formAtMostChars", { name: field.name, count: field.options.maxLength });
+      }
+      break;
+  }
+
+  // 自定义验证规则
+  const validation = field.options?.validation as
+    | { pattern?: string; message?: string }
+    | undefined;
+  if (validation?.pattern) {
+    const pattern = new RegExp(validation.pattern);
+    if (!pattern.test(String(value))) {
+      return validation.message || t("view.formFormatInvalid", { name: field.name });
+    }
+  }
+
+  return null;
+}
+
+function handleFieldChange(fieldId: string, value: CellValue) {
+  formValues.value[fieldId] = value;
+
+  const field = props.fields.find((f) => f.id === fieldId);
+  if (field) {
+    const error = validateField(field, value);
+    if (error) {
+      formErrors.value[fieldId] = error;
+    } else {
+      delete formErrors.value[fieldId];
+    }
+  }
+}
+
+async function handleSubmit() {
+  formErrors.value = {};
+
+  // 只验证可见字段
+  visibleFields.value.forEach((field) => {
+    const error = validateField(field, formValues.value[field.id]);
+    if (error) {
+      formErrors.value[field.id] = error;
+    }
+  });
+
+  if (Object.keys(formErrors.value).length === 0) {
+    isSubmitting.value = true;
+    try {
+      emit("submit", { ...formValues.value });
+      submitSuccess.value = true;
+
+      // 如果不是编辑模式，提交成功后重置表单
+      if (!props.record) {
+        setTimeout(() => {
+          resetForm();
+          submitSuccess.value = false;
+        }, 1500);
+      }
+    } finally {
+      isSubmitting.value = false;
+    }
+  } else {
+    // 显示第一个错误
+    const firstError = Object.values(formErrors.value)[0];
+    ElMessage.error(firstError);
+  }
+}
+
+async function handleCancel() {
+  // 如果有填写内容，确认是否放弃
+  const hasValues = Object.values(formValues.value).some(
+    (v) => v !== null && v !== undefined && v !== "" && v !== false,
+  );
+
+  if (hasValues && !props.readonly) {
+    try {
+      await ElMessageBox.confirm(
+        t("view.formCancelConfirm"),
+        t("view.formCancelTitle"),
+        {
+          confirmButtonText: t("view.confirm"),
+          cancelButtonText: t("view.formContinue"),
+          type: "warning",
+        },
+      );
+      emit("cancel");
+    } catch {
+      // 用户选择继续填写
+    }
+  } else {
+    emit("cancel");
+  }
+}
+
+function resetForm() {
+  formValues.value = {};
+  formErrors.value = {};
+  submitSuccess.value = false;
+  newRecordId.value = generateId();
+  linkFieldRecords.value.clear();
+  editingLinkField.value = null;
+
+  // 设置默认值：使用 field.defaultValue（与 AddRecordDrawer 保持一致）
+  visibleFields.value.forEach((field) => {
+    if (field.defaultValue !== undefined && field.defaultValue !== null) {
+      // 特殊处理日期字段的动态默认值 'now'
+      if ((field.type === FieldType.DATE || field.type === FieldType.DATE_TIME) && field.defaultValue === 'now') {
+        // 动态计算当前日期，按字段配置的日期格式存储
+        if (field.type === FieldType.DATE_TIME) {
+          formValues.value[field.id] = new Date().toISOString();
+        } else {
+          const fmt = (field.options?.dateFormat as string) || "YYYY-MM-DD";
+          formValues.value[field.id] = dayjs().format(fmt);
+        }
+      } else {
+        formValues.value[field.id] = field.defaultValue as CellValue;
+      }
+    }
+    // 处理成员字段的默认值配置
+    // 统一使用数组格式存储成员字段值
+    else if (field.type === FieldType.MEMBER) {
+      const memberDefaultType = field.options?.memberDefaultType as string | undefined;
+      if (memberDefaultType === 'current_user') {
+        // 设置为当前用户ID（数组格式）
+        const currentUserId = getCurrentUserId();
+        if (currentUserId) {
+          formValues.value[field.id] = [currentUserId];
+        }
+      } else if (memberDefaultType === 'specific_user') {
+        // 使用配置中存储的数组格式默认值
+        const defaultValue = field.options?.defaultValue as string[] | undefined;
+        if (defaultValue && defaultValue.length > 0) {
+          formValues.value[field.id] = defaultValue;
+        }
+      }
+    }
+  });
+
+  // 关联字段统一初始化为空数组
+  visibleFields.value.forEach((field) => {
+    if (field.type === FieldType.LINK) {
+      const v = formValues.value[field.id];
+      formValues.value[field.id] = Array.isArray(v) ? v : [];
+    }
+  });
+}
+
+// 处理附件上传
+function handleAttachmentUpload(fieldId: string, newFiles: unknown[]) {
+  // 使用 Map 去重，避免重复添加相同 ID 的文件
+  const currentFiles = (formValues.value[fieldId] as unknown[]) || [];
+  const fileMap = new Map<string, unknown>();
+
+  // 添加现有文件
+  currentFiles.forEach((f) => {
+    const file = f as { id: string };
+    fileMap.set(file.id, f);
+  });
+
+  // 添加新文件（如果 ID 不存在）
+  newFiles.forEach((f) => {
+    const file = f as { id: string };
+    if (!fileMap.has(file.id)) {
+      fileMap.set(file.id, f);
+    }
+  });
+
+  formValues.value[fieldId] = Array.from(fileMap.values()) as CellValue;
+}
+
+// 处理附件删除
+function handleAttachmentDelete(fieldId: string, fileId: string) {
+  const currentFiles = (formValues.value[fieldId] as unknown[]) || [];
+  formValues.value[fieldId] = currentFiles.filter(
+    (f: unknown) => (f as { id: string }).id !== fileId,
+  ) as CellValue;
+}
+
+// 计算公式字段值
+const calculateFormulaValue = (field: FieldEntity): string => {
+  const formula = field.options?.formula as string;
+  if (!formula) return "";
+
+  try {
+    const engine = new FormulaEngine(props.fields);
+    // 构建当前记录对象
+    const record: RecordEntity = {
+      id: "temp",
+      tableId: "",
+      values: formValues.value,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const result = engine.calculate(record, formula);
+
+    if (result === "#ERROR") {
+      return t("view.calcError");
+    }
+
+    // 数字格式化：沿用数值字段的展示格式（精度/前后缀/千分位）
+    if (typeof result === "number" && !isNaN(result)) {
+      return formatNumberField(result, {
+        precision: (field.options?.precision as number) ?? 2,
+        format: (field.options?.format as "number" | "currency" | "percent") ?? "number",
+        currencySymbol: field.options?.currencySymbol as string | undefined,
+        prefix: field.options?.prefix as string | undefined,
+        suffix: field.options?.suffix as string | undefined,
+        thousandsSeparator: field.options?.thousandsSeparator as boolean | undefined,
+      });
+    }
+
+    return String(result);
+  } catch (error) {
+    console.error("Form formula calculation error:", error);
+    return t("view.calcError");
+  }
+};
+
+// 监听表单值变化，重新计算公式字段
+watch(
+  formValues,
+  () => {
+    // 表单值变化时，公式字段会自动重新计算
+    // 由于 calculateFormulaValue 在模板中调用，会响应式更新
+  },
+  { deep: true },
+);
+
+// 获取字段类型对应的组件类型
+function getFieldComponentType(field: FieldEntity): string {
+  switch (field.type) {
+    case FieldType.SINGLE_LINE_TEXT:
+    case FieldType.LONG_TEXT:
+    case FieldType.RICH_TEXT:
+    case FieldType.URL:
+    case FieldType.EMAIL:
+    case FieldType.PHONE:
+      return "text";
+    case FieldType.NUMBER:
+    case FieldType.RATING:
+      return "number";
+    case FieldType.SINGLE_SELECT:
+      return "single_select";
+    case FieldType.MULTI_SELECT:
+      return "multi_select";
+    case FieldType.DATE:
+    case FieldType.DATE_TIME:
+      return "date";
+    case FieldType.CHECKBOX:
+      return "checkbox";
+    case FieldType.FORMULA:
+      return "formula";
+    case FieldType.ATTACHMENT:
+      return "attachment";
+    case FieldType.AUTO_NUMBER:
+      return "auto_number";
+    case FieldType.MEMBER:
+      return "member";
+    case FieldType.GEOLOCATION:
+      return "geolocation";
+    default:
+      return "text";
+  }
+}
+
+// 获取单选/多选选项
+function getSelectOptions(field: FieldEntity) {
+  return (
+    (field.options?.choices || field.options?.options) as Array<{
+      id: string;
+      name: string;
+      color?: string;
+    }> || []
+  );
+}
+
+
+
+// 导出表单数据为 JSON
+function exportFormData() {
+  const data = {
+    title: formTitle.value,
+    description: props.description,
+    fields: visibleFields.value.map((f) => ({
+      id: f.id,
+      name: f.name,
+      type: f.type,
+      required: f.options?.required,
+      options: f.options,
+    })),
+    values: { ...formValues.value },
+  };
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `form-data-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  ElMessage.success(t("view.formExported"));
+}
+
+const collabStore = useCollaborationStore();
+const realtimeHandlers: Array<{ event: string; handler: (...args: unknown[]) => void }> = [];
+
+function setupRealtimeListenersForView() {
+  if (!collabStore.isRealtimeAvailable) return;
+
+  const onRecordUpdated = (_data: DataRecordUpdatedBroadcast) => {};
+  const onRecordCreated = (_data: DataRecordCreatedBroadcast) => {};
+  const onRecordDeleted = (_data: DataRecordDeletedBroadcast) => {};
+  const onFieldCreated = (_data: DataFieldCreatedBroadcast) => {};
+  const onFieldUpdated = (_data: DataFieldUpdatedBroadcast) => {};
+  const onFieldDeleted = (_data: DataFieldDeletedBroadcast) => {};
+
+  realtimeEventEmitter.on("data:record_updated", onRecordUpdated);
+  realtimeEventEmitter.on("data:record_created", onRecordCreated);
+  realtimeEventEmitter.on("data:record_deleted", onRecordDeleted);
+  realtimeEventEmitter.on("data:field_created", onFieldCreated);
+  realtimeEventEmitter.on("data:field_updated", onFieldUpdated);
+  realtimeEventEmitter.on("data:field_deleted", onFieldDeleted);
+
+  realtimeHandlers.push(
+    { event: "data:record_updated", handler: onRecordUpdated as (...args: unknown[]) => void },
+    { event: "data:record_created", handler: onRecordCreated as (...args: unknown[]) => void },
+    { event: "data:record_deleted", handler: onRecordDeleted as (...args: unknown[]) => void },
+    { event: "data:field_created", handler: onFieldCreated as (...args: unknown[]) => void },
+    { event: "data:field_updated", handler: onFieldUpdated as (...args: unknown[]) => void },
+    { event: "data:field_deleted", handler: onFieldDeleted as (...args: unknown[]) => void },
+  );
+}
+
+function cleanupRealtimeListenersForView() {
+  for (const { event, handler } of realtimeHandlers) {
+    realtimeEventEmitter.off(event as any, handler as any);
+  }
+  realtimeHandlers.length = 0;
+}
+
+setupRealtimeListenersForView();
+
+onBeforeUnmount(() => {
+  cleanupRealtimeListenersForView();
+});
+
+defineExpose({
+  resetForm,
+  validate: () => isValid.value,
+  getValues: () => ({ ...formValues.value }),
+  exportFormData,
+});
+</script>
+
+<template>
+  <div class="form-view">
+    <!-- 表单头部 -->
+    <div class="form-header">
+      <div class="form-header-icon">
+        <el-icon><Document /></el-icon>
+      </div>
+      <h2 class="form-title">{{ formTitle }}</h2>
+      <p v-if="description" class="form-description">{{ description }}</p>
+    </div>
+
+    <!-- 提交成功提示 -->
+    <div v-if="submitSuccess" class="success-state">
+      <div class="success-icon">
+        <el-icon><CircleCheckFilled /></el-icon>
+      </div>
+      <h3 class="success-title">{{ t("view.formSubmitSuccess") }}</h3>
+      <p class="success-subtitle">{{ t("view.formSaveSuccess") }}</p>
+      <el-button type="primary" class="success-button" @click="resetForm">
+        <el-icon><Plus /></el-icon>
+        {{ t("view.formContinue") }}
+      </el-button>
+    </div>
+
+    <!-- 空状态 -->
+    <div v-else-if="visibleFields.length === 0" class="empty-state">
+      <div class="empty-illustration">
+        <el-icon><DocumentDelete /></el-icon>
+      </div>
+      <h3 class="empty-title">{{ t("view.formNoVisibleFields") }}</h3>
+      <p class="empty-subtitle">
+        {{ t("view.formNoFieldsHint") }}
+      </p>
+    </div>
+
+    <!-- 表单内容 -->
+    <el-form
+      v-else
+      label-position="top"
+      class="form-container"
+      @submit.prevent="handleSubmit">
+      <div
+        class="form-card"
+        :class="{ 'is-multi-col': isMultiColumn }"
+        :style="{ '--form-cols': effectiveColumns }">
+        <div
+          v-for="field in visibleFields"
+          :key="field.id"
+          class="form-item"
+          :class="{
+            'has-error': formErrors[field.id],
+            'is-readonly': readonly,
+            'form-item--full': isFullWidthField(field),
+          }">
+          <label class="form-label">
+            <el-icon class="field-icon">
+              <component :is="getFieldTypeIconComponent(field.type)" />
+            </el-icon>
+            {{ field.name }}
+            <span
+              v-if="field.options?.required && !readonly"
+              class="required-mark"
+              >*</span
+            >
+          </label>
+
+          <div class="form-control">
+            <!-- 单行文本 -->
+            <template v-if="field.type === FieldType.SINGLE_LINE_TEXT || field.type === FieldType.EMAIL || field.type === FieldType.PHONE || field.type === FieldType.URL">
+              <el-input
+                :model-value="String(formValues[field.id] || '')"
+                :placeholder="t('view.formInputPlaceholder', { name: field.name })"
+                :disabled="readonly"
+                :maxlength="(field.options?.maxLength as number | undefined)"
+                class="form-input"
+                @update:model-value="(val) => handleFieldChange(field.id, val)">
+                <template v-if="field.type === FieldType.EMAIL" #prefix>
+                  <el-icon><Message /></el-icon>
+                </template>
+                <template v-else-if="field.type === FieldType.PHONE" #prefix>
+                  <el-icon><Phone /></el-icon>
+                </template>
+                <template v-else-if="field.type === FieldType.URL" #prefix>
+                  <el-icon><Link /></el-icon>
+                </template>
+              </el-input>
+            </template>
+
+            <!-- 多行文本 -->
+            <template v-else-if="field.type === FieldType.LONG_TEXT">
+              <div class="textarea-wrapper">
+                <el-input
+                  :model-value="String(formValues[field.id] || '')"
+                  :placeholder="t('view.formInputPlaceholder', { name: field.name })"
+                  :disabled="readonly"
+                  :maxlength="(field.options?.maxLength as number | undefined)"
+                  type="textarea"
+                  :rows="4"
+                  resize="none"
+                  class="form-input"
+                  @update:model-value="(val) => handleFieldChange(field.id, val)" />
+                <div
+                  v-if="(field.options?.maxLength as number | undefined)"
+                  class="textarea-counter"
+                  :class="{
+                    'is-warning':
+                      String(formValues[field.id] || '').length >=
+                      ((field.options?.maxLength as number) || 0) * 0.9,
+                    'is-error':
+                      String(formValues[field.id] || '').length >=
+                      ((field.options?.maxLength as number) || 0),
+                  }">
+                  {{ String(formValues[field.id] || '').length }}/{{
+                    (field.options?.maxLength as number | undefined)
+                  }}
+                </div>
+              </div>
+            </template>
+
+            <!-- 富文本 -->
+            <template v-else-if="field.type === FieldType.RICH_TEXT">
+              <RichTextField
+                :model-value="(formValues[field.id] as string) || null"
+                :placeholder="t('view.formInputPlaceholder', { name: field.name })"
+                :readonly="readonly"
+                :max-length="(field.options?.maxLength as number) || undefined"
+                class="form-rich-text"
+                @update:model-value="(val) => handleFieldChange(field.id, val)" />
+            </template>
+
+            <!-- 数字类型 -->
+            <template v-else-if="getFieldComponentType(field) === 'number'">
+              <el-input-number
+                :model-value="Number(formValues[field.id] || 0)"
+                :placeholder="t('view.formInputPlaceholder', { name: field.name })"
+                :disabled="readonly"
+                :formatter="createNumberInputFormatter(field.options)"
+                :parser="createNumberInputParser(field.options)"
+                :min="
+                  field.options?.min !== undefined
+                    ? Number(field.options.min)
+                    : undefined
+                "
+                :max="
+                  field.options?.max !== undefined
+                    ? Number(field.options.max)
+                    : undefined
+                "
+                class="form-input-number"
+                @update:model-value="
+                  (val) => handleFieldChange(field.id, val as CellValue)
+                ">
+                  <template #prefix v-if="getNumberFieldPrefix(field.options)">{{ getNumberFieldPrefix(field.options) }}</template>
+                  <template #suffix v-if="getNumberFieldSuffix(field.options)">{{ getNumberFieldSuffix(field.options) }}</template>
+                </el-input-number>
+            </template>
+
+            <!-- 单选类型 -->
+            <template
+              v-else-if="getFieldComponentType(field) === 'single_select'">
+              <el-select
+                :model-value="formValues[field.id] as string | undefined"
+                :placeholder="t('view.formSelectPlaceholder', { name: field.name })"
+                :disabled="readonly"
+                class="form-select"
+                clearable
+                @update:model-value="(val) => handleFieldChange(field.id, val)">
+                <el-option
+                  v-for="option in getSelectOptions(field)"
+                  :key="option.id"
+                  :label="option.name"
+                  :value="option.id">
+                  <span
+                    class="option-color"
+                    :style="{ backgroundColor: option.color || '#3B82F6' }" />
+                  <span>{{ option.name }}</span>
+                </el-option>
+              </el-select>
+            </template>
+
+            <!-- 多选类型 -->
+            <template
+              v-else-if="getFieldComponentType(field) === 'multi_select'">
+              <el-select
+                :model-value="(formValues[field.id] as string[]) || []"
+                :placeholder="t('view.formSelectPlaceholder', { name: field.name })"
+                :disabled="readonly"
+                class="form-select"
+                multiple
+                clearable
+                @update:model-value="(val) => handleFieldChange(field.id, val)">
+                <el-option
+                  v-for="option in getSelectOptions(field)"
+                  :key="option.id"
+                  :label="option.name"
+                  :value="option.id">
+                  <span
+                    class="option-color"
+                    :style="{ backgroundColor: option.color || '#3B82F6' }" />
+                  <span>{{ option.name }}</span>
+                </el-option>
+              </el-select>
+            </template>
+
+            <!-- 日期类型 -->
+            <template v-else-if="getFieldComponentType(field) === 'date'">
+              <DateInput
+                :field="field"
+                :model-value="formValues[field.id]"
+                :placeholder="t('view.formSelectPlaceholder', { name: field.name })"
+                :disabled="readonly"
+                class="form-date-picker"
+                @update:model-value="(val) => handleFieldChange(field.id, val)" />
+            </template>
+
+            <!-- 复选框类型 -->
+            <template v-else-if="getFieldComponentType(field) === 'checkbox'">
+              <el-switch
+                :model-value="Boolean(formValues[field.id])"
+                :disabled="readonly"
+                class="form-switch"
+                @update:model-value="
+                  (val) => handleFieldChange(field.id, val)
+                " />
+            </template>
+
+            <!-- 公式字段类型 -->
+            <template v-else-if="getFieldComponentType(field) === 'formula'">
+              <div class="formula-field-display">
+                <el-input
+                  :model-value="calculateFormulaValue(field)"
+                  disabled
+                  class="formula-input"
+                  :placeholder="t('view.formAutoCalc')">
+                  <template #prefix>
+                    <el-icon><Calculator /></el-icon>
+                  </template>
+                </el-input>
+                <div v-if="field.options?.formula" class="formula-hint">
+                  {{ t("view.formFormula", { formula: field.options.formula }) }}
+                </div>
+              </div>
+            </template>
+
+            <!-- 附件字段类型 -->
+            <template v-else-if="getFieldComponentType(field) === 'attachment'">
+              <AttachmentField
+                :model-value="formValues[field.id]"
+                :field="field"
+                :record-id="props.record?.id || newRecordId"
+                :readonly="readonly"
+                @update:model-value="(val) => handleFieldChange(field.id, val)"
+                @upload="(files) => handleAttachmentUpload(field.id, files)"
+                @delete="(fileId) => handleAttachmentDelete(field.id, fileId)" />
+            </template>
+
+            <!-- 自动编号字段类型 -->
+            <template v-else-if="getFieldComponentType(field) === 'auto_number'">
+              <div class="auto-number-display">
+                <span class="auto-number-value">{{ formValues[field.id] || '-' }}</span>
+                <span v-if="!formValues[field.id]" class="auto-number-hint">{{ t("view.formAutoGenerate") }}</span>
+              </div>
+            </template>
+
+            <!-- 成员字段类型 -->
+            <!-- 统一使用数组格式存储成员字段值 -->
+            <template v-else-if="getFieldComponentType(field) === 'member'">
+              <MemberSelect
+                v-model="(formValues[field.id] as any)"
+                :placeholder="t('view.formSelectPlaceholder', { name: field.name })"
+                :allow-multiple="false"
+                :disabled="readonly"
+                class="form-select"
+                @update:model-value="(val: any) => handleFieldChange(field.id, val)" />
+            </template>
+
+            <!-- 地理位置字段类型 -->
+            <template v-else-if="getFieldComponentType(field) === 'geolocation'">
+              <GeoField
+                :model-value="(formValues[field.id] as any)"
+                :field="field"
+                :readonly="readonly"
+                @update:model-value="(val: any) => handleFieldChange(field.id, val)"
+              />
+            </template>
+
+            <!-- 关联字段类型 -->
+            <template v-else-if="field.type === FieldType.LINK">
+              <LinkField
+                :value="(formValues[field.id] as string[]) || []"
+                :linked-records="getLinkedRecords(field)"
+                :target-table-id="getLinkFieldConfig(field)?.targetTableId"
+                :display-field-id="getLinkFieldConfig(field)?.displayFieldId"
+                :relationship-type="getLinkFieldConfig(field)?.relationshipType"
+                :is-editing="editingLinkField === field.id"
+                :readonly="readonly"
+                :record-id="props.record?.id || newRecordId"
+                :field-id="field.id"
+                :is-self-link="getLinkFieldConfig(field)?.isSelfLink"
+                @edit-start="handleLinkFieldEdit(field.id)"
+                @change="(val, records) => handleLinkFieldChange(field, val, records)"
+                @edit-end="handleLinkFieldEditEnd"
+                @remove="(targetId) => handleLinkFieldRemove(field, targetId)" />
+            </template>
+          </div>
+
+          <div v-if="formErrors[field.id]" class="form-error">
+            <el-icon><CircleCloseFilled /></el-icon>
+            <span>{{ formErrors[field.id] }}</span>
+          </div>
+
+          <div
+            v-if="field.options?.description && !readonly"
+            class="form-field-description">
+            <el-icon><InfoFilled /></el-icon>
+            <span>{{ field.options.description }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="!readonly" class="form-actions">
+        <el-button class="cancel-button" @click="handleCancel">
+          {{ t("view.formCancel") }}
+        </el-button>
+        <el-button
+          type="primary"
+          native-type="submit"
+          :loading="isSubmitting"
+          :disabled="!isValid && Object.keys(formErrors).length > 0"
+          class="submit-button">
+          <el-icon v-if="!isSubmitting"><Check /></el-icon>
+          {{ submitButtonText || t("view.formSubmit") }}
+        </el-button>
+      </div>
+    </el-form>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+@use "@/assets/styles/variables" as *;
+
+.form-view {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: $spacing-2xl;
+  background: linear-gradient(180deg, $surface-color 0%, $gray-50 100%);
+  border-radius: $border-radius-xl;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.05),
+    0 10px 20px -5px rgba(0, 0, 0, 0.03);
+  transition: box-shadow 0.3s ease;
+
+  &:hover {
+    box-shadow:
+      0 10px 15px -3px rgba(0, 0, 0, 0.08),
+      0 20px 30px -5px rgba(0, 0, 0, 0.05);
+  }
+}
+
+// 表单头部
+.form-header {
+  text-align: center;
+  margin-bottom: $spacing-2xl;
+  padding-bottom: $spacing-xl;
+  border-bottom: 1px solid $gray-100;
+}
+
+.form-header-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto $spacing-lg;
+  background: linear-gradient(135deg, $primary-light 0%, $primary-color 100%);
+  border-radius: $border-radius-xl;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba($primary-color, 0.25);
+
+  .el-icon {
+    font-size: 32px;
+    color: $surface-color;
+  }
+}
+
+.form-title {
+  font-size: $font-size-2xl;
+  font-weight: 700;
+  color: $text-primary;
+  margin: 0 0 $spacing-sm;
+  letter-spacing: -0.5px;
+}
+
+.form-description {
+  font-size: $font-size-base;
+  color: $text-secondary;
+  margin: 0;
+  line-height: 1.6;
+}
+
+// 表单卡片
+.form-card {
+  display: grid;
+  grid-template-columns: repeat(var(--form-cols, 1), minmax(0, 1fr));
+  gap: $spacing-lg $spacing-xl;
+  background: $surface-color;
+  border-radius: $border-radius-xl;
+  padding: $spacing-xl;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.04),
+    0 4px 8px rgba(0, 0, 0, 0.02);
+  border: 1px solid $gray-100;
+  transition: all 0.3s ease;
+
+  &:hover {
+    box-shadow:
+      0 4px 12px rgba(0, 0, 0, 0.06),
+      0 8px 16px rgba(0, 0, 0, 0.03);
+    border-color: $gray-200;
+  }
+
+  // 单列模式下保留字段之间的分隔线
+  &:not(.is-multi-col) .form-item:not(:last-child) {
+    border-bottom: 1px solid $gray-50;
+    padding-bottom: $spacing-md;
+    margin-bottom: $spacing-md;
+  }
+
+  &:not(.is-multi-col) .form-item:hover {
+    border-bottom-color: $gray-100;
+  }
+
+  // 移动端：强制单列布局，保证可读性与操作体验
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+    gap: $spacing-lg;
+  }
+}
+
+.form-container {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+// 表单字段项
+.form-item {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+  min-width: 0;
+  transition: all 0.2s ease;
+
+  // 宽字段（长文本 / 富文本 / 附件）在多列布局下占满整行
+  &--full {
+    grid-column: 1 / -1;
+  }
+
+  &.has-error {
+    .form-label {
+      color: $error-color;
+    }
+
+    .form-control {
+      :deep(.el-input__wrapper),
+      :deep(.el-select__wrapper),
+      :deep(.el-textarea__inner),
+      :deep(.el-input-number__decrease),
+      :deep(.el-input-number__increase) {
+        border-color: $error-color;
+        box-shadow: 0 0 0 3px rgba($error-color, 0.1);
+      }
+    }
+  }
+
+  &.is-readonly {
+    .form-control {
+      :deep(.el-input__wrapper),
+      :deep(.el-select__wrapper) {
+        background-color: $gray-50;
+      }
+    }
+  }
+}
+
+// 字段标签
+.form-label {
+  font-size: $font-size-sm;
+  font-weight: 600;
+  color: $text-primary;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.3px;
+
+  .field-icon {
+    color: $text-secondary;
+    font-size: 16px;
+  }
+}
+
+.required-mark {
+  color: $error-color;
+  margin-left: 4px;
+  font-size: $font-size-base;
+  font-weight: 700;
+}
+
+// 表单控件
+.form-control {
+  width: 100%;
+}
+
+// 输入框样式
+.form-input,
+.form-select,
+.form-date-picker {
+  width: 100%;
+
+  :deep(.el-input__wrapper) {
+    border-radius: $border-radius-lg;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.03),
+      inset 0 1px 2px rgba(0, 0, 0, 0.02);
+    border: 1px solid $gray-200;
+    transition: all 0.2s ease;
+
+    &:hover {
+      border-color: $primary-hover;
+      box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.04),
+        inset 0 1px 2px rgba(0, 0, 0, 0.02);
+    }
+
+    &.is-focus {
+      border-color: $primary-color;
+      box-shadow:
+        0 0 0 3px rgba($primary-color, 0.1),
+        0 2px 8px rgba($primary-color, 0.15);
+    }
+  }
+
+  :deep(.el-input__inner) {
+    height: 44px;
+    font-size: $font-size-base;
+    color: $text-primary;
+
+    &::placeholder {
+      color: $text-disabled;
+    }
+  }
+
+  :deep(.el-input__prefix) {
+    color: $text-secondary;
+    margin-right: $spacing-sm;
+  }
+}
+
+// 数字输入框
+.form-input-number {
+  width: 100%;
+
+  :deep(.el-input__wrapper) {
+    border-radius: $border-radius-lg;
+    border: 1px solid $gray-200;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.03),
+      inset 0 1px 2px rgba(0, 0, 0, 0.02);
+
+    &:hover,
+    &.is-focus {
+      border-color: $primary-color;
+      box-shadow:
+        0 0 0 3px rgba($primary-color, 0.1),
+        0 2px 8px rgba($primary-color, 0.15);
+    }
+  }
+
+  :deep(.el-input-number__decrease),
+  :deep(.el-input-number__increase) {
+    border-radius: $border-radius-md;
+    background: $gray-50;
+    border-color: $gray-200;
+    color: $text-secondary;
+    transition: all 0.2s ease;
+
+    &:hover {
+      background: $primary-light;
+      color: $primary-color;
+      border-color: $primary-color;
+    }
+  }
+}
+
+// 下拉选择器
+.form-select {
+  :deep(.el-select__wrapper) {
+    border-radius: $border-radius-lg;
+    border: 1px solid $gray-200;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.03),
+      inset 0 1px 2px rgba(0, 0, 0, 0.02);
+    min-height: 44px;
+
+    &:hover {
+      border-color: $primary-hover;
+    }
+
+    &.is-focused {
+      border-color: $primary-color;
+      box-shadow:
+        0 0 0 3px rgba($primary-color, 0.1),
+        0 2px 8px rgba($primary-color, 0.15);
+    }
+  }
+
+  :deep(.el-select__selection) {
+    font-size: $font-size-base;
+  }
+}
+
+// 日期选择器
+.form-date-picker {
+  :deep(.el-input__wrapper) {
+    border-radius: $border-radius-lg;
+  }
+
+  :deep(.el-input__prefix) {
+    color: $primary-color;
+  }
+}
+
+// 开关样式
+.form-switch {
+  :deep(.el-switch__core) {
+    border-radius: 12px;
+    background-color: $gray-300;
+    border-color: $gray-300;
+
+    &.is-checked {
+      background-color: $primary-color;
+      border-color: $primary-color;
+    }
+  }
+
+  :deep(.el-switch__action) {
+    background-color: $surface-color;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  }
+}
+
+// 自动编号字段样式
+.auto-number-display {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  padding: $spacing-sm $spacing-md;
+  background-color: $gray-50;
+  border: 1px dashed $border-color;
+  border-radius: $border-radius-lg;
+  min-height: 40px;
+
+  .auto-number-value {
+    font-family: "SF Mono", Monaco, monospace;
+    font-size: $font-size-base;
+    font-weight: 600;
+    color: $primary-color;
+    letter-spacing: 0.5px;
+  }
+
+  .auto-number-hint {
+    font-size: $font-size-sm;
+    color: $text-secondary;
+    font-style: italic;
+  }
+}
+
+// 错误提示
+.form-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: $font-size-xs;
+  color: $error-color;
+  padding: $spacing-xs $spacing-sm;
+  background: $error-light;
+  border-radius: $border-radius-md;
+  margin-top: $spacing-xs;
+
+  .el-icon {
+    font-size: 14px;
+  }
+}
+
+// 字段描述
+.form-field-description {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: $font-size-xs;
+  color: $text-secondary;
+  line-height: 1.5;
+  margin-top: $spacing-xs;
+
+  .el-icon {
+    font-size: 12px;
+    color: $info-color;
+    margin-top: 1px;
+    flex-shrink: 0;
+  }
+}
+
+// 表单操作按钮
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: $spacing-md;
+  margin-top: $spacing-xl;
+  padding-top: $spacing-xl;
+  border-top: 1px solid $gray-100;
+}
+
+.cancel-button {
+  height: 44px;
+  padding: 0 $spacing-xl;
+  border-radius: $border-radius-lg;
+  font-weight: 500;
+  color: $text-secondary;
+  border-color: $gray-200;
+  transition: all 0.2s ease;
+
+  &:hover {
+    color: $text-primary;
+    border-color: $gray-300;
+    background: $gray-50;
+  }
+}
+
+.submit-button {
+  height: 44px;
+  padding: 0 $spacing-xl;
+  border-radius: $border-radius-lg;
+  font-weight: 600;
+  background: linear-gradient(135deg, $primary-color 0%, $primary-dark 100%);
+  border: none;
+  box-shadow: 0 4px 12px rgba($primary-color, 0.35);
+  transition: all 0.3s ease;
+
+  &:hover:not(:disabled) {
+    background: linear-gradient(135deg, $primary-hover 0%, $primary-color 100%);
+    box-shadow: 0 6px 20px rgba($primary-color, 0.45);
+    transform: translateY(-1px);
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba($primary-color, 0.35);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .el-icon {
+    margin-right: 6px;
+  }
+}
+
+// 主键字段样式
+.primary-field-input {
+  :deep(.el-input__wrapper) {
+    background-color: $gray-50;
+    border-color: $gray-200;
+
+    .el-input__inner {
+      color: $text-secondary;
+      font-family: "SF Mono", Monaco, monospace;
+    }
+  }
+}
+
+.auto-filled-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: $font-size-xs;
+  color: $info-color;
+  margin-top: $spacing-xs;
+
+  .el-icon {
+    font-size: 12px;
+  }
+}
+
+// 选项颜色标记
+.option-color {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: middle;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+// 成功状态
+.success-state {
+  text-align: center;
+  padding: $spacing-3xl $spacing-xl;
+}
+
+.success-icon {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto $spacing-lg;
+  background: linear-gradient(135deg, $success-light 0%, $success-color 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba($success-color, 0.3);
+  animation: scaleIn 0.4s $ease-spring;
+
+  .el-icon {
+    font-size: 40px;
+    color: $surface-color;
+  }
+}
+
+.success-title {
+  font-size: $font-size-xl;
+  font-weight: 700;
+  color: $text-primary;
+  margin: 0 0 $spacing-sm;
+}
+
+.success-subtitle {
+  font-size: $font-size-base;
+  color: $text-secondary;
+  margin: 0 0 $spacing-xl;
+}
+
+.success-button {
+  height: 48px;
+  padding: 0 $spacing-2xl;
+  border-radius: $border-radius-lg;
+  font-weight: 600;
+  background: linear-gradient(135deg, $primary-color 0%, $primary-dark 100%);
+  border: none;
+  box-shadow: 0 4px 12px rgba($primary-color, 0.35);
+
+  &:hover {
+    box-shadow: 0 6px 20px rgba($primary-color, 0.45);
+    transform: translateY(-1px);
+  }
+}
+
+// 空状态
+.empty-state {
+  text-align: center;
+  padding: $spacing-3xl $spacing-xl;
+}
+
+.empty-illustration {
+  width: 120px;
+  height: 120px;
+  margin: 0 auto $spacing-lg;
+  background: linear-gradient(135deg, $gray-50 0%, $gray-100 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.05);
+
+  .el-icon {
+    font-size: 56px;
+    color: $gray-300;
+  }
+}
+
+.empty-title {
+  font-size: $font-size-lg;
+  font-weight: 600;
+  color: $text-primary;
+  margin: 0 0 $spacing-sm;
+}
+
+.empty-subtitle {
+  font-size: $font-size-sm;
+  color: $text-secondary;
+  margin: 0;
+  max-width: 280px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
+}
+
+// 动画
+@keyframes scaleIn {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+// 公式字段样式
+.formula-field-display {
+  width: 100%;
+
+  .formula-input {
+    :deep(.el-input__wrapper) {
+      background-color: $gray-50;
+      border-color: $gray-200;
+
+      .el-input__inner {
+        color: $text-primary;
+        font-family: "SF Mono", Monaco, monospace;
+      }
+    }
+
+    :deep(.el-input__prefix) {
+      color: $primary-color;
+    }
+  }
+
+  .formula-hint {
+    margin-top: 4px;
+    font-size: $font-size-xs;
+    color: $text-secondary;
+    font-family: "SF Mono", Monaco, monospace;
+  }
+}
+
+// 富文本字段样式
+.form-rich-text {
+  width: 100%;
+
+  :deep(.rich-text-field) {
+    border-radius: $border-radius-lg;
+    border: 1px solid $gray-200;
+
+    &.is-focused {
+      border-color: $primary-color;
+      box-shadow:
+        0 0 0 3px rgba($primary-color, 0.1),
+        0 2px 8px rgba($primary-color, 0.15);
+    }
+
+    .rich-text-toolbar {
+      border-radius: $border-radius-lg $border-radius-lg 0 0;
+    }
+
+    .rich-text-editor {
+      border-radius: 0 0 $border-radius-lg $border-radius-lg;
+    }
+  }
+}
+
+// 多行文本计数器样式
+.textarea-wrapper {
+  position: relative;
+
+  .textarea-counter {
+    position: absolute;
+    bottom: 8px;
+    right: 12px;
+    font-size: $font-size-xs;
+    color: $text-secondary;
+    background: rgba($surface-color, 0.9);
+    padding: 2px 6px;
+    border-radius: $border-radius-sm;
+    pointer-events: none;
+    transition: all 0.2s ease;
+
+    &.is-warning {
+      color: $warning-color;
+      background: rgba($warning-color, 0.1);
+    }
+
+    &.is-error {
+      color: $error-color;
+      background: rgba($error-color, 0.1);
+      font-weight: 500;
+    }
+  }
+
+  :deep(.el-textarea__inner) {
+    padding-bottom: 28px;
+  }
+}
+
+// 响应式适配
+@media (max-width: 768px) {
+  .form-view {
+    padding: $spacing-lg;
+    margin: $spacing-md;
+    max-width: none;
+  }
+
+  .form-header-icon {
+    width: 48px;
+    height: 48px;
+
+    .el-icon {
+      font-size: 24px;
+    }
+  }
+
+  .form-title {
+    font-size: $font-size-xl;
+  }
+
+  .form-card {
+    padding: $spacing-lg;
+  }
+
+  .form-actions {
+    flex-direction: column-reverse;
+
+    .el-button {
+      width: 100%;
+      height: 48px;
+    }
+  }
+}
+</style>

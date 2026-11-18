@@ -1,0 +1,979 @@
+<template>
+  <el-container class="layout-container">
+    <!-- 移动端抽屉导航遮罩：仅窄屏显示，点击关闭 -->
+    <div v-if="mobileNavOpen" class="mobile-nav-mask" @click="mobileNavOpen = false"></div>
+    <el-aside width="220px" class="aside" :class="{ 'aside-open': mobileNavOpen }">
+      <div class="logo">
+        <h2>教师工作台</h2>
+      </div>
+      <el-menu
+        :default-active="activeMenu"
+        class="el-menu-vertical"
+        background-color="#ffffff"
+        text-color="#1d1d1f"
+        active-text-color="#ffffff"
+        router
+        @select="onMenuSelect"
+      >
+        <el-menu-item index="/dashboard">
+          <el-icon><Odometer /></el-icon>
+          <span>数据看板</span>
+        </el-menu-item>
+        
+        <el-sub-menu index="teacher">
+          <template #title>
+            <el-icon><Briefcase /></el-icon>
+            <span>教师工作</span>
+          </template>
+          <el-menu-item index="/teacher/resources">
+            <el-icon><Files /></el-icon>
+            <span>资源管理</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/exams">
+            <el-icon><Document /></el-icon>
+            <span>试卷管理</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/homework">
+            <el-icon><EditPen /></el-icon>
+            <span>作业管理</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/ai-grading">
+            <el-icon><MagicStick /></el-icon>
+            <span>AI 批改</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/recitations">
+            <el-icon><Reading /></el-icon>
+            <span>背书情况</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/schedule">
+            <el-icon><Calendar /></el-icon>
+            <span>我的课程表</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/tasks">
+            <el-icon><List /></el-icon>
+            <span>临时工作区</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="advisor">
+          <template #title>
+            <el-icon><Avatar /></el-icon>
+            <span>班主任工作</span>
+          </template>
+          <el-menu-item index="/advisor/students">
+            <el-icon><User /></el-icon>
+            <span>学生档案</span>
+          </el-menu-item>
+          <el-menu-item index="/advisor/scores">
+            <el-icon><DataLine /></el-icon>
+            <span>成绩分析</span>
+          </el-menu-item>
+          <el-menu-item index="/advisor/points">
+            <el-icon><Trophy /></el-icon>
+            <span>积分管理</span>
+          </el-menu-item>
+          <el-menu-item index="/advisor/leaves">
+            <el-icon><Calendar /></el-icon>
+            <span>请假管理</span>
+          </el-menu-item>
+          <el-menu-item index="/advisor/evaluations">
+            <el-icon><Star /></el-icon>
+            <span>期末评价</span>
+          </el-menu-item>
+          <el-menu-item index="/advisor/communications">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>家校沟通</span>
+          </el-menu-item>
+          <el-menu-item index="/advisor/seats">
+            <el-icon><Grid /></el-icon>
+            <span>座位表</span>
+          </el-menu-item>
+        </el-sub-menu>
+      </el-menu>
+    </el-aside>
+    
+    <el-container>
+      <el-header class="header">
+        <div class="header-left">
+          <!-- 移动端菜单按钮（桌面端隐藏，≤768px 显示），图标已由 main.js 全局注册 -->
+          <button class="menu-btn" type="button" aria-label="打开菜单" @click="mobileNavOpen = !mobileNavOpen">
+            <el-icon :size="20"><Menu /></el-icon>
+          </button>
+          <span class="page-title">{{ pageTitle }}</span>
+          <!-- 班级切换器：单班级时为只读标签，多班级时为下拉切换 -->
+          <el-select
+            v-if="classList.length > 1"
+            v-model="currentClassId"
+            size="small"
+            class="class-switcher"
+            @change="switchClass"
+          >
+            <el-option
+              v-for="c in classList"
+              :key="c.id"
+              :value="c.id"
+              :label="`${c.name}（${c.student_count}人）`"
+            />
+          </el-select>
+          <el-tag v-else-if="currentClassName" type="success" size="small" class="grade-tag">
+            {{ currentClassName }}
+          </el-tag>
+          <el-button size="small" plain class="grade-tag" @click="openClassDialog">
+            <el-icon><Setting /></el-icon>班级
+          </el-button>
+          <el-tag v-if="gradeInfo.level" type="warning" size="small" class="grade-tag">
+            {{ gradeInfo.level }}（{{ gradeInfo.year }}级）
+          </el-tag>
+          <el-button
+            v-if="gradeInfo.level"
+            type="warning"
+            size="small"
+            plain
+            @click="openGradeDialog"
+          >
+            <el-icon><Top /></el-icon>设置年级
+          </el-button>
+          <span class="current-date">
+            <el-icon><Calendar /></el-icon>
+            <span>{{ currentDateText }}</span>
+          </span>
+        </div>
+        <div class="header-right">
+          <el-avatar :size="36" class="header-avatar">{{ accountInitial }}</el-avatar>
+          <div class="account-chip">
+            <strong>{{ accountName }}</strong>
+            <span v-if="accountUser">用户名  {{ accountUser }}</span>
+            <span v-if="accountMail">{{ accountMail }}</span>
+          </div>
+        </div>
+      </el-header>
+      
+      <el-main class="main-content">
+        <router-view v-slot="{ Component }">
+          <transition name="fade" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </router-view>
+      </el-main>
+    </el-container>
+
+    <!-- 个人信息对话框（教师名称 + 头像：卡通选择或上传） -->
+    <el-dialog v-model="showEditDialog" title="个人信息" width="480px">
+      <el-form :model="editForm" label-width="100px">
+        <el-form-item label="教师头像">
+          <div class="avatar-upload">
+            <el-avatar
+              v-if="teacherAvatarPreview.src || teacherAvatarPreview.text"
+              :size="64"
+              :src="teacherAvatarPreview.src || undefined"
+              class="avatar-preview"
+            >{{ teacherAvatarPreview.text }}</el-avatar>
+            <el-upload
+              ref="teacherAvatarUploadRef"
+              :auto-upload="false"
+              :limit="1"
+              accept="image/*"
+              :show-file-list="false"
+              :on-change="onTeacherAvatarChange"
+              :on-remove="onTeacherAvatarRemove"
+            >
+              <el-button type="primary" plain>
+                <el-icon><Upload /></el-icon>上传头像
+              </el-button>
+            </el-upload>
+          </div>
+          <div class="avatar-grid">
+            <div
+              v-for="a in BUILTIN_AVATARS"
+              :key="a.emoji"
+              class="avatar-opt"
+              :class="{ active: editForm.teacherAvatar === 'emoji:' + a.emoji }"
+              @click="pickTeacherEmoji(a)"
+            >
+              <el-avatar :size="40">{{ a.emoji }}</el-avatar>
+              <span class="avatar-opt-name">{{ a.name }}</span>
+            </div>
+          </div>
+          <div class="form-tip" v-if="teacherAvatarFile">已选择上传头像，保存后生效</div>
+        </el-form-item>
+        <el-form-item label="教师名称">
+          <el-input v-model="editForm.teacherName" placeholder="请输入教师名称" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEditDialog = false">取消</el-button>
+        <el-button type="primary" :loading="teacherSaving" @click="saveTeacherInfo">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 修改密码对话框 -->
+    <el-dialog v-model="showPasswordDialog" title="修改密码" width="420px">
+      <el-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-width="100px">
+        <el-form-item label="旧密码" prop="oldPassword">
+          <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="请输入旧密码" />
+        </el-form-item>
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="请输入新密码" />
+        </el-form-item>
+        <el-form-item label="确认密码" prop="confirmPassword">
+          <el-input v-model="passwordForm.confirmPassword" type="password" show-password placeholder="请再次输入新密码" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showPasswordDialog = false">取消</el-button>
+        <el-button type="primary" :loading="passwordLoading" @click="savePassword">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 设置年级对话框 -->
+    <el-dialog v-model="showGradeDialog" title="设置入学年份" width="420px">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="年级将根据入学年份和当前日期自动计算（每年9月升级）"
+      />
+      <el-form label-width="100px">
+        <el-form-item label="当前年级">
+          <el-tag type="warning">{{ gradeInfo.level }}</el-tag>
+        </el-form-item>
+        <el-form-item label="入学年份">
+          <el-input-number v-model="gradeYearInput" :min="2000" :max="2100" :step="1" style="width: 100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showGradeDialog = false">取消</el-button>
+        <el-button type="primary" :loading="gradeSaving" @click="saveGradeYear">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 班级管理对话框（新建 / 重命名 / 删除） -->
+    <el-dialog v-model="showClassDialog" title="班级管理" width="560px">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="每个班级拥有独立的学生、成绩、考勤等全部数据，互不影响"
+      />
+      <el-table :data="classList" size="small" border>
+        <el-table-column label="班级名称" min-width="140">
+          <template #default="{ row }">
+            <el-tag v-if="row.is_default" type="info" size="small" style="margin-right: 6px">默认</el-tag>
+            <span v-if="renamingId !== row.id">{{ row.name }}</span>
+            <el-input
+              v-else
+              v-model="renamingName"
+              size="small"
+              style="width: 120px"
+              @keyup.enter="saveRename(row)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="student_count" label="学生数" width="80" align="center" />
+        <el-table-column label="操作" width="170" align="center">
+          <template #default="{ row }">
+            <el-button
+              v-if="renamingId !== row.id"
+              size="small"
+              text
+              type="primary"
+              @click="startRename(row)"
+            >重命名</el-button>
+            <el-button
+              v-else
+              size="small"
+              text
+              type="success"
+              @click="saveRename(row)"
+            >保存</el-button>
+            <el-button
+              v-if="!row.is_default"
+              size="small"
+              text
+              type="danger"
+              @click="removeClass(row)"
+            >删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- 新建班级 -->
+      <div style="display: flex; gap: 8px; margin-top: 16px">
+        <el-input
+          v-model="newClassName"
+          placeholder="输入新班级名称，如：一(2)班"
+          size="small"
+          @keyup.enter="addClass"
+        />
+        <el-button type="primary" size="small" :loading="classCreating" @click="addClass">新建班级</el-button>
+      </div>
+    </el-dialog>
+  </el-container>
+</template>
+
+<script setup>
+import { ref, computed, reactive, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Key, SwitchButton, Upload, Setting } from '@element-plus/icons-vue'
+import { getSettings, updateSetting, getGradeInfo, updateGradeYear, changePassword, uploadTeacherAvatar, getClasses, createClass, renameClass, deleteClass } from '../api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+
+const route = useRoute()
+const router = useRouter()
+const activeMenu = computed(() => route.path)
+const pageTitle = computed(() => route.meta.title || '工作台')
+
+// ================= 移动端抽屉导航 =================
+// 汉堡按钮仅窄屏显示（见样式），桌面端该状态恒为 false、布局不受影响
+const mobileNavOpen = ref(false)
+// el-menu 的 @select 仅在叶子菜单项激活时触发（点击子菜单标题展开时不触发），适合作为抽屉收起点
+const onMenuSelect = () => {
+  mobileNavOpen.value = false
+}
+
+// ================= 班级管理（多班级支持） =================
+const classList = ref([])
+const currentClassId = ref(null)
+const currentClassName = computed(() => {
+  const c = classList.value.find((c) => c.id === currentClassId.value)
+  return c ? c.name : ''
+})
+const showClassDialog = ref(false)
+const newClassName = ref('')
+const classCreating = ref(false)
+const renamingId = ref(null)
+const renamingName = ref('')
+
+// 加载班级列表并恢复当前班级（localStorage 记忆 + 后端校验回退）
+const loadClasses = async () => {
+  try {
+    const res = await getClasses()
+    classList.value = res || []
+    const saved = parseInt(localStorage.getItem('currentClassId'), 10)
+    const exists = classList.value.some((c) => c.id === saved)
+    const target = exists
+      ? saved
+      : (classList.value.find((c) => c.is_default) || classList.value[0] || {}).id
+    currentClassId.value = target ?? null
+    localStorage.setItem('currentClassId', String(target ?? ''))
+  } catch (err) {
+    console.error('加载班级列表失败:', err)
+  }
+}
+
+// 切换班级：更新记忆后整页刷新，保证所有页面数据随班级切换
+const switchClass = (id) => {
+  localStorage.setItem('currentClassId', String(id))
+  window.location.reload()
+}
+
+// 打开班级管理对话框
+const openClassDialog = () => {
+  newClassName.value = ''
+  renamingId.value = null
+  showClassDialog.value = true
+  loadClasses()
+}
+
+// 新建班级
+const addClass = async () => {
+  const name = newClassName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入班级名称')
+    return
+  }
+  classCreating.value = true
+  try {
+    await createClass({ name })
+    ElMessage.success('班级创建成功')
+    newClassName.value = ''
+    await loadClasses()
+  } catch (err) {
+    // 错误信息已由 request 拦截器提示
+  } finally {
+    classCreating.value = false
+  }
+}
+
+// 开始重命名
+const startRename = (row) => {
+  renamingId.value = row.id
+  renamingName.value = row.name
+}
+
+// 保存重命名
+const saveRename = async (row) => {
+  const name = renamingName.value.trim()
+  if (!name) {
+    ElMessage.warning('班级名称不能为空')
+    return
+  }
+  try {
+    await renameClass(row.id, { name })
+    ElMessage.success('重命名成功')
+    renamingId.value = null
+    await loadClasses()
+  } catch (err) {
+    // 错误信息已由 request 拦截器提示
+  }
+}
+
+// 删除班级：输入班级名二次确认（防误删一学期数据）
+const removeClass = (row) => {
+  ElMessageBox.prompt(
+    `删除后「${row.name}」的全部学生、成绩等数据将无法恢复！请输入班级名称「${row.name}」确认删除：`,
+    '危险操作',
+    {
+      type: 'warning',
+      confirmButtonText: '确认删除',
+      confirmButtonClass: 'el-button--danger',
+      cancelButtonText: '取消',
+      inputPattern: new RegExp(`^${row.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
+      inputErrorMessage: '输入的名称与班级名称不一致'
+    }
+  )
+    .then(async ({ value }) => {
+      try {
+        await deleteClass(row.id, { confirm_name: value })
+        ElMessage.success('班级已删除')
+        // 删除的是当前班级时，切回默认班级
+        if (currentClassId.value === row.id) {
+          localStorage.removeItem('currentClassId')
+          window.location.reload()
+          return
+        }
+        await loadClasses()
+      } catch (err) {
+        // 错误信息已由 request 拦截器提示
+      }
+    })
+    .catch(() => {
+      // 用户取消
+    })
+}
+
+// 教师信息
+const teacherName = ref('陈老师')
+const account = ref({ name: '', username: '', email: '' })
+function loadAccount() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('yunzhao-account') || '{}')
+    account.value = saved && typeof saved === 'object' ? saved : {}
+  } catch {
+    account.value = {}
+  }
+}
+const accountName = computed(() => account.value.name || account.value.username || '未登录')
+const accountUser = computed(() => account.value.username || '')
+const accountMail = computed(() => account.value.email || '')
+const accountInitial = computed(() => (accountName.value || 'Y').slice(0, 1))
+const teacherAvatar = ref('')
+const showEditDialog = ref(false)
+const teacherSaving = ref(false)
+const editForm = ref({ teacherName: '', teacherAvatar: '' })
+
+// 内置卡通头像：选择后存储为 emoji:xxx，上传头像存储为文件名
+const BUILTIN_AVATARS = [
+  { name: '小猫咪', emoji: '🐱' },
+  { name: '小狗狗', emoji: '🐶' },
+  { name: '大熊猫', emoji: '🐼' },
+  { name: '小兔子', emoji: '🐰' },
+  { name: '棕小熊', emoji: '🐻' },
+  { name: '小狐狸', emoji: '🦊' },
+  { name: '小老虎', emoji: '🐯' },
+  { name: '小狮子', emoji: '🦁' },
+  { name: '小青蛙', emoji: '🐸' },
+  { name: '小企鹅', emoji: '🐧' },
+  { name: '独角兽', emoji: '🦄' },
+  { name: '小考拉', emoji: '🐨' }
+]
+
+const isEmojiAvatar = (v) => v && v.startsWith('emoji:')
+// 顶部栏头像：上传的图片地址（卡通头像返回空，走文字渲染）
+const teacherAvatarSrc = computed(() =>
+  teacherAvatar.value && !isEmojiAvatar(teacherAvatar.value) ? `/uploads/${teacherAvatar.value}` : ''
+)
+// 顶部栏头像：卡通 emoji 字符（上传头像返回空）
+const teacherAvatarEmoji = computed(() => (isEmojiAvatar(teacherAvatar.value) ? teacherAvatar.value.slice(6) : ''))
+
+// 个人信息弹窗：头像预览与上传状态
+const teacherAvatarUploadRef = ref()
+const teacherAvatarFile = ref(null)
+const teacherAvatarPreviewUrl = ref('')
+const teacherAvatarPreview = computed(() => {
+  if (teacherAvatarPreviewUrl.value) return { src: teacherAvatarPreviewUrl.value, text: '' }
+  const a = editForm.value.teacherAvatar
+  if (isEmojiAvatar(a)) return { src: '', text: a.slice(6) }
+  return { src: a ? `/uploads/${a}` : '', text: editForm.value.teacherName ? editForm.value.teacherName.slice(0, 1) : '' }
+})
+const onTeacherAvatarChange = (file) => {
+  teacherAvatarFile.value = file.raw
+  teacherAvatarPreviewUrl.value = URL.createObjectURL(file.raw)
+}
+const onTeacherAvatarRemove = () => {
+  teacherAvatarFile.value = null
+  teacherAvatarPreviewUrl.value = ''
+}
+// 选择卡通头像
+const pickTeacherEmoji = (a) => {
+  editForm.value.teacherAvatar = 'emoji:' + a.emoji
+  teacherAvatarFile.value = null
+  teacherAvatarPreviewUrl.value = ''
+  if (teacherAvatarUploadRef.value) teacherAvatarUploadRef.value.clearFiles()
+}
+
+// 当前日期与星期（每分钟自动刷新，跨天时保持准确）
+const currentDateText = ref('')
+const updateCurrentDate = () => {
+  const now = new Date()
+  const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+  currentDateText.value = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${weekdays[now.getDay()]}`
+}
+
+// 年级信息（通过动态计算接口获取）
+const gradeInfo = ref({ level: '', year: '' })
+const showGradeDialog = ref(false)
+const gradeYearInput = ref(2025)
+const gradeSaving = ref(false)
+
+// 加载教师信息
+// 注意：request.js 拦截器在 code===200 时已返回 res.data，所以 res 就是 settings 对象
+const loadTeacherInfo = async () => {
+  try {
+    const res = await getSettings()
+    if (res && res.teacher_name) {
+      teacherName.value = res.teacher_name
+    }
+    if (res && res.teacher_avatar) {
+      teacherAvatar.value = res.teacher_avatar
+    }
+  } catch (err) {
+    console.error('加载教师信息失败:', err)
+  }
+  // 通过动态计算接口获取年级信息（根据入学年份和当前日期自动计算）
+  try {
+    const gradeRes = await getGradeInfo()
+    if (gradeRes) {
+      gradeInfo.value.level = gradeRes.grade_level || ''
+      gradeInfo.value.year = gradeRes.grade_year || ''
+    }
+  } catch (err) {
+    console.error('加载年级信息失败:', err)
+  }
+}
+
+// 打开设置年级对话框
+const openGradeDialog = () => {
+  gradeYearInput.value = parseInt(gradeInfo.value.year, 10) || 2025
+  showGradeDialog.value = true
+}
+
+// 保存入学年份
+const saveGradeYear = async () => {
+  gradeSaving.value = true
+  try {
+    await updateGradeYear(gradeYearInput.value)
+    // 重新获取动态计算的年级信息
+    const gradeRes = await getGradeInfo()
+    if (gradeRes) {
+      gradeInfo.value.level = gradeRes.grade_level || ''
+      gradeInfo.value.year = gradeRes.grade_year || ''
+    }
+    ElMessage.success('年级设置成功')
+    showGradeDialog.value = false
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    gradeSaving.value = false
+  }
+}
+
+// 保存教师信息（名称 + 头像：选中的卡通或新上传的文件）
+const saveTeacherInfo = async () => {
+  if (!editForm.value.teacherName.trim()) {
+    ElMessage.warning('教师名称不能为空')
+    return
+  }
+  teacherSaving.value = true
+  try {
+    await updateSetting('teacher_name', editForm.value.teacherName.trim())
+    teacherName.value = editForm.value.teacherName.trim()
+    let avatarVal = editForm.value.teacherAvatar || ''
+    if (teacherAvatarFile.value) {
+      const fd = new FormData()
+      fd.append('avatar', teacherAvatarFile.value)
+      const res = await uploadTeacherAvatar(fd)
+      avatarVal = res.avatar
+    }
+    await updateSetting('teacher_avatar', avatarVal)
+    teacherAvatar.value = avatarVal
+    ElMessage.success('保存成功')
+    showEditDialog.value = false
+  } catch (err) {
+    ElMessage.error('保存失败')
+  } finally {
+    teacherSaving.value = false
+  }
+}
+
+// 打开个人信息对话框
+const openEditDialog = () => {
+  editForm.value.teacherName = teacherName.value
+  editForm.value.teacherAvatar = teacherAvatar.value
+  teacherAvatarFile.value = null
+  teacherAvatarPreviewUrl.value = ''
+  if (teacherAvatarUploadRef.value) teacherAvatarUploadRef.value.clearFiles()
+  showEditDialog.value = true
+}
+
+// ================= 修改密码 =================
+const showPasswordDialog = ref(false)
+const passwordLoading = ref(false)
+const passwordFormRef = ref(null)
+const passwordForm = reactive({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
+
+// 确认密码校验：必须与新密码一致
+const validateConfirmPassword = (rule, value, callback) => {
+  if (value !== passwordForm.newPassword) {
+    callback(new Error('两次输入的密码不一致'))
+  } else {
+    callback()
+  }
+}
+
+const passwordRules = {
+  oldPassword: [{ required: true, message: '请输入旧密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, message: '密码长度不能少于 6 位', trigger: 'blur' }
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    { validator: validateConfirmPassword, trigger: 'blur' }
+  ]
+}
+
+// 打开修改密码对话框
+const openPasswordDialog = () => {
+  passwordForm.oldPassword = ''
+  passwordForm.newPassword = ''
+  passwordForm.confirmPassword = ''
+  showPasswordDialog.value = true
+}
+
+// 保存新密码
+const savePassword = async () => {
+  if (!passwordFormRef.value) return
+  try {
+    await passwordFormRef.value.validate()
+  } catch {
+    return
+  }
+  passwordLoading.value = true
+  try {
+    await changePassword({
+      oldPassword: passwordForm.oldPassword,
+      newPassword: passwordForm.newPassword
+    })
+    ElMessage.success('密码修改成功')
+    showPasswordDialog.value = false
+  } catch (err) {
+    // 错误信息已由 request 拦截器提示
+  } finally {
+    passwordLoading.value = false
+  }
+}
+
+// ================= 退出登录 =================
+const handleLogout = () => {
+  ElMessageBox.confirm('确认退出登录吗？', '提示', {
+    type: 'warning',
+    confirmButtonText: '退出',
+    cancelButtonText: '取消'
+  })
+    .then(() => {
+      localStorage.removeItem('token')
+      localStorage.removeItem('username')
+      router.push('/login')
+    })
+    .catch(() => {
+      // 用户取消
+    })
+}
+
+onMounted(() => {
+  loadAccount()
+  loadClasses()
+  loadTeacherInfo()
+  updateCurrentDate()
+  setInterval(updateCurrentDate, 60000)
+})
+</script>
+
+<style scoped>
+.layout-container {
+  height: 100vh;
+}
+
+.aside {
+  background-color: #ffffff;
+  box-shadow: 2px 0 8px 0 rgba(29,35,41,.05);
+  z-index: 10;
+}
+
+.logo {
+  height: 56px;
+  line-height: 56px;
+  text-align: center;
+  color: #1d1d1f;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.logo h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.el-menu-vertical {
+  border-right: none;
+  padding: 8px;
+  background: transparent;
+}
+
+.el-menu-item,
+.el-sub-menu__title {
+  height: 38px;
+  line-height: 38px;
+  border-radius: 19px;
+  margin: 2px 0;
+}
+
+.el-menu-item.is-active {
+  background-color: #0a84ff !important;
+  color: #ffffff !important;
+  border-right: none;
+}
+
+.header {
+  background-color: #f5f5f7;
+  box-shadow: none;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 9;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 班级切换器：与年级标签同一视觉层级 */
+.class-switcher {
+  width: 160px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-chip {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.account-chip strong {
+  font-size: 16px;
+  font-weight: 650;
+  color: #1d1d1f;
+}
+
+.account-chip span {
+  font-size: 12px;
+  color: #6e6e73;
+}
+
+.header-avatar {
+  cursor: pointer;
+}
+
+/* 个人信息弹窗：头像上传与卡通选择 */
+.avatar-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.avatar-preview {
+  flex-shrink: 0;
+}
+.avatar-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.avatar-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.avatar-opt:hover {
+  background: #f5f7fa;
+}
+.avatar-opt.active {
+  border-color: #0a84ff;
+  background: #f0f7ff;
+}
+.avatar-opt-name {
+  font-size: 11px;
+  color: #606266;
+  white-space: nowrap;
+}
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+.username {
+  font-size: 14px;
+  color: #606266;
+}
+
+.current-date {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #606266;
+  background: #f5f7fa;
+  border-radius: 4px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.main-content {
+  background-color: #f5f5f7;
+  padding: 24px;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* ===================== 移动端适配（≤768px）===================== */
+/* 汉堡按钮与遮罩：桌面端隐藏，不参与桌面布局 */
+.menu-btn {
+  display: none;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  cursor: pointer;
+  color: #303133;
+  line-height: 1;
+}
+
+.mobile-nav-mask {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .menu-btn {
+    display: inline-flex;
+  }
+
+  /* 侧边栏变为滑出式抽屉：默认移出屏幕左侧，打开时滑入（宽度沿用 el-aside 内联 220px） */
+  .aside {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .aside-open {
+    transform: translateX(0);
+    box-shadow: 2px 0 16px rgba(29, 35, 41, 0.16);
+  }
+
+  /* 遮罩铺满全屏，点击关闭抽屉 */
+  .mobile-nav-mask {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 999;
+  }
+
+  /* 顶栏：允许换行以防内容溢出；隐藏非关键的日期信息 */
+  .header {
+    height: auto;
+    min-height: 60px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .header-left {
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .page-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 60vw;
+  }
+
+  .current-date {
+    display: none;
+  }
+
+  .class-switcher {
+    width: 132px;
+  }
+
+  /* 内容区留白收紧 */
+  .main-content {
+    padding: 12px;
+  }
+}
+</style>

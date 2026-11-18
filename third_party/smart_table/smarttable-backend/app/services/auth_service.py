@@ -1,0 +1,636 @@
+"""
+认证服务模块
+处理用户认证相关的业务逻辑，包括注册、登录、令牌管理、密码修改等功能
+"""
+import uuid
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Tuple, Dict, Any
+from uuid import UUID
+
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    get_jwt_identity
+)
+from flask import current_app
+
+from app.extensions import db, cache
+from app.models.user import User, TokenBlocklist, UserStatus
+from app.models.operation_history import OperationHistory
+
+from app.services.email_config_service import EmailConfigService
+from app.services.email_sender_service import EmailSenderService
+from app.services.email_template_service import EmailTemplateService
+from app.services.notification_service import NotificationService
+from app.services.security_config_service import SecurityConfigService
+from app.i18n import translate, get_current_language
+
+logger = logging.getLogger(__name__)
+
+# 默认管理员凭据（与 run.py 的 ensure_default_admin_exists 共用，保持单一来源）
+# 启动时若无管理员账号会以此凭据自动创建；登录流程据此检测密码是否已修改
+DEFAULT_ADMIN_EMAIL = 'ldengbin@126.com'
+DEFAULT_ADMIN_PASSWORD = 'LDengBin@126.com'
+
+
+class AuthService:
+    """
+    认证服务类
+    提供用户认证相关的所有业务逻辑
+    """
+    
+    # 访问令牌过期时间（秒）- 默认值
+    DEFAULT_ACCESS_TOKEN_EXPIRES = 86400  # 24 小时
+    # 刷新令牌过期时间（秒）- 默认值
+    DEFAULT_REFRESH_TOKEN_EXPIRES = 2592000  # 30 天
+    
+    @staticmethod
+    def get_access_token_expires() -> int:
+        """
+        获取访问令牌过期时间（秒），从配置中读取
+        
+        Returns:
+            访问令牌过期秒数
+        """
+        try:
+            # 会话超时配置是分钟，转换为秒
+            session_timeout_minutes = SecurityConfigService.get_session_timeout_minutes()
+            return session_timeout_minutes * 60
+        except Exception as e:
+            logger.error(f"获取会话超时配置失败: {str(e)}, 使用默认值")
+            return AuthService.DEFAULT_ACCESS_TOKEN_EXPIRES
+    
+    @staticmethod
+    def register_user(email: str, password: str, name: str, username: Optional[str] = None) -> Tuple[Optional[User], Optional[str]]:
+        """
+        用户注册
+        
+        Args:
+            email: 邮箱地址
+            password: 明文密码
+            name: 用户姓名（显示名）
+            username: 用户名（用于登录，不传则使用 name）
+            
+        Returns:
+            (用户对象, 错误信息) - 成功时错误信息为 None
+        """
+        # 检查邮箱是否已存在
+        existing_user = User.query.filter_by(email=email.lower()).first()
+        if existing_user:
+            return None, 'email_already_registered'
+
+        # 确定 username 并做唯一性校验
+        final_username = (username or name or '').strip().lower() or None
+        if final_username:
+            if User.check_username_exists(final_username):
+                return None, 'username_already_exists'
+        
+        # 验证密码强度
+        valid, error_msg = SecurityConfigService.validate_password_strength(password)
+        if not valid:
+            return None, error_msg
+        
+        try:
+            # 创建新用户
+            user = User(
+                email=email.lower(),
+                password=password,
+                name=name.strip(),
+                username=final_username
+            )
+            
+            db.session.add(user)
+            db.session.commit()
+            
+            # 生成验证令牌（写入用户记录，供 /verify-email 路由校验）
+            user.generate_verification_token()
+            
+            # 发送验证通知（站内信先于邮件，邮件不可用时站内信仍独立工作）
+            # 标题与内容按注册请求的语言翻译，实现站内信与邮件的国际化
+            try:
+                message_data = AuthService._build_registration_message(user)
+                NotificationService.send_notification(
+                    recipient_email=user.email,
+                    recipient_user_id=user.id,
+                    template_key='user_registration',
+                    source='auth',
+                    **message_data
+                )
+            except Exception as e:
+                # 通知发送失败不影响注册流程，记录错误即可
+                current_app.logger.error(f'发送验证邮件失败: {str(e)}')
+            
+            return user, None
+
+        except Exception as e:
+            db.session.rollback()
+            return None, 'registration_failed_try_again_later'
+
+    @staticmethod
+    def _build_registration_message(user: User) -> Dict[str, Any]:
+        """
+        构建注册欢迎通知/邮件内容（按当前请求语言翻译）。
+
+        Returns:
+            可直接展开传给 send_notification 的参数字典：
+            - title: 标题（邮件主题）
+            - content: HTML 内容
+            - content_text: 纯文本内容
+            - template_data: 模板变量
+        """
+        lang = get_current_language()
+        login_url = EmailConfigService.get_frontend_url()
+        registration_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+        welcome_title = translate('notification_register_title', lang=lang)
+        welcome_content_text = translate(
+            'notification_register_content',
+            lang=lang,
+            user_name=user.name,
+            user_email=user.email,
+            registration_time=registration_time,
+        )
+        login_btn = translate('notification_register_login_btn', lang=lang)
+        auto_notice = translate('notification_register_auto_notice', lang=lang)
+        welcome_content_html = (
+            '<div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; '
+            'max-width: 600px; margin: 0 auto; padding: 20px;">'
+            f'<div style="background: #6366F1; color: white; padding: 20px; text-align: center; border-radius: 4px;">'
+            f'<h1 style="margin: 0;">{welcome_title}</h1></div>'
+            f'<div style="background: #f9f9f9; padding: 20px; margin: 20px 0; border-radius: 4px;">'
+            f'<p>{welcome_content_text}</p>'
+            f'<p style="text-align: center; margin: 30px 0;">'
+            f'<a href="{login_url}" style="display: inline-block; background: #6366F1; color: white; '
+            f'padding: 12px 24px; text-decoration: none; border-radius: 4px;">{login_btn}</a></p></div>'
+            f'<div style="text-align: center; color: #666; font-size: 12px;">'
+            f'<p>{auto_notice}</p>'
+            f'<p>&copy; {datetime.now().year} SmartTable. All rights reserved.</p></div></div>'
+        )
+
+        return {
+            'title': welcome_title,
+            'content': welcome_content_html,
+            'content_text': welcome_content_text,
+            'template_data': {
+                'user_name': user.name,
+                'user_email': user.email,
+                'registration_time': registration_time,
+                'login_url': login_url,
+            },
+        }
+    
+    @staticmethod
+    def authenticate_user(identifier: str, password: str) -> Tuple[Optional[User], Optional[str]]:
+        """
+        验证用户凭据（支持邮箱或用户名 + 密码）
+        
+        Args:
+            identifier: 邮箱地址或用户名
+            password: 密码
+            
+        Returns:
+            (用户对象, 错误信息) - 成功时错误信息为 None
+        """
+        if not identifier or not password:
+            return None, 'invalid_identifier_password'
+
+        # 判断是邮箱还是用户名（包含 @ 且经过邮箱格式检查的优先查 email）
+        identifier = identifier.strip()
+        if '@' in identifier:
+            user = User.query.filter_by(email=identifier.lower()).first()
+        else:
+            user = User.get_user_by_username(identifier)
+        
+        if not user:
+            return None, 'invalid_identifier_password'
+        
+        if not user.check_password(password):
+            return None, 'invalid_identifier_password'
+        
+        if not user.is_active():
+            return None, 'account_disabled_contact_administrator'
+        
+        return user, None
+
+    @staticmethod
+    def has_unchanged_default_admin_password() -> bool:
+        """
+        检查默认管理员账号是否存在且仍使用默认密码
+
+        用于登录流程的安全提示：默认管理员由启动脚本自动创建，
+        若一直未修改密码则属于公开已知凭据，需提醒用户尽快修改。
+
+        Returns:
+            True 表示默认管理员账号存在且密码未修改
+        """
+        try:
+            default_admin = User.query.filter_by(email=DEFAULT_ADMIN_EMAIL).first()
+            if not default_admin:
+                return False
+            return default_admin.check_password(DEFAULT_ADMIN_PASSWORD)
+        except Exception as e:
+            logger.error(f"检查默认管理员密码是否修改失败: {e}")
+            return False
+
+    @staticmethod
+    def generate_tokens(user_id: str) -> Dict[str, Any]:
+        """
+        生成访问令牌和刷新令牌
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            包含令牌信息的字典
+        """
+        # 获取当前令牌版本号
+        cache_key = f"user_token_version:{user_id}"
+        token_version = cache.get(cache_key) or 0
+        
+        # 获取可配置的过期时间
+        access_token_expires = AuthService.get_access_token_expires()
+        
+        # 创建访问令牌（短期有效），包含版本号
+        access_token = create_access_token(
+            identity=user_id,
+            expires_delta=timedelta(seconds=access_token_expires),
+            additional_claims={'token_version': token_version}
+        )
+        
+        # 创建刷新令牌（长期有效），包含版本号
+        refresh_token = create_refresh_token(
+            identity=user_id,
+            expires_delta=timedelta(seconds=AuthService.DEFAULT_REFRESH_TOKEN_EXPIRES),
+            additional_claims={'token_version': token_version}
+        )
+        
+        return {
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'token_type': 'Bearer',
+            'expires_in': access_token_expires
+        }
+    
+    @staticmethod
+    def refresh_access_token(user_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        刷新访问令牌
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            (新的访问令牌, 错误信息) - 成功时错误信息为 None
+        """
+        # 验证用户是否存在且状态正常
+        user = User.query.get(user_id)
+        
+        if not user:
+            return None, 'user_does_not_exist'
+        
+        if not user.is_active():
+            return None, 'user_account_disabled'
+        
+        # 获取可配置的过期时间
+        access_token_expires = AuthService.get_access_token_expires()
+        
+        # 获取用户当前的token版本号
+        from app.extensions import cache
+        cache_key = f"user_token_version:{user_id}"
+        token_version = cache.get(cache_key) or 0
+        
+        # 生成新的访问令牌，包含正确的token_version
+        access_token = create_access_token(
+            identity=user_id,
+            expires_delta=timedelta(seconds=access_token_expires),
+            additional_claims={'token_version': token_version}
+        )
+        
+        return access_token, None
+    
+    @staticmethod
+    def revoke_token(jti: str, user_id: str, token_type: str = 'access', 
+                     expires_at: Optional[datetime] = None) -> bool:
+        """
+        撤销令牌（加入黑名单）
+        
+        Args:
+            jti: 令牌唯一标识
+            user_id: 用户 ID
+            token_type: 令牌类型（access 或 refresh）
+            expires_at: 令牌过期时间
+            
+        Returns:
+            是否成功撤销
+        """
+        try:
+            # 如果没有提供过期时间，使用默认时间
+            if expires_at is None:
+                expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+            
+            # 创建黑名单记录
+            token_block = TokenBlocklist(
+                jti=jti,
+                token_type=token_type,
+                user_id=user_id,
+                expires_at=expires_at
+            )
+            
+            db.session.add(token_block)
+            db.session.commit()
+            
+            # 同时缓存到 Redis 以提高检查效率
+            cache_key = f"token_blacklist:{jti}"
+            cache.set(cache_key, True, timeout=int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+            
+            return True
+            
+        except Exception as e:
+            db.session.rollback()
+            return False
+    
+    @staticmethod
+    def revoke_all_user_tokens(user_id: str) -> bool:
+        """
+        撤销用户的所有令牌（用于密码修改等安全场景）
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            是否成功
+        """
+        try:
+            # 这里可以记录一个用户级别的令牌版本号
+            # 所有令牌验证时都需要检查版本号
+            cache_key = f"user_token_version:{user_id}"
+            current_version = cache.get(cache_key) or 0
+            cache.set(cache_key, current_version + 1, timeout=2592000)  # 30 天
+            
+            return True
+            
+        except Exception as e:
+            return False
+    
+    @staticmethod
+    def is_token_revoked(jti: str) -> bool:
+        """
+        检查令牌是否已被撤销
+        
+        Args:
+            jti: 令牌唯一标识
+            
+        Returns:
+            是否已被撤销
+        """
+        # 先检查缓存
+        cache_key = f"token_blacklist:{jti}"
+        if cache.get(cache_key):
+            return True
+        
+        # 再检查数据库
+        token = TokenBlocklist.query.filter_by(jti=jti).first()
+        return token is not None
+    
+    @staticmethod
+    def change_password(user_id: str, old_password: str, new_password: str, ip_address: str = None, user_agent: str = None) -> Tuple[bool, Optional[str]]:
+        """
+        修改用户密码
+
+        Args:
+            user_id: 用户 ID
+            old_password: 旧密码
+            new_password: 新密码
+            ip_address: 客户端IP地址（用于日志记录）
+            user_agent: 客户端User-Agent（用于日志记录）
+
+        Returns:
+            (是否成功, 错误信息)
+        """
+        user = User.query.get(user_id)
+
+        if not user:
+            # 记录操作日志 - 用户不存在
+            OperationHistory.log(
+                user_id=user_id,
+                resource_type='user',
+                resource_id=user_id,
+                operation_type='password_change_failed',
+                detail={'reason': 'user_not_found', 'ip': ip_address},
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+            db.session.commit()
+            return False, 'user_does_not_exist'
+
+        # 验证旧密码
+        if not user.check_password(old_password):
+            # 记录操作日志 - 旧密码错误
+            OperationHistory.log(
+                user_id=user.id,
+                resource_type='user',
+                resource_id=str(user.id),
+                operation_type='password_change_failed',
+                detail={'reason': 'invalid_old_password', 'email': user.email, 'ip': ip_address},
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+            db.session.commit()
+            return False, 'old_password_incorrect'
+        
+        # 验证新密码强度
+        valid, error_msg = SecurityConfigService.validate_password_strength(new_password)
+        if not valid:
+            return False, error_msg
+
+        try:
+            # 设置新密码
+            user.set_password(new_password)
+
+            # 撤销用户的所有令牌，强制重新登录
+            AuthService.revoke_all_user_tokens(user_id)
+
+            # 记录操作日志 - 密码修改成功
+            OperationHistory.log(
+                user_id=user.id,
+                resource_type='user',
+                resource_id=str(user.id),
+                operation_type='password_changed',
+                detail={'email': user.email, 'ip': ip_address},
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+
+            db.session.commit()
+
+            # 发送密码修改通知（站内信先于邮件，邮件不可用时站内信仍独立工作）
+            try:
+                NotificationService.send_notification(
+                    recipient_email=user.email,
+                    recipient_user_id=user.id,
+                    template_key='password_changed',
+                    template_data={
+                        'user_name': user.name,
+                        'operation_time': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    },
+                    source='auth'
+                )
+            except Exception as e:
+                logger.error(f'发送密码修改通知邮件失败: {str(e)}')
+
+            return True, None
+
+        except Exception as e:
+            db.session.rollback()
+
+            # 记录操作日志 - 系统错误
+            OperationHistory.log(
+                user_id=user.id,
+                resource_type='user',
+                resource_id=str(user.id),
+                operation_type='password_change_error',
+                detail={'error': str(e), 'email': user.email, 'ip': ip_address},
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+            db.session.commit()
+
+            return False, 'failed_change_password_try_again_later'
+    
+    @staticmethod
+    def get_current_user(user_id: str) -> Optional[User]:
+        """
+        获取当前用户信息
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            用户对象，如果不存在则返回 None
+        """
+        try:
+            # 将字符串ID转换为UUID对象
+            uuid_id = UUID(user_id) if isinstance(user_id, str) else user_id
+            return User.query.get(uuid_id)
+        except Exception:
+            return None
+    
+    @staticmethod
+    def update_last_login(user_id: str) -> bool:
+        """
+        更新用户最后登录时间
+
+        Args:
+            user_id: 用户 ID
+
+        Returns:
+            是否成功
+        """
+        try:
+            # 将字符串ID转换为UUID对象
+            uuid_id = UUID(user_id) if isinstance(user_id, str) else user_id
+
+            # 使用 filter_by 而不是 get，避免 SQLAlchemy 2.0 的兼容性问题
+            user = User.query.filter_by(id=uuid_id).first()
+
+            if not user:
+                return False
+
+            # 直接更新字段并提交，避免嵌套事务问题
+            user.last_login_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return True
+        except Exception as e:
+            db.session.rollback()
+            return False
+    
+    @staticmethod
+    def check_email_exists(email: str) -> bool:
+        """
+        检查邮箱是否已存在
+        
+        Args:
+            email: 邮箱地址
+            
+        Returns:
+            是否存在
+        """
+        return User.query.filter_by(email=email.lower()).first() is not None
+    
+    @staticmethod
+    def get_user_by_email(email: str) -> Optional[User]:
+        """
+        通过邮箱获取用户
+        
+        Args:
+            email: 邮箱地址
+            
+        Returns:
+            用户对象，如果不存在则返回 None
+        """
+        return User.query.filter_by(email=email.lower()).first()
+    
+    @staticmethod
+    def logout_user(jti: str, user_id: str, token_type: str = 'access') -> Tuple[bool, Optional[str]]:
+        """
+        用户登出，撤销当前令牌
+        
+        Args:
+            jti: 令牌唯一标识
+            user_id: 用户 ID
+            token_type: 令牌类型
+            
+        Returns:
+            (是否成功, 错误信息)
+        """
+        success = AuthService.revoke_token(jti, user_id, token_type)
+        
+        if not success:
+            return False, 'logout_failed_try_again_later'
+        
+        return True, None
+    
+    @staticmethod
+    def cleanup_expired_tokens() -> int:
+        """
+        清理过期的黑名单令牌记录
+        
+        Returns:
+            清理的记录数
+        """
+        try:
+            expired_tokens = TokenBlocklist.query.filter(
+                TokenBlocklist.expires_at < datetime.now(timezone.utc)
+            ).all()
+            
+            count = len(expired_tokens)
+            
+            for token in expired_tokens:
+                db.session.delete(token)
+            
+            db.session.commit()
+            
+            return count
+            
+        except Exception as e:
+            db.session.rollback()
+            return 0
+    
+    @staticmethod
+    def validate_token_version(user_id: str, token_version: int) -> bool:
+        """
+        验证令牌版本（用于检查令牌是否因密码修改等原因失效）
+        
+        Args:
+            user_id: 用户 ID
+            token_version: 令牌中的版本号
+            
+        Returns:
+            是否有效
+        """
+        cache_key = f"user_token_version:{user_id}"
+        current_version = cache.get(cache_key) or 0
+        
+        return token_version >= current_version

@@ -1,0 +1,1085 @@
+<script setup>
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import AppIcon from '../ui/AppIcon.vue'
+import NumberStepper from '../ui/NumberStepper.vue'
+import HistoricalNoteMoveControl from './HistoricalNoteMoveControl.vue'
+import { enterPopover, leavePopover } from '../../utils/popoverMotion.js'
+import { popoverStyle, measurePopoverContent } from '../../utils/anchoredPopover.js'
+import { usePopoverLifecycle } from '../../composables/usePopoverLifecycle.js'
+import { useDateContextSettings } from '../../composables/useDateContextSettings.js'
+import { isComposingInput } from '../../utils/inputComposition.js'
+import {
+  MAX_CALENDAR_YEAR,
+  MIN_CALENDAR_YEAR,
+  addCalendarDays,
+  buildMonthGrid,
+  buildWeekGrid,
+  dateKeyFromParts,
+  parseDateKey
+} from '../../../../shared/calendar/calendar-date-rules.js'
+
+const props = defineProps({
+  viewMode: { type: String, default: 'month' },
+  year: { type: Number, required: true },
+  month: { type: Number, required: true },
+  weekStart: { type: String, default: '' },
+  weekEnd: { type: String, default: '' },
+  selectedKey: { type: String, default: '' },
+  dayPanelOpen: { type: Boolean, default: false },
+  refreshing: { type: Boolean, default: false },
+  busy: { type: Boolean, default: false },
+  recurringPreviewEnabled: { type: Boolean, default: false },
+  recurringPreviewSaving: { type: Boolean, default: false },
+  forecast: { type: Object, default: null }
+})
+const emit = defineEmits([
+  'previous',
+  'next',
+  'today',
+  'jump',
+  'jump-date',
+  'refresh',
+  'update:recurring-preview-enabled',
+  'toggle-day-panel',
+  'historical-notes-moved',
+  'historical-move-open-change'
+])
+const isWeekView = computed(() => props.viewMode === 'week')
+const { weatherEnabled, almanacEnabled } = useDateContextSettings()
+const pickerOpen = ref(false)
+const pickerGuardVisible = ref(false)
+const pickerTriggerRef = ref(null)
+const pickerPanelRef = ref(null)
+const pickerStyle = ref({})
+const { onKeydown: onPickerKeydown } = usePopoverLifecycle(
+  pickerOpen,
+  pickerTriggerRef,
+  pickerPanelRef,
+  updatePickerPosition,
+  { dialog: true }
+)
+function updatePickerPosition() {
+  const rect = pickerTriggerRef.value?.getBoundingClientRect()
+  if (!rect || !pickerPanelRef.value) return
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+  const font = parseFloat(getComputedStyle(pickerTriggerRef.value).fontSize)
+  const width = Math.min(Math.max(280 * rem, 14 * font), window.innerWidth - 16)
+  pickerStyle.value = popoverStyle(
+    { ...rect.toJSON(), left: (rect.left + rect.right - width) / 2 },
+    width,
+    measurePopoverContent(pickerPanelRef.value, width)?.height || 280 * rem
+  )
+}
+const rollDirection = ref('forward')
+const draftYear = ref(props.year)
+const draftMonth = ref(props.month)
+const pickerYear = ref(props.year)
+const pickerMonth = ref(props.month)
+const pickerMonthDirection = ref('forward')
+const pickerPeriodOpen = ref(false)
+const refreshSpinActive = ref(false)
+let refreshSpinFinished = true
+
+watch(
+  () => props.refreshing,
+  (refreshing) => {
+    if (refreshing) {
+      refreshSpinFinished = false
+      refreshSpinActive.value = true
+    } else if (refreshSpinFinished) {
+      refreshSpinActive.value = false
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  () => props.weekStart,
+  (current, previous) => {
+    if (!current || !previous || current === previous) return
+    rollDirection.value = current > previous ? 'forward' : 'backward'
+  }
+)
+
+watch(
+  () => [props.year, props.month],
+  ([year, month]) => {
+    draftYear.value = year
+    draftMonth.value = month
+  }
+)
+
+watch(
+  () => props.busy,
+  (busy, wasBusy) => {
+    if (!busy && wasBusy) {
+      draftYear.value = props.year
+      draftMonth.value = props.month
+    }
+  }
+)
+
+watch(
+  () => [props.year, props.month],
+  ([year, month], [previousYear, previousMonth]) => {
+    if (isWeekView.value) return
+    const current = year * 12 + month
+    const previous = previousYear * 12 + previousMonth
+    rollDirection.value = current >= previous ? 'forward' : 'backward'
+  }
+)
+
+const numberTransitionName = computed(() =>
+  rollDirection.value === 'forward' ? 'month-number-up' : 'month-number-down'
+)
+const weekRangeLabel = computed(() => {
+  if (!props.weekStart || !props.weekEnd) return ''
+  const start = parseDateKey(props.weekStart)
+  const end = parseDateKey(props.weekEnd)
+  if (start.year !== end.year) {
+    return `${start.year}年${start.month}月${start.day}日—${end.year}年${end.month}月${end.day}日`
+  }
+  if (start.month !== end.month) {
+    return `${start.year}年${start.month}月${start.day}日—${end.month}月${end.day}日`
+  }
+  return `${start.year}年${start.month}月${start.day}日—${end.day}日`
+})
+const pickerMonthLabel = computed(() => `${pickerYear.value}年${pickerMonth.value}月`)
+const pickerWeekdays = ['一', '二', '三', '四', '五', '六', '日']
+const minDateKey = dateKeyFromParts(MIN_CALENDAR_YEAR, 1, 1)
+const maxDateKey = dateKeyFromParts(MAX_CALENDAR_YEAR, 12, 31)
+const maxWeekDateKey = buildWeekGrid(maxDateKey).weekEnd
+const pickerNow = new Date()
+const pickerTodayKey = dateKeyFromParts(
+  pickerNow.getFullYear(),
+  pickerNow.getMonth() + 1,
+  pickerNow.getDate()
+)
+const weekPickerDays = computed(() => {
+  return buildMonthGrid(pickerYear.value, pickerMonth.value).days.map((day) => ({
+    ...day,
+    inCurrentWeek: Boolean(
+      props.weekStart && day.key >= props.weekStart && day.key <= props.weekEnd
+    ),
+    isSelected: day.key === props.selectedKey,
+    isToday: day.key === pickerTodayKey,
+    disabled: day.key < minDateKey || day.key > maxWeekDateKey
+  }))
+})
+const previousDisabled = computed(() =>
+  isWeekView.value
+    ? Boolean(props.weekStart && addCalendarDays(props.weekStart, -7) < minDateKey)
+    : props.year === MIN_CALENDAR_YEAR && props.month === 1
+)
+const nextDisabled = computed(() =>
+  isWeekView.value
+    ? Boolean(props.weekStart && addCalendarDays(props.weekStart, 7) > maxDateKey)
+    : props.year === MAX_CALENDAR_YEAR && props.month === 12
+)
+
+function commitJump() {
+  const year = Math.min(MAX_CALENDAR_YEAR, Math.max(MIN_CALENDAR_YEAR, Number(draftYear.value)))
+  const month = Math.min(12, Math.max(1, Number(draftMonth.value)))
+  draftYear.value = year
+  draftMonth.value = month
+  emit('jump', { year, month })
+}
+
+function updateYear(value) {
+  draftYear.value = value
+  commitJump()
+}
+
+function updateMonth(value) {
+  draftMonth.value = value
+  commitJump()
+}
+
+async function togglePicker() {
+  if (pickerOpen.value) {
+    closePicker()
+    return
+  }
+  if (isWeekView.value) {
+    const selected = parseDateKey(props.selectedKey || props.weekStart)
+    // 上限年份最后一周会自然跨到下一年；年月面板停留在可构建的 2100 年 12 月，
+    // 日期网格仍会显示并允许选择这一完整周的 2101-01-01/02。
+    pickerYear.value = Math.min(MAX_CALENDAR_YEAR, Math.max(MIN_CALENDAR_YEAR, selected.year))
+    pickerMonth.value = selected.year > MAX_CALENDAR_YEAR ? 12 : selected.month
+    pickerPeriodOpen.value = false
+  }
+  pickerGuardVisible.value = true
+  pickerOpen.value = true
+  await nextTick()
+  pickerPanelRef.value
+    ?.querySelector('button:not(:disabled), input:not(:disabled), [tabindex="0"]')
+    ?.focus()
+}
+
+function closePicker() {
+  pickerOpen.value = false
+  pickerPeriodOpen.value = false
+}
+
+function onHistoricalMoveOpenChange(open) {
+  if (open) closePicker()
+  emit('historical-move-open-change', open)
+}
+
+function closePickerAndRestoreFocus() {
+  closePicker()
+  void nextTick(() => pickerTriggerRef.value?.focus())
+}
+
+function onDocumentKeydown(event) {
+  if (event.key !== 'Escape' || !pickerOpen.value || isComposingInput(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  closePickerAndRestoreFocus()
+}
+
+function finishPickerLeave() {
+  if (!pickerOpen.value) pickerGuardVisible.value = false
+}
+
+function onPickerEnter(element, done) {
+  enterPopover(element, done, 'dropdown')
+}
+
+function onPickerLeave(element, done) {
+  leavePopover(element, done, 'dropdown')
+}
+
+function goPrevious() {
+  if (previousDisabled.value) return
+  emit('previous')
+}
+
+function goNext() {
+  if (nextDisabled.value) return
+  emit('next')
+}
+
+function movePickerMonth(delta) {
+  const target = new Date(pickerYear.value, pickerMonth.value - 1 + delta, 1)
+  if (target.getFullYear() < MIN_CALENDAR_YEAR || target.getFullYear() > MAX_CALENDAR_YEAR) {
+    return
+  }
+  pickerMonthDirection.value = delta > 0 ? 'forward' : 'backward'
+  pickerYear.value = target.getFullYear()
+  pickerMonth.value = target.getMonth() + 1
+}
+
+function updatePickerYear(value) {
+  pickerMonthDirection.value = value >= pickerYear.value ? 'forward' : 'backward'
+  pickerYear.value = value
+}
+
+function choosePickerMonth(value) {
+  pickerMonthDirection.value =
+    pickerYear.value * 12 + value >= pickerYear.value * 12 + pickerMonth.value
+      ? 'forward'
+      : 'backward'
+  pickerMonth.value = value
+  pickerPeriodOpen.value = false
+}
+
+function selectWeekDate(day) {
+  if (props.busy || day.disabled) return
+  emit('jump-date', day.key)
+  closePickerAndRestoreFocus()
+}
+
+function goToday() {
+  emit('today')
+}
+
+function finishRefreshSpin() {
+  refreshSpinFinished = true
+  if (!props.refreshing) refreshSpinActive.value = false
+}
+
+document.addEventListener('keydown', onDocumentKeydown)
+onBeforeUnmount(() => document.removeEventListener('keydown', onDocumentKeydown))
+</script>
+
+<template>
+  <header class="month-toolbar" :class="{ 'is-busy': busy }">
+    <div class="month-toolbar__leading">
+      <div class="month-toolbar__actions">
+        <button
+          type="button"
+          class="month-toolbar__today"
+          :disabled="busy"
+          title="定位到今天"
+          aria-label="定位到今天"
+          @click="goToday"
+        >
+          <AppIcon name="locate-current" class="month-toolbar__action-icon" />
+        </button>
+        <button
+          type="button"
+          class="month-toolbar__refresh"
+          :disabled="busy || refreshing || refreshSpinActive"
+          title="刷新"
+          :aria-label="isWeekView ? '刷新周视图' : '刷新月视图'"
+          @click="emit('refresh')"
+        >
+          <svg
+            class="month-toolbar__refresh-icon"
+            :class="{ 'is-spinning': refreshSpinActive }"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            @animationend="finishRefreshSpin"
+          >
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M21 12a9 9 0 1 1-2.6-6.3M21 3v6h-6"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="month-toolbar__navigation" :aria-label="isWeekView ? '周导航' : '月份导航'">
+      <button
+        type="button"
+        class="month-toolbar__month-arrow"
+        :aria-label="isWeekView ? '上一周' : '上个月'"
+        :title="isWeekView ? '上一周' : '上个月'"
+        :disabled="previousDisabled || (!isWeekView && busy)"
+        @click="goPrevious"
+      >
+        <svg class="month-toolbar__arrow-icon" viewBox="0 0 12 18" aria-hidden="true">
+          <path d="m8.5 3-5 6 5 6" />
+        </svg>
+      </button>
+      <button
+        ref="pickerTriggerRef"
+        type="button"
+        class="month-toolbar__title"
+        :title="isWeekView ? weekRangeLabel : `${year}年 ${month}月`"
+        :class="{ 'is-open': pickerOpen }"
+        :aria-label="isWeekView ? '选择日期' : '选择年份和月份'"
+        aria-haspopup="dialog"
+        :aria-expanded="pickerOpen"
+        @click="togglePicker"
+      >
+        <span v-if="isWeekView" class="month-toolbar__title-label is-week" aria-live="polite">
+          <Transition :name="numberTransitionName">
+            <span :key="weekRangeLabel" class="month-toolbar__week-range">
+              {{ weekRangeLabel }}
+            </span>
+          </Transition>
+        </span>
+        <span v-else class="month-toolbar__title-label" aria-live="polite">
+          <span class="month-toolbar__value-slot is-year">
+            <Transition :name="numberTransitionName">
+              <span :key="year" class="month-toolbar__value">{{ year }}</span>
+            </Transition>
+          </span>
+          <span>年</span>
+          <span class="month-toolbar__value-slot is-month">
+            <Transition :name="numberTransitionName">
+              <span :key="month" class="month-toolbar__value">{{ month }}</span>
+            </Transition>
+          </span>
+          <span>月</span>
+        </span>
+        <svg viewBox="0 0 12 8" aria-hidden="true"><path d="m2 2 4 4 4-4" /></svg>
+      </button>
+      <button
+        type="button"
+        class="month-toolbar__month-arrow"
+        :aria-label="isWeekView ? '下一周' : '下个月'"
+        :title="isWeekView ? '下一周' : '下个月'"
+        :disabled="nextDisabled || (!isWeekView && busy)"
+        @click="goNext"
+      >
+        <svg class="month-toolbar__arrow-icon" viewBox="0 0 12 18" aria-hidden="true">
+          <path d="m3.5 3 5 6-5 6" />
+        </svg>
+      </button>
+
+      <Teleport to="body">
+        <div
+          v-if="pickerGuardVisible"
+          class="month-toolbar__picker-backdrop"
+          aria-hidden="true"
+          @pointerdown.stop
+          @click.stop="closePickerAndRestoreFocus"
+        />
+
+        <Transition
+          :css="false"
+          @enter="onPickerEnter"
+          @leave="onPickerLeave"
+          @after-leave="finishPickerLeave"
+        >
+          <section
+            v-if="pickerOpen"
+            ref="pickerPanelRef"
+            class="month-toolbar__picker"
+            :style="pickerStyle"
+            role="dialog"
+            :aria-label="isWeekView ? '选择日期' : '选择年月'"
+            :aria-busy="busy"
+            :inert="busy"
+            @click.stop
+            @keydown="onPickerKeydown"
+          >
+            <template v-if="isWeekView">
+              <header class="month-toolbar__date-picker-header">
+                <button
+                  type="button"
+                  aria-label="上个月"
+                  :disabled="pickerYear === MIN_CALENDAR_YEAR && pickerMonth === 1"
+                  @click="movePickerMonth(-1)"
+                >
+                  <svg viewBox="0 0 12 18" aria-hidden="true"><path d="m8.5 3-5 6 5 6" /></svg>
+                </button>
+                <button
+                  type="button"
+                  class="month-toolbar__date-picker-period"
+                  aria-haspopup="dialog"
+                  :aria-expanded="pickerPeriodOpen"
+                  @click="pickerPeriodOpen = !pickerPeriodOpen"
+                >
+                  {{ pickerMonthLabel }}
+                  <svg viewBox="0 0 12 8" aria-hidden="true"><path d="m2 2 4 4 4-4" /></svg>
+                </button>
+                <button
+                  type="button"
+                  aria-label="下个月"
+                  :disabled="pickerYear === MAX_CALENDAR_YEAR && pickerMonth === 12"
+                  @click="movePickerMonth(1)"
+                >
+                  <svg viewBox="0 0 12 18" aria-hidden="true"><path d="m3.5 3 5 6-5 6" /></svg>
+                </button>
+              </header>
+              <div v-if="pickerPeriodOpen" class="month-toolbar__date-picker-period-panel">
+                <div class="month-toolbar__date-picker-year">
+                  <span>年份</span>
+                  <NumberStepper
+                    :model-value="pickerYear"
+                    :min="MIN_CALENDAR_YEAR"
+                    :max="MAX_CALENDAR_YEAR"
+                    :disabled="busy"
+                    aria-label="日期选择年份"
+                    @update:model-value="updatePickerYear"
+                  />
+                </div>
+                <div
+                  class="month-toolbar__date-picker-months"
+                  aria-label="选择月份"
+                  data-popover-grid="4"
+                >
+                  <button
+                    v-for="value in 12"
+                    :key="value"
+                    type="button"
+                    class="month-toolbar__date-picker-month"
+                    :class="{ 'is-active': pickerMonth === value }"
+                    :data-value="value"
+                    :aria-label="`选择${value}月`"
+                    :aria-pressed="pickerMonth === value"
+                    :disabled="busy"
+                    @click="choosePickerMonth(value)"
+                  >
+                    {{ value }}月
+                  </button>
+                </div>
+              </div>
+              <template v-else>
+                <div class="month-toolbar__date-picker-weekdays" aria-hidden="true">
+                  <span v-for="weekday in pickerWeekdays" :key="weekday">{{ weekday }}</span>
+                </div>
+                <Transition :name="`month-picker-${pickerMonthDirection}`" mode="out-in">
+                  <div
+                    :key="`${pickerYear}-${pickerMonth}`"
+                    class="month-toolbar__date-picker-days"
+                    data-popover-grid="7"
+                  >
+                    <button
+                      v-for="day in weekPickerDays"
+                      :key="day.key"
+                      type="button"
+                      class="month-toolbar__date-option"
+                      :class="{
+                        'is-other': !day.inCurrentMonth,
+                        'is-week': day.inCurrentWeek,
+                        'is-selected': day.isSelected,
+                        'is-today': day.isToday
+                      }"
+                      :disabled="busy || day.disabled"
+                      :aria-label="day.key"
+                      :aria-pressed="day.isSelected"
+                      :aria-current="day.isToday ? 'date' : undefined"
+                      @click="selectWeekDate(day)"
+                    >
+                      {{ day.day }}
+                    </button>
+                  </div>
+                </Transition>
+              </template>
+            </template>
+            <template v-else>
+              <div class="month-toolbar__picker-year">
+                <span>年份</span>
+                <NumberStepper
+                  :model-value="draftYear"
+                  :min="MIN_CALENDAR_YEAR"
+                  :max="MAX_CALENDAR_YEAR"
+                  :disabled="busy"
+                  aria-label="年份"
+                  @update:model-value="updateYear"
+                />
+              </div>
+              <div class="month-toolbar__months" aria-label="月份" data-popover-grid="4">
+                <button
+                  v-for="value in 12"
+                  :key="value"
+                  type="button"
+                  class="month-toolbar__month-option"
+                  :class="{ 'is-active': draftMonth === value }"
+                  :data-value="value"
+                  :disabled="busy"
+                  @click="updateMonth(value)"
+                >
+                  {{ value }} 月
+                </button>
+              </div>
+            </template>
+          </section>
+        </Transition>
+      </Teleport>
+    </div>
+
+    <div class="month-toolbar__trailing">
+      <div class="month-toolbar__actions">
+        <button
+          type="button"
+          class="month-toolbar__recurring-preview month-toolbar__recurring-preview-toggle"
+          :class="{ 'is-active': recurringPreviewEnabled }"
+          :disabled="busy || recurringPreviewSaving"
+          :title="`${recurringPreviewEnabled ? '隐藏' : '显示'}循环待办预览`"
+          :aria-label="`${recurringPreviewEnabled ? '隐藏' : '显示'}循环待办预览`"
+          role="switch"
+          :aria-checked="recurringPreviewEnabled"
+          @click="emit('update:recurring-preview-enabled', !recurringPreviewEnabled)"
+        >
+          <AppIcon name="taiji" class="month-toolbar__action-icon" />
+        </button>
+        <HistoricalNoteMoveControl
+          :disabled="busy"
+          @open-change="onHistoricalMoveOpenChange"
+          @moved="emit('historical-notes-moved', $event)"
+        />
+        <button
+          type="button"
+          class="month-toolbar__day-panel-toggle"
+          :class="{ 'is-open': dayPanelOpen }"
+          :disabled="busy"
+          :aria-label="dayPanelOpen ? '收起日期列表' : '展开日期列表'"
+          aria-controls="month-day-panel"
+          :aria-expanded="dayPanelOpen"
+          :title="dayPanelOpen ? '收起日期列表' : '展开日期列表'"
+          @click="emit('toggle-day-panel')"
+        >
+          <AppIcon name="date-panel" class="month-toolbar__action-icon" />
+        </button>
+      </div>
+    </div>
+  </header>
+</template>
+
+<style scoped>
+.month-toolbar {
+  display: grid;
+  min-height: 36rem;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12rem;
+  padding: 0 4rem;
+}
+.month-toolbar__navigation,
+.month-toolbar__leading,
+.month-toolbar__trailing {
+  display: flex;
+  align-items: center;
+  gap: 5rem;
+}
+.month-toolbar__leading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5rem;
+  justify-self: stretch;
+  max-width: 100%;
+}
+.month-toolbar__leading .date-context-summary {
+  flex: 1 1 0;
+  margin-inline-end: 20rem;
+}
+.month-toolbar__actions {
+  display: flex;
+  /* 按最多三个 30rem 操作和两个 5rem 间距对齐左右操作区，让两侧摘要等宽。 */
+  flex: 0 0 100rem;
+  align-items: center;
+  gap: 5rem;
+}
+.month-toolbar__leading .month-toolbar__actions {
+  justify-content: flex-start;
+}
+.month-toolbar__trailing .month-toolbar__actions {
+  justify-content: flex-end;
+}
+.month-toolbar__actions > button {
+  flex-shrink: 0;
+}
+.month-toolbar__navigation {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  z-index: var(--z-local-top);
+  justify-self: center;
+  gap: 9rem;
+}
+.month-toolbar__trailing {
+  min-width: 0;
+  justify-self: stretch;
+  justify-content: flex-end;
+}
+.month-toolbar__trailing .date-context-summary {
+  flex: 1 1 0;
+  margin-inline-start: 20rem;
+}
+.month-toolbar__recurring-preview {
+  display: grid !important;
+  width: 30rem;
+  height: 30rem;
+  padding: 0;
+  place-items: center;
+  color: var(--text-color-secondary) !important;
+}
+.month-toolbar__recurring-preview.is-active {
+  background: var(--ui-fill-pressed);
+  color: var(--ui-accent) !important;
+}
+.month-toolbar__day-panel-toggle {
+  display: grid !important;
+  width: 30rem;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  color: var(--text-color-secondary) !important;
+}
+.month-toolbar__day-panel-toggle.is-open {
+  background: var(--ui-fill-pressed);
+  color: var(--ui-accent) !important;
+}
+:is(.month-toolbar, .month-toolbar__picker) button {
+  display: grid;
+  height: 30rem;
+  place-items: center;
+  border: 0;
+  border-radius: 8rem;
+  background: transparent;
+  color: var(--text-color);
+  font: inherit;
+  outline: none;
+}
+:is(.month-toolbar, .month-toolbar__picker) button {
+  min-width: 30rem;
+  cursor: pointer;
+  font-size: var(--fs-secondary);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    transform 120ms ease;
+}
+:is(.month-toolbar, .month-toolbar__picker) button:hover:not(:disabled) {
+  background: var(--ui-fill-hover);
+}
+:is(.month-toolbar, .month-toolbar__picker) button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.month-toolbar.is-busy button:disabled {
+  opacity: 1;
+}
+:is(.month-toolbar, .month-toolbar__picker) button:not([aria-haspopup]):active:not(:disabled) {
+  transform: scale(0.98);
+}
+.month-toolbar__today {
+  width: 30rem;
+  padding: 0;
+}
+.month-toolbar__month-arrow {
+  flex: 0 0 30rem;
+  width: 30rem;
+  height: 30rem !important;
+  padding: 0;
+}
+.month-toolbar__arrow-icon {
+  display: block;
+  width: max(12rem, 10.67px);
+  height: max(18rem, 16px);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+.month-toolbar__title {
+  max-width: calc(100% - 78rem);
+  display: flex !important;
+  min-width: 0 !important;
+  align-items: center;
+  justify-content: center;
+  gap: 7rem;
+  padding: 0 10rem;
+  color: var(--text-color);
+  font-size: calc(var(--fs-body) * 1.12) !important;
+  font-weight: 650;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+.month-toolbar__title.is-open {
+  position: relative;
+  z-index: var(--z-local-raised);
+}
+.month-toolbar__title-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.month-toolbar__title-label.is-week {
+  display: inline-grid;
+  min-width: 0;
+  width: 29ch;
+  max-width: 100%;
+  place-items: center;
+}
+.month-toolbar__week-range {
+  grid-area: 1 / 1;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+.month-toolbar__value-slot {
+  display: inline-grid;
+  overflow: hidden;
+  place-items: center;
+}
+.month-toolbar__value-slot.is-year {
+  width: 4.2ch;
+}
+.month-toolbar__value-slot.is-month {
+  width: 2.2ch;
+}
+.month-toolbar__value {
+  grid-area: 1 / 1;
+  line-height: 1.2;
+}
+.month-number-up-enter-active,
+.month-number-up-leave-active,
+.month-number-down-enter-active,
+.month-number-down-leave-active {
+  transition:
+    opacity 260ms var(--ease-emphasized),
+    transform 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+.month-number-up-enter-from {
+  opacity: 0;
+  transform: translateY(85%);
+}
+.month-number-up-leave-to {
+  opacity: 0;
+  transform: translateY(-85%);
+}
+.month-number-down-enter-from {
+  opacity: 0;
+  transform: translateY(-85%);
+}
+.month-number-down-leave-to {
+  opacity: 0;
+  transform: translateY(85%);
+}
+.month-toolbar__title svg {
+  width: 10rem;
+  height: 7rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  opacity: 0.5;
+  transition:
+    opacity 150ms ease,
+    transform 220ms var(--ease-standard);
+}
+.month-toolbar__title:hover svg,
+.month-toolbar__title.is-open svg {
+  opacity: 0.85;
+}
+.month-toolbar__title.is-open svg {
+  transform: rotate(180deg);
+}
+.month-toolbar__refresh {
+  width: 30rem;
+  padding: 0;
+  color: var(--text-color-secondary) !important;
+}
+.month-toolbar__refresh:hover:not(:disabled) {
+  color: var(--text-color) !important;
+}
+.month-toolbar__action-icon,
+.month-toolbar__refresh-icon {
+  display: block;
+  width: var(--calendar-toolbar-icon-size, 17rem);
+  height: var(--calendar-toolbar-icon-size, 17rem);
+}
+.month-toolbar__refresh-icon.is-spinning {
+  animation: month-toolbar-spin 520ms var(--ease-emphasized);
+}
+.month-toolbar__picker {
+  position: fixed;
+  z-index: var(--z-global-popover);
+  width: 260rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12rem;
+  border: 1px solid var(--surface-float-border);
+  border-radius: var(--ui-menu-radius);
+  background: var(--surface-float);
+  box-shadow: var(--ui-menu-shadow);
+  transform-origin: top center;
+  will-change: opacity, transform;
+}
+.month-toolbar__date-picker-header {
+  display: grid;
+  grid-template-columns: 30rem minmax(0, 1fr) 30rem;
+  align-items: center;
+  color: var(--text-color);
+}
+.month-toolbar__date-picker-header button {
+  width: 30rem;
+  padding: 0;
+}
+.month-toolbar__date-picker-header svg {
+  width: 10rem;
+  height: 16rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+.month-toolbar__date-picker-period {
+  display: flex !important;
+  width: auto !important;
+  min-width: 0 !important;
+  align-items: center;
+  justify-content: center;
+  gap: 6rem;
+  padding: 0 8rem !important;
+  font-size: var(--fs-body) !important;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.month-toolbar__date-picker-period svg {
+  width: 9rem;
+  height: 6rem;
+  opacity: 0.55;
+  transition: transform 220ms var(--ease-standard);
+}
+.month-toolbar__date-picker-period[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.month-toolbar__date-picker-period-panel {
+  min-height: 226rem;
+  padding-top: 12rem;
+}
+.month-toolbar__date-picker-year {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+}
+.month-toolbar__date-picker-year :deep(.number-stepper) {
+  width: 104rem;
+  height: 32rem;
+}
+.month-toolbar__date-picker-months {
+  display: grid;
+  margin-top: 12rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5rem;
+}
+.month-toolbar__date-picker-month {
+  min-width: 0 !important;
+  height: 35rem !important;
+  border-radius: 7rem !important;
+  color: var(--text-color-secondary) !important;
+  font-size: var(--fs-secondary) !important;
+}
+.month-toolbar__date-picker-month.is-active {
+  background: color-mix(in srgb, #0a84ff 14%, transparent);
+  color: #0a84ff !important;
+  font-weight: 650;
+}
+.month-toolbar__date-picker-weekdays,
+.month-toolbar__date-picker-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3rem;
+}
+.month-toolbar__date-picker-weekdays {
+  margin: 9rem 0 4rem;
+  color: var(--text-color-secondary);
+  font-size: calc(var(--fs-secondary) * 0.78);
+  text-align: center;
+}
+.month-toolbar__date-picker-days {
+  grid-auto-rows: 30rem;
+}
+.month-toolbar__date-option {
+  position: relative;
+  min-width: 0 !important;
+  height: 30rem !important;
+  border-radius: 7rem !important;
+  color: var(--text-color) !important;
+  font-size: var(--fs-secondary) !important;
+  font-variant-numeric: tabular-nums;
+}
+.month-toolbar__date-option.is-other {
+  color: var(--text-color-secondary) !important;
+  opacity: 0.5;
+}
+.month-toolbar__date-option.is-week {
+  background: color-mix(in srgb, #0a84ff 11%, transparent);
+  color: #0a84ff !important;
+}
+.month-toolbar__date-option.is-selected {
+  background: #0a84ff;
+  color: #fff !important;
+  font-weight: 650;
+  opacity: 1;
+}
+.month-toolbar__date-option.is-today:not(.is-selected)::after {
+  position: absolute;
+  right: 50%;
+  bottom: 2rem;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  background: #0a84ff;
+  content: '';
+  transform: translateX(50%);
+}
+.month-picker-forward-enter-active,
+.month-picker-forward-leave-active,
+.month-picker-backward-enter-active,
+.month-picker-backward-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 220ms var(--ease-standard);
+}
+.month-picker-forward-enter-from,
+.month-picker-backward-leave-to {
+  opacity: 0;
+  transform: translateX(10rem);
+}
+.month-picker-forward-leave-to,
+.month-picker-backward-enter-from {
+  opacity: 0;
+  transform: translateX(-10rem);
+}
+.month-toolbar__picker-backdrop {
+  position: fixed;
+  z-index: var(--z-global-popover);
+  inset: 0;
+  cursor: default;
+}
+.month-toolbar.is-busy .month-toolbar__picker-year,
+.month-toolbar.is-busy .month-toolbar__months {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.month-toolbar__picker-year {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-color-secondary);
+  font-size: var(--fs-secondary);
+}
+.month-toolbar__picker-year :deep(.number-stepper) {
+  width: 104rem;
+  height: 32rem;
+}
+.month-toolbar__months {
+  display: grid;
+  margin-top: 10rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5rem;
+}
+.month-toolbar__month-option {
+  min-width: 0 !important;
+  height: 30rem !important;
+  border-radius: 7rem !important;
+  color: var(--text-color-secondary) !important;
+  font-size: var(--fs-secondary) !important;
+}
+.month-toolbar__month-option.is-active {
+  background: color-mix(in srgb, #0a84ff 14%, transparent);
+  color: #0a84ff !important;
+  font-weight: 650;
+}
+@keyframes month-toolbar-spin {
+  to {
+    transform: rotate(720deg);
+  }
+}
+@media (max-width: 760px) {
+  .month-toolbar {
+    gap: 6rem;
+  }
+  .month-toolbar__navigation {
+    gap: 3rem;
+  }
+  .month-toolbar__title {
+    min-width: 0 !important;
+  }
+}
+@container calendar-pane (max-width: 760px) {
+  .month-toolbar {
+    min-height: 76rem;
+    grid-template-areas:
+      'leading trailing'
+      'navigation navigation';
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(30rem, auto) minmax(36rem, auto);
+    row-gap: 4rem;
+  }
+  .month-toolbar__leading {
+    grid-area: leading;
+  }
+  .month-toolbar__navigation {
+    grid-area: navigation;
+  }
+  .month-toolbar__trailing {
+    grid-area: trailing;
+  }
+}
+</style>

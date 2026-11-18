@@ -1,0 +1,197 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import { registerWeatherIpcHandlers } from '../src/main/ipc/register-weather-ipc.js'
+
+const MONTH_WORKSPACE_PATH = new URL(
+  '../src/renderer/src/components/month/MonthWorkspace.vue',
+  import.meta.url
+)
+
+const beijing = {
+  name: '北京市',
+  latitude: 39.9042,
+  longitude: 116.4074,
+  timezone: 'Asia/Shanghai',
+  countryCode: 'CN'
+}
+const shanghai = {
+  name: '上海市',
+  latitude: 31.2304,
+  longitude: 121.4737,
+  timezone: 'Asia/Shanghai',
+  countryCode: 'CN'
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function createHarness(weatherService, initialSettings) {
+  const handlers = new Map()
+  const webContents = {
+    isDestroyed: () => false,
+    send: vi.fn()
+  }
+  const mainWindow = {
+    isDestroyed: () => false,
+    webContents
+  }
+  let settings = initialSettings
+  const lifecycle = registerWeatherIpcHandlers({
+    ipcMain: {
+      handle: (channel, handler) => handlers.set(channel, handler),
+      removeHandler: (channel) => handlers.delete(channel)
+    },
+    shell: { openExternal: vi.fn() },
+    userDataPath: 'unused-in-test',
+    getMainWindow: () => mainWindow,
+    getWeatherSettings: () => settings,
+    weatherService
+  })
+  return {
+    handlers,
+    lifecycle,
+    webContents,
+    event: { sender: webContents },
+    setSettings: (nextSettings) => {
+      settings = nextSettings
+    }
+  }
+}
+
+describe('天气 IPC 请求协调', () => {
+  it('移除全部已注册 IPC，并丢弃退出后晚到的刷新结果', async () => {
+    const request = deferred(),
+      storeDecisions = []
+    const weatherService = {
+      getForecast: vi.fn(async (_location, options) => {
+        if (options.cacheOnly) return null
+        const value = await request.promise
+        storeDecisions.push(options.shouldStore())
+        return value
+      })
+    }
+    const harness = createHarness(weatherService, { enabled: true, location: beijing })
+    expect(harness.handlers.size).toBe(5)
+    const refreshing = harness.lifecycle.refreshAtStartup()
+    await Promise.resolve()
+    harness.lifecycle.dispose()
+    harness.lifecycle.dispose()
+    expect(harness.handlers.size).toBe(0)
+    request.resolve({ location: beijing, days: [] })
+    await expect(refreshing).resolves.toBeNull()
+    expect(storeDecisions).toEqual([false])
+    expect(harness.webContents.send).not.toHaveBeenCalled()
+  })
+
+  it('注册部分失败时回收此前成功注册的 handler', () => {
+    const handlers = new Map(),
+      removed = []
+    expect(() =>
+      registerWeatherIpcHandlers({
+        ipcMain: {
+          handle(channel, handler) {
+            if (channel === 'weather:get-forecast') throw new Error('duplicate handler')
+            handlers.set(channel, handler)
+          },
+          removeHandler(channel) {
+            removed.push(channel)
+            handlers.delete(channel)
+          }
+        },
+        shell: {},
+        userDataPath: 'unused-in-test',
+        getMainWindow: () => null,
+        getWeatherSettings: () => ({}),
+        weatherService: {}
+      })
+    ).toThrow('duplicate handler')
+    expect(handlers.size).toBe(0)
+    expect(removed).toEqual(['weather:resolve-location', 'weather:get-division-tree'])
+  })
+
+  it('当前地区没有缓存时会主动拉取天气', async () => {
+    const forecast = { location: beijing, days: [] }
+    const weatherService = {
+      getForecast: vi.fn(async (_location, options) => (options.cacheOnly ? null : forecast)),
+      resolveLocation: vi.fn(),
+      getChinaDivisionTree: vi.fn(),
+      refreshForecastManually: vi.fn()
+    }
+    const harness = createHarness(weatherService, { enabled: true, location: beijing })
+
+    await expect(harness.handlers.get('weather:get-forecast')(harness.event)).resolves.toBe(
+      forecast
+    )
+    expect(weatherService.getForecast).toHaveBeenNthCalledWith(1, beijing, { cacheOnly: true })
+    expect(
+      weatherService.getForecast.mock.calls.filter(([, options]) => options.refresh)
+    ).toHaveLength(1)
+    expect(harness.webContents.send).toHaveBeenCalledWith('weather:forecast-updated', forecast)
+  })
+
+  it('切换地区后丢弃旧请求，只缓存并发布当前地区结果', async () => {
+    const pendingByName = new Map([
+      [beijing.name, deferred()],
+      [shanghai.name, deferred()]
+    ])
+    const storeDecisions = []
+    const weatherService = {
+      getForecast: vi.fn(async (location, options) => {
+        if (options.cacheOnly) return null
+        const forecast = await pendingByName.get(location.name).promise
+        storeDecisions.push({ name: location.name, allowed: options.shouldStore() })
+        return forecast
+      }),
+      resolveLocation: vi.fn(),
+      getChinaDivisionTree: vi.fn(),
+      refreshForecastManually: vi.fn()
+    }
+    const harness = createHarness(weatherService, { enabled: true, location: beijing })
+
+    const oldRequest = harness.lifecycle.refreshAtStartup()
+    await Promise.resolve() // Allow the old network request to start before switching.
+    harness.setSettings({ enabled: true, location: shanghai })
+    const currentRequest = harness.handlers.get('weather:get-forecast')(harness.event)
+
+    const oldForecast = { location: beijing, days: [] }
+    pendingByName.get(beijing.name).resolve(oldForecast)
+    await expect(oldRequest).resolves.toBeNull()
+    expect(harness.webContents.send).not.toHaveBeenCalled()
+
+    const currentForecast = { location: shanghai, days: [] }
+    pendingByName.get(shanghai.name).resolve(currentForecast)
+    await expect(currentRequest).resolves.toBe(currentForecast)
+    expect(storeDecisions).toEqual([
+      { name: beijing.name, allowed: false },
+      { name: shanghai.name, allowed: true }
+    ])
+    expect(harness.webContents.send).toHaveBeenCalledTimes(1)
+    expect(harness.webContents.send).toHaveBeenCalledWith(
+      'weather:forecast-updated',
+      currentForecast
+    )
+  })
+})
+
+describe('日历视图天气加载', () => {
+  it('本地日历数据就绪后立即显示，天气在后台加载', () => {
+    const workspace = readFileSync(MONTH_WORKSPACE_PATH, 'utf8')
+    const mountBlock = workspace.slice(workspace.indexOf('onMounted(async () => {'))
+
+    expect(mountBlock).toContain(
+      'const calendarLoadPromise = isWeekView.value ? loadWeek(todayKey.value) : loadMonth()'
+    )
+    expect(mountBlock).toContain('if (weatherEnabled.value) void loadWeather({ quiet: true })')
+    expect(mountBlock.indexOf('await calendarLoadPromise')).toBeLessThan(
+      mountBlock.indexOf("emit('ready')")
+    )
+    expect(mountBlock).not.toContain('Promise.all([loadMonth(), loadWeather')
+  })
+})

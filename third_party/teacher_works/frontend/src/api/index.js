@@ -1,0 +1,195 @@
+import request from './request'
+
+// ================= 认证 =================
+export const login = (data) => request.post('/auth/login', data)
+export const desktopSession = () => request.post('/auth/desktop')
+export const changePassword = (data) => request.put('/auth/password', data)
+
+// ================= 班级管理（多班级支持） =================
+export const getClasses = () => request.get('/classes')
+export const createClass = (data) => request.post('/classes', data)
+export const renameClass = (id, data) => request.put(`/classes/${id}`, data)
+export const deleteClass = (id, data) => request.delete(`/classes/${id}`, { data })
+
+// ================= 统计数据 =================
+export const getStats = () => request.get('/stats')
+
+// ================= 资源管理 =================
+export const getResources = (url = '/resources') => request.get(url)
+export const uploadResource = (formData) =>
+  request.post('/resources', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const deleteResource = (id) => request.delete(`/resources/${id}`)
+
+// ================= 资源类别管理 =================
+export const getResourceCategories = () => request.get('/resource-categories')
+export const createResourceCategory = (data) => request.post('/resource-categories', data)
+export const deleteResourceCategory = (id) => request.delete(`/resource-categories/${id}`)
+
+// ================= 试卷管理 =================
+export const getExams = (url = '/exams') => request.get(url)
+export const createExam = (data) => request.post('/exams', data)
+export const updateExam = (id, data) => request.put(`/exams/${id}`, data)
+export const deleteExam = (id) => request.delete(`/exams/${id}`)
+
+// ================= 考试记录 =================
+export const getExamRecords = (examId) => request.get(`/exam-records?exam_id=${examId}`)
+export const createExamRecord = (data) => request.post('/exam-records', data)
+export const updateExamRecord = (id, data) => request.put(`/exam-records/${id}`, data)
+export const deleteExamRecord = (id) => request.delete(`/exam-records/${id}`)
+export const exportExamTemplate = (examId) => request.get(`/exam-records/template?exam_id=${examId}`, { responseType: 'blob' })
+export const exportExamData = (examId) => request.get(`/exam-records/export?exam_id=${examId}`, { responseType: 'blob' })
+export const importExamRecords = (formData) => request.post('/exam-records/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+// ================= 背书管理（旧版，保留兼容） =================
+export const getRecitations = () => request.get('/recitations')
+export const createRecitation = (data) => request.post('/recitations', data)
+export const updateRecitation = (id, data) => request.put(`/recitations/${id}`, data)
+export const deleteRecitation = (id) => request.delete(`/recitations/${id}`)
+
+// ================= 背书任务管理（新版分级结构） =================
+export const getRecitationTasks = () => request.get('/recitation-tasks')
+export const createRecitationTask = (formData) => request.post('/recitation-tasks', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const updateRecitationTask = (id, formData) => request.put(`/recitation-tasks/${id}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const deleteRecitationTask = (id) => request.delete(`/recitation-tasks/${id}`)
+export const getRecitationRecords = (taskId) => request.get(`/recitation-tasks/${taskId}/records`)
+export const createRecitationRecords = (taskId, data) => request.post(`/recitation-tasks/${taskId}/records`, data)
+export const updateRecitationRecord = (id, data) => request.put(`/recitation-records/${id}`, data)
+export const deleteRecitationRecord = (id) => request.delete(`/recitation-records/${id}`)
+export const exportRecitationTask = (taskId) => request.get(`/recitation-tasks/${taskId}/export`, { responseType: 'blob' })
+
+// ================= 作业管理 =================
+export const getHomeworkTasks = () => request.get('/homework-tasks')
+export const createHomeworkTask = (formData) => request.post('/homework-tasks', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const updateHomeworkTask = (id, formData) => request.put(`/homework-tasks/${id}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const deleteHomeworkTask = (id) => request.delete(`/homework-tasks/${id}`)
+export const getHomeworkRecords = (taskId) => request.get(`/homework-tasks/${taskId}/records`)
+export const createHomeworkRecords = (taskId, data) => request.post(`/homework-tasks/${taskId}/records`, data)
+export const updateHomeworkRecord = (id, data) => request.put(`/homework-records/${id}`, data)
+export const deleteHomeworkRecord = (id) => request.delete(`/homework-records/${id}`)
+export const exportHomeworkTask = (taskId) => request.get(`/homework-tasks/${taskId}/export`, { responseType: 'blob' })
+
+// ================= 课程表 =================
+export const getSchedule = (week) => request.get(`/schedule${week ? `?week=${week}` : ''}`)
+export const saveSchedule = (data) => request.post('/schedule', data)
+export const deleteSchedule = (id) => request.delete(`/schedule/${id}`)
+// 课程表时间段配置
+export const getScheduleTimeSlots = () => request.get('/schedule/time-slots')
+export const saveScheduleTimeSlots = (data) => request.put('/schedule/time-slots', data)
+
+// ================= 临时工作区 =================
+export const getTasks = () => request.get('/tasks')
+export const createTask = (data) => request.post('/tasks', data)
+export const updateTask = (id, data) => request.put(`/tasks/${id}`, data)
+export const deleteTask = (id) => request.delete(`/tasks/${id}`)
+export const completeTask = (id) => request.put(`/tasks/${id}/complete`)
+
+// ================= 学生档案 =================
+export const getStudents = () => request.get('/students')
+export const getStudent = (id) => request.get(`/students/${id}`)
+export const createStudent = (data) => request.post('/students', data)
+export const updateStudent = (id, data) => request.put(`/students/${id}`, data)
+export const deleteStudent = (id) => request.delete(`/students/${id}`)
+export const batchDeleteStudents = (ids) => request.delete('/students/batch', { data: { ids } })
+export const importStudents = (formData) =>
+  request.post('/students/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+// 学生头像上传（先保存学生基本信息，再上传头像）
+export const uploadStudentAvatar = (id, formData) =>
+  request.post(`/students/${id}/avatar`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+// 教师头像上传
+export const uploadTeacherAvatar = (formData) =>
+  request.post('/teacher/avatar', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+// ================= 成绩管理 =================
+export const getScores = () => request.get('/scores')
+export const importScores = (formData) =>
+  request.post('/scores/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+// 成绩 - 单条操作
+export const createScore = (data) => request.post('/scores', data)
+export const updateScore = (id, data) => request.put(`/scores/${id}`, data)
+export const deleteScore = (id) => request.delete(`/scores/${id}`)
+// 成绩 - 批量操作
+export const batchDeleteScores = (ids) => request.delete('/scores/batch', { data: { ids } })
+
+// ================= 积分管理 =================
+export const getPoints = () => request.get('/points')
+export const createPoint = (data) => request.post('/points', data)
+export const deletePoint = (id) => request.delete(`/points/${id}`)
+export const batchDeletePoints = (ids) => request.delete('/points/batch', { data: { ids } })
+
+// ================= 请假管理 =================
+export const getLeaves = () => request.get('/leaves')
+export const createLeave = (data) => request.post('/leaves', data)
+export const updateLeave = (id, data) => request.put(`/leaves/${id}`, data)
+// 单条销假复用批量状态接口（原误发 POST /leaves 会新建空记录）
+export const changeLeaveStatus = (id, status) => request.put('/leaves/batch-status', { ids: [id], status })
+export const deleteLeave = (id) => request.delete(`/leaves/${id}`)
+export const batchUpdateLeaveStatus = (ids, status) => request.put('/leaves/batch-status', { ids, status })
+export const batchDeleteLeaves = (ids) => request.delete('/leaves/batch', { data: { ids } })
+
+// ================= 期末评价 =================
+export const getEvaluations = () => request.get('/evaluations')
+export const generateEvaluations = () => request.post('/evaluations/generate')
+export const updateEvaluation = (id, data) => request.put(`/evaluations/${id}`, data)
+
+// ================= 家校沟通 =================
+export const getCommunications = () => request.get('/communications')
+export const createCommunication = (formData) => request.post('/communications', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const updateCommunication = (id, formData) => request.put(`/communications/${id}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const deleteCommunication = (id) => request.delete(`/communications/${id}`)
+export const batchDeleteCommunications = (ids) => request.delete('/communications/batch', { data: { ids } })
+
+// ================= 座位表 =================
+export const getSeats = () => request.get('/seats')
+export const saveSeats = (data) => request.put('/seats', data)
+
+// ================= 系统设置 =================
+export const getSettings = () => request.get('/settings')
+export const updateSetting = (key, value) => request.put(`/settings/${key}`, { value })
+export const upgradeGrade = () => request.post('/settings/upgrade-grade')
+// 年级信息（动态计算）
+export const getGradeInfo = () => request.get('/settings/grade-info')
+export const updateGradeYear = (year) => request.put('/settings/grade-year', { grade_year: year })
+
+// ================= 导出 =================
+// 成绩导出
+export const exportScores = () => request.get('/scores/export', { responseType: 'blob' })
+// 学生花名册导出
+export const exportStudents = () => request.get('/students/export', { responseType: 'blob' })
+// 期末评价导出
+export const exportEvaluations = () => request.get('/evaluations/export', { responseType: 'blob' })
+
+// ================= AI 试卷批改 =================
+// 模型服务商预设与默认提示词
+export const getAiPresets = () => request.get('/ai-grading/presets')
+// 读取配置（总开关 + 供应商列表，apiKey 后端掩码）/ 保存总开关与当前激活供应商
+export const getAiConfig = () => request.get('/ai-grading/config')
+export const saveAiConfig = (data) => request.put('/ai-grading/config', data)
+export const testAiConnection = (data) => request.post('/ai-grading/test', data)
+// 多供应商管理：增 / 改 / 删 / 切换当前使用 / 测试已保存供应商
+export const addAiProvider = (data) => request.post('/ai-grading/providers', data)
+export const updateAiProvider = (id, data) => request.put(`/ai-grading/providers/${id}`, data)
+export const deleteAiProvider = (id) => request.delete(`/ai-grading/providers/${id}`)
+export const activateAiProvider = (id) => request.post(`/ai-grading/providers/${id}/activate`)
+export const testAiProvider = (id) => request.post(`/ai-grading/providers/${id}/test`)
+// 批改任务：列表 / 创建 / 详情 / 采纳 / 删除 / 导出文档
+export const getAiTasks = (params) => request.get('/ai-grading/tasks', { params })
+export const createAiTask = (formData) =>
+  // 弱网下多张试卷图片上传耗时远超全局 30s 超时，此处单独放宽至 120s（仅本请求生效）
+  request.post('/ai-grading/tasks', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
+// 批量批改：一次为某试卷下「已有照片」的学生全部发起批改（无照片/已在跑的学生自动跳过）
+export const createAiBatchTask = (data) => request.post('/ai-grading/tasks/batch', data)
+export const getAiTask = (id) => request.get(`/ai-grading/tasks/${id}`)
+export const adoptAiTask = (id, data) => request.post(`/ai-grading/tasks/${id}/adopt`, data)
+export const editAiTaskResult = (id, data) => request.put(`/ai-grading/tasks/${id}/result`, data)
+export const deleteAiTask = (id) => request.delete(`/ai-grading/tasks/${id}`)
+export const cancelAiTask = (id) => request.post(`/ai-grading/tasks/${id}/cancel`)
+// 批量停止：一次停掉整批任务（传 task_ids）。不传则停止当前班级全部在跑的批改。
+// 必需的原因：批量队列是「停一个、下一个立刻接上」，逐个停止等于停不下来。
+export const cancelAiBatchTask = (taskIds) => request.post('/ai-grading/tasks/cancel-batch', { task_ids: taskIds || [] })
+export const exportAiTask = (id) => request.get(`/ai-grading/tasks/${id}/export`, { responseType: 'blob' })
+// 标准答案：读取 / 保存（answer_ref 存试卷级，一次录入多次复用）
+export const getExamAnswerRef = (examId) => request.get(`/ai-grading/exams/${examId}/answer-ref`)
+export const saveExamAnswerRef = (examId, answerRef) => request.put(`/ai-grading/exams/${examId}/answer-ref`, { answer_ref: answerRef })
+// 作业批改的标准答案（与试卷同构，存作业级 homework_tasks.answer_ref）
+export const getHomeworkAnswerRef = (homeworkId) => request.get(`/ai-grading/homework/${homeworkId}/answer-ref`)
+export const saveHomeworkAnswerRef = (homeworkId, answerRef) => request.put(`/ai-grading/homework/${homeworkId}/answer-ref`, { answer_ref: answerRef })

@@ -1,0 +1,153 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { parse } from '@babel/parser'
+import { describe, expect, it, vi } from 'vitest'
+import { enforceNativeRuntimeCompatibility } from '../src/main/native-runtime-gate.js'
+import { NATIVE_ABI_VERSION } from '../src/shared/native-abi-version.js'
+
+describe('Windows native runtime startup gate', () => {
+  it('bounds asynchronous flush on startup failure and exits only once', async () => {
+    vi.useFakeTimers()
+    let resolveFlush
+    const exit = vi.fn()
+    const result = enforceNativeRuntimeCompatibility({
+      getCompatibility: () => ({ success: false }),
+      logger: { fatal: vi.fn(), error: vi.fn() },
+      dialog: { showErrorBox: vi.fn() },
+      flushLogs: () =>
+        new Promise((resolve) => {
+          resolveFlush = resolve
+        }),
+      exit
+    })
+    expect(result).toBe(false)
+    expect(exit).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(exit).toHaveBeenCalledOnce()
+    resolveFlush()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(exit).toHaveBeenCalledOnce()
+    vi.useRealTimers()
+  })
+  it('allows startup when the native runtime is compatible', () => {
+    const logger = { fatal: vi.fn(), error: vi.fn() }
+    const dialog = { showErrorBox: vi.fn() }
+    const flushLogs = vi.fn()
+    const exit = vi.fn()
+
+    expect(
+      enforceNativeRuntimeCompatibility({
+        getCompatibility: () => ({ success: true, required: true }),
+        logger,
+        dialog,
+        flushLogs,
+        exit
+      })
+    ).toBe(true)
+    expect(logger.fatal).not.toHaveBeenCalled()
+    expect(dialog.showErrorBox).not.toHaveBeenCalled()
+    expect(flushLogs).not.toHaveBeenCalled()
+    expect(exit).not.toHaveBeenCalled()
+  })
+
+  it('logs, explains recovery, flushes, and exits on a missing or incompatible DLL', () => {
+    const logger = { fatal: vi.fn(), error: vi.fn() }
+    const dialog = { showErrorBox: vi.fn() }
+    const flushLogs = vi.fn()
+    const exit = vi.fn()
+
+    expect(
+      enforceNativeRuntimeCompatibility({
+        getCompatibility: () => ({
+          success: false,
+          required: true,
+          expectedAbiVersion: NATIVE_ABI_VERSION,
+          actualAbiVersion: 0,
+          dllPath: 'C:\\broken\\blur_engine.dll',
+          error: { code: 'NATIVE_ABI_MISMATCH', message: 'ABI 不匹配' }
+        }),
+        logger,
+        dialog,
+        flushLogs,
+        exit
+      })
+    ).toBe(false)
+    expect(logger.fatal).toHaveBeenCalledWith(
+      'startup.native-runtime',
+      expect.objectContaining({ code: 'NATIVE_ABI_MISMATCH' }),
+      expect.objectContaining({ expectedAbiVersion: NATIVE_ABI_VERSION, actualAbiVersion: 0 })
+    )
+    expect(dialog.showErrorBox).toHaveBeenCalledWith(
+      'Yunzhao Note 无法启动',
+      expect.stringMatching(/官方完整安装包[\s\S]*不会删除这些数据/)
+    )
+    expect(flushLogs).toHaveBeenCalledOnce()
+    expect(exit).toHaveBeenCalledWith(1)
+  })
+
+  it('still flushes and exits when the error dialog itself fails', () => {
+    const logger = { fatal: vi.fn(), error: vi.fn() }
+    const flushLogs = vi.fn()
+    const exit = vi.fn()
+
+    expect(
+      enforceNativeRuntimeCompatibility({
+        getCompatibility: () => {
+          throw new Error('export missing')
+        },
+        logger,
+        dialog: {
+          showErrorBox: () => {
+            throw new Error('dialog unavailable')
+          }
+        },
+        flushLogs,
+        exit
+      })
+    ).toBe(false)
+    expect(logger.error).toHaveBeenCalledWith(
+      'startup.native-runtime-dialog',
+      expect.objectContaining({ message: 'dialog unavailable' })
+    )
+    expect(flushLogs).toHaveBeenCalledOnce()
+    expect(exit).toHaveBeenCalledWith(1)
+  })
+
+  it('runs the native gate before opening the database', () => {
+    const source = readFileSync(resolve('src/main/index.js'), 'utf8')
+    const ast = parse(source, { sourceType: 'module' })
+    const declaration = ast.program.body
+      .filter((node) => node.type === 'VariableDeclaration')
+      .flatMap((node) => node.declarations)
+      .find((node) => node.id.name === 'applicationBootstrap')
+    const start = declaration.init.arguments[0].properties.find((node) => node.key.name === 'start')
+    const statements = start.value.body.body
+    const gateIndex = statements.findIndex(
+      (node) =>
+        node.type === 'IfStatement' &&
+        node.test.type === 'UnaryExpression' &&
+        node.test.operator === '!' &&
+        node.test.argument.callee?.name === 'enforceNativeRuntimeCompatibility'
+    )
+    const databaseIndex = statements.findIndex(
+      (node) =>
+        node.type === 'VariableDeclaration' &&
+        node.declarations.some(
+          (item) =>
+            item.init?.type === 'AwaitExpression' &&
+            item.init.argument.callee?.name === 'runStage' &&
+            item.init.argument.arguments[0]?.value === 'database'
+        )
+    )
+    expect(gateIndex).toBeGreaterThanOrEqual(0)
+    expect(databaseIndex).toBeGreaterThan(gateIndex)
+    expect(
+      statements[gateIndex].consequent.body.some((node) => node.type === 'ReturnStatement')
+    ).toBe(true)
+  })
+
+  it('keeps the JavaScript and C++ native ABI constants synchronized', () => {
+    const source = readFileSync(resolve('native_blur/blur_api.cpp'), 'utf8')
+    expect(source).toContain(`constexpr int kNativeAbiVersion = ${NATIVE_ABI_VERSION};`)
+  })
+})

@@ -1,0 +1,86 @@
+/**
+ * API配置
+ * 管理API相关的所有配置项
+ */
+
+// API基础URL配置
+// - 打包模式：使用相对路径 /api（前后端同源，自动适配端口）
+// - 开发模式：可使用绝对路径或相对路径（Vite proxy 会处理）
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+
+// 实时协作WebSocket URL配置
+// 从API_BASE_URL提取基础URL，或使用专用环境变量
+function extractBaseUrl(apiUrl: string): string {
+  try {
+    const url = new URL(apiUrl)
+    return url.origin
+  } catch {
+    // 相对路径时，使用当前页面的 origin
+    return window.location.origin
+  }
+}
+
+function getRealtimeBaseUrl(): string {
+  const apiBase = extractBaseUrl(API_BASE_URL)
+  // 开发模式下前端端口(3000)和后端端口(5000)不同
+  // Socket.IO 需要连接到后端服务器，所以将端口替换为后端端口
+  if (apiBase.includes(':3000')) {
+    return apiBase.replace(':3000', ':5000')
+  }
+  return apiBase
+}
+
+export const REALTIME_BASE_URL = import.meta.env.VITE_REALTIME_URL || getRealtimeBaseUrl()
+
+// API客户端配置（供client.ts使用）
+export const apiConfig = {
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  timeout: 30000
+};
+
+// 请求配置
+export const REQUEST_CONFIG = {
+  // 超时时间（毫秒）
+  TIMEOUT: 30000,
+  
+  // 重试次数
+  RETRY_COUNT: 3,
+  
+  // 重试延迟（毫秒）
+  RETRY_DELAY: 1000,
+  
+  // 请求头
+  HEADERS: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  }
+}
+
+// 认证配置
+export const AUTH_CONFIG = {
+  // Token存储键名
+  TOKEN_KEY: 'access_token',
+  REFRESH_TOKEN_KEY: 'refresh_token',
+  
+  // Token过期前刷新时间（秒）
+  REFRESH_BEFORE_EXPIRY: 300,
+  
+  // 记住登录状态存储键名
+  REMEMBER_KEY: 'remember_me'
+}
+
+// 分页配置
+export const PAGINATION_CONFIG = {
+  DEFAULT_PAGE: 1,
+  DEFAULT_PER_PAGE: 20,
+  MAX_PER_PAGE: 100
+}
+
+// 限流配置
+export const RATE_LIMIT_CONFIG = {
+  // 最大请求数
+  MAX_REQUESTS: 100,
+  
+  // 时间窗口（毫秒）
+  TIME_WINDOW: 60000
+}

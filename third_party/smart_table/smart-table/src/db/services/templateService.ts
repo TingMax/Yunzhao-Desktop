@@ -1,0 +1,673 @@
+import { db } from "../schema";
+import type { Base } from "../schema";
+import type {
+  TableTemplate,
+  TemplateTable,
+  TemplateRecord,
+} from "../../utils/tableTemplates";
+import { generateId } from "../../utils/id";
+import { baseApiService } from "@/services/api/baseApiService";
+import { tableApiService } from "@/services/api/tableApiService";
+import { fieldApiService } from "@/services/api/fieldApiService";
+import { viewApiService } from "@/services/api/viewApiService";
+import { recordApiService } from "@/services/api/recordApiService";
+import { createLinkField } from "@/services/api/linkApiService";
+import { t } from "@/i18n";
+
+export interface CreateTemplateProgress {
+  stage:
+    | "creating_base"
+    | "creating_tables"
+    | "creating_fields"
+    | "creating_views"
+    | "creating_records"
+    | "syncing_to_backend"
+    | "completed";
+  message: string;
+  progress: number; // 0-100
+}
+
+export class TemplateService {
+  // 选项名称到新ID的映射（用于转换样例数据）
+  private optionNameToIdMap: Map<string, Map<string, string>> = new Map();
+
+  async createBaseFromTemplate(
+    template: TableTemplate,
+    onProgress?: (progress: CreateTemplateProgress) => void,
+  ): Promise<Base> {
+    let createdBase: Base | undefined;
+    const progress: CreateTemplateProgress = {
+      stage: "creating_base",
+      message: t("base.creatingBase"),
+      progress: 0,
+    };
+
+    try {
+      // 第一阶段：创建到后端
+      progress.stage = "creating_base";
+      progress.message = t("base.creatingBaseStructure");
+      progress.progress = 10;
+      onProgress?.({ ...progress });
+
+      // 1. 在后端创建 Base
+      const apiBase = await baseApiService.createBase({
+        name: template.name,
+        description: template.description,
+        icon: template.icon,
+        color: template.color,
+      });
+
+      // 2. 同步 Tables（先创建所有表，不创建字段）
+      progress.stage = "creating_tables";
+      progress.message = t("base.creatingDataTables");
+      progress.progress = 30;
+      onProgress?.({ ...progress });
+
+      const tableIdMap = new Map<string, string>();
+
+      // 第一步：创建所有表（不创建默认字段，模板会自行定义字段）
+      for (const templateTable of template.tables) {
+        const apiTable = await tableApiService.createTable(apiBase.id, {
+          name: templateTable.name,
+          description: templateTable.description,
+          create_default_fields: false,
+        });
+        tableIdMap.set(templateTable.id, apiTable.id);
+      }
+
+      // 3. 同步 Fields（创建所有字段，包括关联字段的 linkedTableId 映射）
+      progress.message = t("base.creatingFields");
+      progress.progress = 45;
+      onProgress?.({ ...progress });
+
+      const fieldIdMap = new Map<string, string>();
+
+      for (const templateTable of template.tables) {
+        const actualTableId = tableIdMap.get(templateTable.id)!;
+        await this.syncFieldsToBackend(
+          actualTableId,
+          templateTable,
+          fieldIdMap,
+          tableIdMap,
+        );
+      }
+
+      // 4. 同步 Views
+      progress.stage = "creating_views";
+      progress.message = t("base.creatingViews");
+      progress.progress = 60;
+      onProgress?.({ ...progress });
+
+      for (const templateTable of template.tables) {
+        await this.syncViewsToBackend(
+          tableIdMap.get(templateTable.id)!,
+          templateTable,
+          fieldIdMap,
+        );
+      }
+
+      // 5. 同步 Records
+      progress.stage = "creating_records";
+      progress.message = t("base.importingInitialData");
+      progress.progress = 80;
+      onProgress?.({ ...progress });
+
+      for (const templateTable of template.tables) {
+        await this.syncRecordsToBackend(
+          tableIdMap.get(templateTable.id)!,
+          templateTable,
+          fieldIdMap,
+        );
+      }
+
+      // 所有表记录处理完成后，清空选项映射
+      this.optionNameToIdMap.clear();
+
+      // 去掉保存到 IndexedDB 的代码，只保存到后台数据库
+      // // 第二阶段：保存到 IndexedDB（后端创建成功后）
+      // progress.stage = "syncing_to_backend";
+      // progress.message = "正在保存到本地...";
+      // progress.progress = 90;
+      // onProgress?.({ ...progress });
+
+      // // 保存到 IndexedDB - 使用 put 而不是 add，避免重复
+      // await db.transaction(
+      //   "rw",
+      //   [db.bases, db.tableEntities, db.fields, db.views, db.records],
+      //   async () => {
+      //     // 1. 保存 Base（使用 put 避免重复）
+      const localBase = {
+        id: apiBase.id,
+        name: apiBase.name,
+        description: apiBase.description || "",
+        icon: apiBase.icon || "",
+        color: apiBase.color || "#409EFF",
+        isStarred: apiBase.is_starred || false,
+        createdAt: new Date(apiBase.created_at).getTime(),
+        updatedAt: new Date(apiBase.updated_at).getTime(),
+      };
+      //     await db.bases.put(localBase);
+      createdBase = localBase;
+
+      //     // 2. 保存 Tables 和 Fields
+      //     for (const templateTable of template.tables) {
+      //       const apiTableId = tableIdMap.get(templateTable.id)!;
+      //       await this.saveTableToLocal(
+      //         apiBase.id,
+      //         apiTableId,
+      //         templateTable,
+      //         fieldIdMap,
+      //       );
+      //     }
+
+      //     // 3. 保存 Views
+      //     for (const templateTable of template.tables) {
+      //       const apiTableId = tableIdMap.get(templateTable.id)!;
+      //       await this.saveViewsToLocal(apiTableId, templateTable, fieldIdMap);
+      //     }
+
+      //     // 4. 保存 Records
+      //     for (const templateTable of template.tables) {
+      //       const apiTableId = tableIdMap.get(templateTable.id)!;
+      //       await this.saveRecordsToLocal(
+      //         apiTableId,
+      //         templateTable.records,
+      //         fieldIdMap,
+      //       );
+      //     }
+      //   },
+      // );
+
+      progress.stage = "completed";
+      progress.message = t("base.creationCompleted");
+      progress.progress = 100;
+      onProgress?.({ ...progress });
+
+      if (!createdBase) {
+        throw new Error("Failed to create base from template");
+      }
+
+      return { ...createdBase };
+    } catch (error) {
+      console.error("[templateService] 创建模板失败:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 保存 Table 到 IndexedDB
+   */
+  //@ts-ignore
+  public async saveTableToLocal(
+    baseId: string,
+    tableId: string,
+    templateTable: TemplateTable,
+    fieldIdMap: Map<string, string>,
+  ): Promise<void> {
+    // 先删除已有的 table 和 fields，避免重复
+    const existingTable = await db.tableEntities.get(tableId);
+    if (existingTable) {
+      // 删除该表的所有 fields
+      const existingFieldIds = await db.fields
+        .where("tableId")
+        .equals(tableId)
+        .primaryKeys();
+      if (existingFieldIds.length > 0) {
+        await db.fields.bulkDelete(existingFieldIds);
+      }
+      // 删除 table
+      await db.tableEntities.delete(tableId);
+    }
+
+    const table = {
+      id: tableId,
+      baseId,
+      name: templateTable.name,
+      description: templateTable.description || "",
+      primaryFieldId:
+        fieldIdMap.get(
+          templateTable.fields.find((f) => f.isPrimary)?.id || "",
+        ) || "",
+      recordCount: 0,
+      order: templateTable.order || 0,
+      isStarred: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await db.tableEntities.add(table);
+
+    // 保存 Fields
+    for (const templateField of templateTable.fields) {
+      const fieldId = fieldIdMap.get(templateField.id);
+      if (!fieldId) continue;
+
+      const field = {
+        id: fieldId,
+        tableId: table.id,
+        name: templateField.name,
+        type: templateField.type,
+        options: templateField.options as Record<string, unknown> | undefined,
+        isPrimary: templateField.isPrimary,
+        isSystem: false,
+        isRequired: templateField.isRequired,
+        isVisible: templateField.isVisible,
+        defaultValue: templateField.defaultValue,
+        description: templateField.description,
+        order: templateField.order,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await db.fields.add(field);
+    }
+  }
+
+  /**
+   * 保存 Views 到 IndexedDB
+   */
+  //@ts-ignore
+  public async saveViewsToLocal(
+    tableId: string,
+    templateTable: TemplateTable,
+    fieldIdMap: Map<string, string>,
+  ): Promise<void> {
+    // 先删除该表的所有已有 views，避免重复
+    const existingViewIds = await db.views
+      .where("tableId")
+      .equals(tableId)
+      .primaryKeys();
+
+    if (existingViewIds.length > 0) {
+      await db.views.bulkDelete(existingViewIds);
+    }
+
+    // 然后保存新 views
+    for (const templateView of templateTable.views) {
+      const view = {
+        id: generateId(),
+        tableId: tableId,
+        name: templateView.name,
+        type: templateView.type,
+        config: templateView.config,
+        filters: templateView.filters,
+        sorts: templateView.sorts,
+        groupBys: templateView.groupBys,
+        hiddenFields: templateView.hiddenFields.map(
+          (oldId) => fieldIdMap.get(oldId) || oldId,
+        ),
+        frozenFields: templateView.frozenFields.map(
+          (oldId) => fieldIdMap.get(oldId) || oldId,
+        ),
+        rowHeight: templateView.rowHeight,
+        isDefault: templateView.isDefault,
+        order: templateView.order,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      if (
+        view.config &&
+        (view.type === "gantt" ||
+          view.type === "kanban" ||
+          view.type === "calendar")
+      ) {
+        const config = view.config as Record<string, unknown>;
+        if (
+          config.startDateFieldId &&
+          fieldIdMap.has(config.startDateFieldId as string)
+        ) {
+          config.startDateFieldId = fieldIdMap.get(
+            config.startDateFieldId as string,
+          );
+        }
+        if (
+          config.endDateFieldId &&
+          fieldIdMap.has(config.endDateFieldId as string)
+        ) {
+          config.endDateFieldId = fieldIdMap.get(
+            config.endDateFieldId as string,
+          );
+        }
+        if (
+          config.progressFieldId &&
+          fieldIdMap.has(config.progressFieldId as string)
+        ) {
+          config.progressFieldId = fieldIdMap.get(
+            config.progressFieldId as string,
+          );
+        }
+        if (
+          config.groupFieldId &&
+          fieldIdMap.has(config.groupFieldId as string)
+        ) {
+          config.groupFieldId = fieldIdMap.get(config.groupFieldId as string);
+        }
+        if (
+          config.dateFieldId &&
+          fieldIdMap.has(config.dateFieldId as string)
+        ) {
+          config.dateFieldId = fieldIdMap.get(config.dateFieldId as string);
+        }
+      }
+
+      await db.views.add(view as unknown as import("../schema").ViewEntity);
+    }
+  }
+
+  /**
+   * 保存 Records 到 IndexedDB
+   */
+  //@ts-ignore
+  public async saveRecordsToLocal(
+    tableId: string,
+    records: TemplateRecord[],
+    fieldIdMap: Map<string, string>,
+  ): Promise<void> {
+    // 先删除该表的所有已有记录，避免重复
+    const existingRecordIds = await db.records
+      .where("tableId")
+      .equals(tableId)
+      .primaryKeys();
+
+    if (existingRecordIds.length > 0) {
+      await db.records.bulkDelete(existingRecordIds);
+    }
+
+    // 然后保存新记录
+    for (const templateRecord of records) {
+      const newValues: Record<string, unknown> = {};
+      for (const [oldFieldId, value] of Object.entries(templateRecord.values)) {
+        const newFieldId = fieldIdMap.get(oldFieldId);
+        if (newFieldId) {
+          newValues[newFieldId] = value;
+        }
+      }
+
+      const localRecord = {
+        id: generateId(),
+        tableId,
+        values: newValues as Record<string, import("../../types").CellValue>,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        createdBy: undefined,
+        updatedBy: undefined,
+      };
+
+      await db.records.add(
+        localRecord as unknown as import("../schema").RecordEntity,
+      );
+    }
+  }
+
+  /**
+   * 同步数据到后端（已废弃，现在直接在 createBaseFromTemplate 中实现）
+   * @deprecated
+   */
+  //@ts-ignore
+  public async syncToBackend(
+    _template: TableTemplate,
+    _localBase: Base,
+  ): Promise<void> {
+    // 此方法已不再使用，保留仅为了兼容性
+    console.warn("[templateService] syncToBackend 方法已废弃");
+  }
+
+  private async syncFieldsToBackend(
+    tableId: string,
+    templateTable: TemplateTable,
+    fieldIdMap: Map<string, string>,
+    tableIdMap: Map<string, string>,
+  ): Promise<void> {
+    // 创建所有字段（包括主字段），并映射类型
+    for (const templateField of templateTable.fields) {
+      // 映射前端类型到后端类型
+      const fieldTypeMap: Record<string, string> = {
+        text: "single_line_text",
+        member: "collaborator",
+        progress: "number",
+      };
+
+      const backendType =
+        fieldTypeMap[templateField.type] || templateField.type;
+
+      // 转换选项格式：前端使用 options.options，后端期望 options.choices
+      let backendOptions = templateField.options;
+      if (
+        backendOptions &&
+        (backendType === "single_select" || backendType === "multi_select")
+      ) {
+        const frontendOptions = (backendOptions as any).options;
+        if (Array.isArray(frontendOptions)) {
+          // 建立选项名称到新ID的映射（用于转换样例数据）
+          const nameToIdMap = new Map<string, string>();
+
+          const mappedOptions = frontendOptions.map((opt: any) => {
+            // 使用选项名称作为新的 ID（确保 id 和 name 一致）
+            const newId = opt.name;
+            // 建立映射：原始名称 → 新 ID
+            nameToIdMap.set(opt.name, newId);
+            return {
+              id: newId,
+              name: opt.name,
+              color: opt.color,
+            };
+          });
+
+          // 保存该字段的选项映射（使用模板字段 ID 作为 key）
+          this.optionNameToIdMap.set(templateField.id, nameToIdMap);
+
+          // ✅ 关键修复：后端期望 'choices' 键，不是 'options'
+          backendOptions = {
+            choices: mappedOptions,
+          } as any;
+
+          console.log(`[TemplateService] 字段 "${templateField.name}" 选项处理:`);
+          console.log(`  - 原始选项:`, JSON.stringify(frontendOptions, null, 2));
+          console.log(`  - 映射后选项:`, JSON.stringify(mappedOptions, null, 2));
+          console.log(`  - 发送后端格式:`, JSON.stringify(backendOptions, null, 2));
+          console.log(`  - 名称→ID映射:`, Object.fromEntries(nameToIdMap));
+        }
+      }
+
+      // 处理关联字段 - 使用专门的 link 接口
+      if (backendType === "link" && backendOptions) {
+        const options = backendOptions as Record<string, unknown>;
+        const linkedTableId = options.linkedTableId as string;
+
+        // 映射 linkedTableId 到实际表ID
+        let targetTableId = linkedTableId;
+        if (linkedTableId && tableIdMap.has(linkedTableId)) {
+          targetTableId = tableIdMap.get(linkedTableId)!;
+        }
+
+        // 使用 createLinkField 接口创建关联字段
+        const linkResult = await createLinkField({
+          table_id: tableId,
+          name: templateField.name,
+          target_table_id: targetTableId,
+          relationship_type: (options.relationshipType as "one_to_one" | "one_to_many") || "many_to_one",
+          bidirectional: options.bidirectional !== false, // 默认双向
+        });
+
+        // 保存字段ID映射
+        fieldIdMap.set(templateField.id, linkResult.field.id as string);
+        continue; // 跳过后续的普通字段创建
+      }
+
+      const apiField = await fieldApiService.createField(tableId, {
+        name: templateField.name,
+        type: backendType as any,
+        options: backendOptions as unknown as Record<string, unknown>,
+        is_primary: templateField.isPrimary,
+        is_required: templateField.isRequired,
+        // 索引列（主键字段）设置默认描述
+        description: templateField.isPrimary
+          ? (templateField.description || '索引列：用来标识每条记录。不能被删除、移动或隐藏。')
+          : templateField.description,
+      });
+
+      // 🎯 关键修复：使用后端返回的真实选项ID更新映射！
+      if (
+        (backendType === "single_select" || backendType === "multi_select") &&
+        apiField.options
+      ) {
+        const returnedChoices = (apiField.options as any).choices;
+        if (Array.isArray(returnedChoices)) {
+          // 从后端返回的数据中提取真实的选项ID
+          const realOptionMap = new Map<string, string>();
+          returnedChoices.forEach((choice: any) => {
+            if (choice.name && choice.id) {
+              realOptionMap.set(choice.name, choice.id);  // 名称 → 真实ID
+            }
+          });
+
+          // 用真实的映射覆盖之前建立的映射
+          if (realOptionMap.size > 0) {
+            this.optionNameToIdMap.set(templateField.id, realOptionMap);
+            console.log(`[TemplateService] ✅ 更新字段 "${templateField.name}" 的真实选项映射:`);
+            console.log(`  - 后端返回的choices:`, JSON.stringify(returnedChoices, null, 2));
+            console.log(`  - 真实映射(名称→ID):`, Object.fromEntries(realOptionMap));
+          }
+        }
+      }
+
+      // 📝 诊断日志：打印后端返回的实际字段数据
+      console.log(`[TemplateService] 后端返回字段 "${templateField.name}":`);
+      console.log(`  - 字段 ID: ${apiField.id}`);
+      console.log(`  - 实际 options:`, JSON.stringify(apiField.options, null, 2));
+
+      fieldIdMap.set(templateField.id, apiField.id);
+    }
+  }
+
+  private async syncViewsToBackend(
+    tableId: string,
+    templateTable: TemplateTable,
+    fieldIdMap: Map<string, string>,
+  ): Promise<void> {
+    for (const templateView of templateTable.views) {
+      // 处理视图配置中的字段ID映射
+      const rawConfig = (templateView.config || {}) as Record<string, unknown>;
+      const config = this.mapConfigFieldIds(rawConfig, fieldIdMap);
+
+      // 传递完整的视图字段参数
+      const viewData: any = {
+        name: templateView.name,
+        type: templateView.type,
+        config: config,
+        filters: templateView.filters || [],
+        sorts: templateView.sorts || [],
+        group_bys: templateView.groupBys || [], // 使用下划线格式
+        description: templateView.description || "",
+        hidden_fields: templateView.hiddenFields.map(
+          (oldId) => fieldIdMap.get(oldId) || oldId,
+        ),
+        frozen_fields: templateView.frozenFields.map(
+          (oldId) => fieldIdMap.get(oldId) || oldId,
+        ),
+        row_height: templateView.rowHeight || "medium",
+        is_default: templateView.isDefault || false,
+        field_widths: templateView.fieldWidths || {},
+        order: templateView.order || 0,
+      };
+
+      await viewApiService.createView(tableId, viewData);
+    }
+  }
+
+  /**
+   * 映射视图配置中的字段ID
+   */
+  private mapConfigFieldIds(
+    config: Record<string, unknown>,
+    fieldIdMap: Map<string, string>,
+  ): Record<string, unknown> {
+    const mappedConfig: Record<string, unknown> = {};
+    
+    for (const [key, value] of Object.entries(config)) {
+      // 处理字段ID类型的配置项
+      if (
+        key.endsWith('FieldId') && 
+        typeof value === 'string' && 
+        fieldIdMap.has(value)
+      ) {
+        mappedConfig[key] = fieldIdMap.get(value);
+      } else {
+        mappedConfig[key] = value;
+      }
+    }
+    
+    return mappedConfig;
+  }
+
+  private async syncRecordsToBackend(
+    tableId: string,
+    templateTable: TemplateTable,
+    fieldIdMap: Map<string, string>,
+  ): Promise<void> {
+    // 构建字段ID到字段类型的映射（使用原始字段ID）
+    const fieldTypeMap = new Map<string, string>();
+    for (const field of templateTable.fields) {
+      fieldTypeMap.set(field.id, field.type);
+    }
+
+    // 批量创建记录（每次最多 100 条）
+    const batchSize = 100;
+    for (let i = 0; i < templateTable.records.length; i += batchSize) {
+      const batch = templateTable.records.slice(i, i + batchSize);
+      const recordsData = batch.map((templateRecord) => {
+        const newValues: Record<string, unknown> = {};
+        for (const [oldFieldId, value] of Object.entries(
+          templateRecord.values,
+        )) {
+          const newFieldId = fieldIdMap.get(oldFieldId);
+          if (!newFieldId) {
+            continue;
+          }
+
+          const fieldType = fieldTypeMap.get(oldFieldId);
+          let convertedValue = value;
+
+          // 日期/日期时间字段：将数字时间戳转换为 ISO 8601 UTC 字符串
+          if (
+            (fieldType === 'date' || fieldType === 'date_time') &&
+            typeof value === 'number'
+          ) {
+            convertedValue = new Date(value).toISOString();
+          }
+          // 单选/多选字段：转换选项值
+          else {
+            const optionNameMap = this.optionNameToIdMap.get(oldFieldId);
+            if (optionNameMap) {
+              if (typeof value === 'string' && optionNameMap.has(value)) {
+                convertedValue = optionNameMap.get(value)!;
+                console.log(`[TemplateService] 记录值转换 (单选): "${value}" → "${convertedValue}"`);
+              } else if (Array.isArray(value)) {
+                convertedValue = value
+                  .filter((v: unknown) => typeof v === 'string')
+                  .map((v: string) => optionNameMap.get(v) || v);
+                console.log(`[TemplateService] 记录值转换 (多选):`, value, '→', convertedValue);
+              }
+            }
+          }
+
+          newValues[newFieldId] = convertedValue;
+        }
+
+        // 📝 诊断日志：打印每条记录的完整转换结果
+        console.log(`[TemplateService] 记录转换完成:`);
+        console.log(`  - 原始值:`, templateRecord.values);
+        console.log(`  - 转换后:`, newValues);
+
+        return { values: newValues };
+      });
+
+      console.log(`[TemplateService] 准备批量插入 ${recordsData.length} 条记录...`);
+      await recordApiService.batchCreateRecords(tableId, recordsData);
+      console.log(`[TemplateService] ✅ 记录插入完成`);
+    }
+  }
+}
+
+export const templateService = new TemplateService();

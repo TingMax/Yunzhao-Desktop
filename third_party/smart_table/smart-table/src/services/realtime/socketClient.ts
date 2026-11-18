@@ -1,0 +1,216 @@
+import type { Socket } from 'socket.io-client'
+import type { RealtimeEventMap } from './eventTypes'
+import { realtimeEventEmitter } from './eventEmitter'
+
+export interface RealtimeSocketClient {
+  connect(): void
+  disconnect(): void
+  emit<E extends keyof RealtimeEventMap>(event: E, ...args: unknown[]): void
+  on<E extends keyof RealtimeEventMap>(event: E, handler: RealtimeEventMap[E]): void
+  off<E extends keyof RealtimeEventMap>(event: E, handler: RealtimeEventMap[E]): void
+  isConnected(): boolean
+}
+
+const INITIAL_RECONNECT_DELAY = 1000
+const MAX_RECONNECT_DELAY = 30000
+
+class NullSocketClient implements RealtimeSocketClient {
+  connect(): void {}
+  disconnect(): void {}
+  emit(): void {}
+  on(): void {}
+  off(): void {}
+  isConnected(): boolean {
+    return false
+  }
+}
+
+class SocketClientImpl implements RealtimeSocketClient {
+  private socket: Socket | null = null
+  private serverUrl: string
+  private token: string
+  private reconnectAttempts = 0
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private connected = false
+  private destroyed = false
+
+  constructor(serverUrl: string, token: string) {
+    this.serverUrl = serverUrl
+    this.token = token
+  }
+
+  async connect(): Promise<void> {
+    if (this.socket || this.destroyed) return
+
+    const urlWithToken = `${this.serverUrl}?token=${encodeURIComponent(this.token)}`
+    void urlWithToken // 预留用于调试
+    console.log('[SocketIO] Connecting to:', this.serverUrl)
+
+    try {
+      const { io } = await import('socket.io-client')
+      this.socket = io(this.serverUrl, {
+        query: { token: this.token },
+        auth: { token: this.token },
+        transports: ['websocket', 'polling'],
+        reconnection: false,
+      })
+
+      this.setupEventHandlers()
+    } catch (_e) {
+      console.error('[SocketIO] Failed to create socket:', _e)
+      this.scheduleReconnect()
+    }
+  }
+
+  private setupEventHandlers(): void {
+    if (!this.socket) return
+
+    this.socket.on('connect', () => {
+      console.log('[SocketIO] Connected successfully')
+      this.connected = true
+      this.reconnectAttempts = 0
+      console.log('[SocketIO] Emitting connect event to realtimeEventEmitter')
+      realtimeEventEmitter.emit('connect')
+    })
+
+    this.socket.on('connect_ack', (data: unknown) => {
+      console.log('[SocketIO] Server acknowledged connection:', data)
+    })
+
+    this.socket.on('disconnect', (reason: string) => {
+      console.log('[SocketIO] Disconnected:', reason)
+      this.connected = false
+      realtimeEventEmitter.emit('disconnect', reason)
+      if (!this.destroyed) {
+        this.scheduleReconnect()
+      }
+    })
+
+    this.socket.on('connect_error', (error: Error) => {
+      console.error('[SocketIO] Connection error:', error)
+      this.connected = false
+      if (!this.destroyed) {
+        this.scheduleReconnect()
+      }
+    })
+
+    this.socket.on('error', (error: Error) => {
+      console.error('[SocketIO] Error:', error)
+    })
+
+    const serverEvents: (keyof RealtimeEventMap)[] = [
+      'presence:user_joined',
+      'presence:user_left',
+      'presence:view_changed',
+      'presence:cell_selected',
+      'lock:acquired',
+      'lock:released',
+      'lock_result',
+      'data:record_created',
+      'data:record_updated',
+      'data:record_deleted',
+      'data:field_created',
+      'data:field_updated',
+      'data:field_deleted',
+      'data:view_updated',
+      'data:table_created',
+      'data:table_updated',
+      'data:table_deleted',
+    ]
+
+    for (const event of serverEvents) {
+      this.socket.on(event as string, (data: unknown) => {
+        console.log(`[SocketIO] Received event: ${event}`, JSON.stringify(data))
+        realtimeEventEmitter.emit(event, data as never)
+      })
+    }
+
+    this.socket.on('room:joined', (data: unknown) => {
+      console.log('[SocketIO] Room joined:', data)
+      if (data) {
+        realtimeEventEmitter.emit('room:joined', data as never)
+      }
+    })
+  }
+
+  private scheduleReconnect(): void {
+    if (this.destroyed) return
+    if (this.reconnectTimer) return
+
+    const delay = Math.min(
+      INITIAL_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts),
+      MAX_RECONNECT_DELAY
+    )
+
+    this.reconnectAttempts++
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.attemptReconnect()
+    }, delay)
+  }
+
+  private async attemptReconnect(): Promise<void> {
+    if (this.destroyed || this.connected) return
+
+    if (this.socket) {
+      this.socket.removeAllListeners()
+      this.socket.disconnect()
+      this.socket = null
+    }
+
+    await this.connect()
+  }
+
+  disconnect(): void {
+    this.destroyed = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    if (this.socket) {
+      this.socket.removeAllListeners()
+      this.socket.disconnect()
+      this.socket = null
+    }
+    this.connected = false
+  }
+
+  emit<E extends keyof RealtimeEventMap>(event: E, ...args: unknown[]): void {
+    console.log(`[SocketIO] emit called: ${event}, connected: ${this.connected}, hasSocket: ${!!this.socket}`)
+    if (this.socket && this.connected) {
+      this.socket.emit(event as string, ...args)
+    } else {
+      console.warn(`[SocketIO] Cannot emit ${event}: not connected`)
+    }
+  }
+
+  on<E extends keyof RealtimeEventMap>(event: E, handler: RealtimeEventMap[E]): void {
+    realtimeEventEmitter.on(event, handler as never)
+  }
+
+  off<E extends keyof RealtimeEventMap>(event: E, handler: RealtimeEventMap[E]): void {
+    realtimeEventEmitter.off(event, handler as never)
+  }
+
+  isConnected(): boolean {
+    return this.connected
+  }
+}
+
+export async function createSocketClient(
+  serverUrl: string,
+  token: string
+): Promise<RealtimeSocketClient> {
+  if (!serverUrl || !token) {
+    return new NullSocketClient()
+  }
+
+  try {
+    await import('socket.io-client')
+    const client = new SocketClientImpl(serverUrl, token)
+    return client
+  } catch (_e) {
+    return new NullSocketClient()
+  }
+}

@@ -1,0 +1,1039 @@
+import { measureSyncPerformance } from '../logging/operation-performance.js'
+/**
+ * db-notes.js — 待办实例、三状态流转与列表摘要查询
+ *
+ * 状态模型：initialized → in_progress ⇄ completed
+ */
+import { getDb } from './db-connection.js'
+import { enqueueReminder, getPendingReminder } from './db-reminders.js'
+import { normalizeReminderChannels } from '../../shared/reminder-rules.js'
+import { createHash } from 'node:crypto'
+import { NOTE_DURATION_KINDS } from '../../shared/calendar/calendar-date-rules.js'
+import { normalizeAssignedTagIds } from '../../shared/tag-rules.js'
+import {
+  resolveNoteCreateSchedule,
+  resolveNoteDraftSchedule
+} from '../../shared/note-scheduling-rules.js'
+import {
+  applyNoteTextColorRange,
+  normalizeNoteTextColorRanges,
+  reconcileNoteTextColorRanges,
+  serializeNoteTextColorRanges
+} from '../../shared/note-text-color-rules.js'
+
+const now = () => Date.now()
+export const MIN_NOTE_DURATION_DAYS = 1
+export const MAX_NOTE_DURATION_DAYS = 365
+const MAX_QUERY_PAGE_SIZE = 100
+const TRANSITIONS = {
+  initialized: new Set(['in_progress']),
+  in_progress: new Set(['completed']),
+  completed: new Set(['in_progress'])
+}
+
+/** 保留正文原样，仅拒绝全空白内容。 */
+export function normalizeRequiredNoteContent(value) {
+  const content = String(value ?? '')
+  if (!content.trim()) throw new Error('请输入待办内容')
+  return content
+}
+
+export function normalizeNoteDurationDays(value = MIN_NOTE_DURATION_DAYS) {
+  const durationDays = Number(value)
+  if (
+    !Number.isInteger(durationDays) ||
+    durationDays < MIN_NOTE_DURATION_DAYS ||
+    durationDays > MAX_NOTE_DURATION_DAYS
+  ) {
+    throw new Error(`持续天数必须是 ${MIN_NOTE_DURATION_DAYS}~${MAX_NOTE_DURATION_DAYS} 之间的整数`)
+  }
+  return durationDays
+}
+
+export function normalizeNoteDuration({ durationKind, durationDays } = {}) {
+  const normalizedDays = normalizeNoteDurationDays(durationDays ?? MIN_NOTE_DURATION_DAYS)
+  if (durationKind === undefined || durationKind === null || durationKind === '') {
+    return {
+      durationKind:
+        normalizedDays > 1 ? NOTE_DURATION_KINDS.FIXED_DAYS : NOTE_DURATION_KINDS.SINGLE_DAY,
+      durationDays: normalizedDays
+    }
+  }
+  if (!Object.values(NOTE_DURATION_KINDS).includes(durationKind)) {
+    throw new Error('持续方式无效')
+  }
+  if (durationKind === NOTE_DURATION_KINDS.FIXED_DAYS) {
+    if (normalizedDays < 2) throw new Error('指定天数必须是 2~365 之间的整数')
+    return { durationKind, durationDays: normalizedDays }
+  }
+  return { durationKind, durationDays: MIN_NOTE_DURATION_DAYS }
+}
+
+/**
+ * 合并持续方式的部分更新。
+ *
+ * 旧调用方可能只回传 durationDays；当该值没有变化时必须保留原有
+ * duration_kind，避免把“持续到完成”（其持久化天数固定为 1）误降级成单日。
+ */
+export function resolveNoteDurationUpdate(original = {}, fields = {}) {
+  const requestedDurationKind = fields.durationKind ?? fields.duration_kind
+  const requestedDurationDays = fields.durationDays ?? fields.duration_days
+  if (requestedDurationKind === undefined && requestedDurationDays === undefined) {
+    return {
+      durationKind: original.duration_kind,
+      durationDays: original.duration_days
+    }
+  }
+  if (
+    requestedDurationKind === undefined &&
+    Number(requestedDurationDays) === Number(original.duration_days)
+  ) {
+    return {
+      durationKind: original.duration_kind,
+      durationDays: original.duration_days
+    }
+  }
+  return normalizeNoteDuration({
+    durationKind: requestedDurationKind,
+    durationDays:
+      requestedDurationDays ??
+      (requestedDurationKind === NOTE_DURATION_KINDS.FIXED_DAYS
+        ? Math.max(2, Number(original.duration_days) || 2)
+        : 1)
+  })
+}
+
+function normalizeQueryLimit(value, fallback) {
+  const parsed = Math.trunc(Number(value))
+  if (parsed === 0) return 0
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(MAX_QUERY_PAGE_SIZE, Math.max(1, parsed))
+}
+
+function normalizeQueryOffset(value) {
+  const parsed = Math.trunc(Number(value))
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0
+}
+
+// ============================================================
+// CRUD
+// ============================================================
+
+/**
+ * 创建待办。
+ * 创建与编辑使用同一时间基础：未来未开始，当前/历史允许进行中或已完成。
+ * completed 的 finished_at 是实际完成时间；兼容非完成旧记录的状态时间值。
+ */
+export function createNote(
+  {
+    content = '',
+    contentColorRanges = [],
+    remark = '',
+    effectiveAt = null,
+    status: requestedStatus,
+    finishedAt: requestedFinishedAt,
+    durationDays = MIN_NOTE_DURATION_DAYS,
+    durationKind,
+    noteType = 'one_time',
+    notifyEnabled = 0,
+    reminderChannels,
+    isPinned = 0,
+    sortOrder = 0
+  } = {},
+  { allowEmptyContent = false } = {}
+) {
+  const ts = now()
+  const normalizedContent = allowEmptyContent
+    ? String(content ?? '')
+    : normalizeRequiredNoteContent(content)
+  const normalizedDuration = normalizeNoteDuration({ durationKind, durationDays })
+  const normalizedColorRanges = normalizeNoteTextColorRanges(contentColorRanges, normalizedContent)
+  const schedule = resolveNoteCreateSchedule({
+    requestedEffectiveAt: effectiveAt,
+    requestedStatus,
+    requestedFinishedAt,
+    requestedNotifyEnabled: Boolean(normalizeReminderChannels(reminderChannels, notifyEnabled)),
+    currentTime: ts
+  })
+  const { status } = schedule
+  const channels =
+    status === 'initialized' ? normalizeReminderChannels(reminderChannels, notifyEnabled) : 0
+  const pendingNotification = channels ? 1 : 0
+
+  const result = getDb()
+    .prepare(
+      `INSERT INTO notes (
+         note_type, content, content_color_ranges, remark, status, is_pinned, notify_enabled, reminder_channels,
+         effective_at, duration_days, duration_kind, finished_at, sort_order, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      noteType,
+      normalizedContent,
+      JSON.stringify(normalizedColorRanges),
+      String(remark ?? ''),
+      status,
+      isPinned ? 1 : 0,
+      pendingNotification,
+      channels,
+      schedule.effectiveAt,
+      normalizedDuration.durationDays,
+      normalizedDuration.durationKind,
+      schedule.finishedAt,
+      sortOrder,
+      ts,
+      ts
+    )
+
+  return getNoteById(result.lastInsertRowid)
+}
+
+/**
+ * 创建循环模板的一次性快照实例。
+ * 生成实例固定为进行中、关闭待办自身提醒，并在当前事务中复制标签关联。
+ */
+export function createRecurringNoteSnapshot({
+  content = '',
+  effectiveAt,
+  isPinned = 0,
+  tagIds = [],
+  reminderChannels = 0
+} = {}) {
+  const db = getDb()
+  // 循环任务可能读取到旧版本留下的多标签模板；生成新待办时稳定继承第一项。
+  const normalizedTagIds = normalizeAssignedTagIds(tagIds).slice(0, 1)
+  const ts = now()
+  const scheduledAt = Number(effectiveAt)
+  if (!Number.isFinite(scheduledAt) || scheduledAt <= 0) {
+    throw new Error('循环待办缺少有效的计划时间')
+  }
+
+  const result = db
+    .prepare(
+      `INSERT INTO notes (
+         note_type, content, status, is_pinned, notify_enabled, reminder_channels,
+         effective_at, finished_at, sort_order, created_at, updated_at, from_template
+       ) VALUES ('one_time', ?, 'in_progress', ?, 0, ?, ?, ?, 0, ?, ?, 1)`
+    )
+    .run(
+      content,
+      isPinned ? 1 : 0,
+      normalizeReminderChannels(reminderChannels),
+      scheduledAt,
+      ts,
+      ts,
+      ts
+    )
+
+  const noteId = Number(result.lastInsertRowid)
+  const insertTag = db.prepare('INSERT INTO note_tags (note_id, tag_id) VALUES (?, ?)')
+  for (const tagId of normalizedTagIds) insertTag.run(noteId, tagId)
+
+  return getNoteById(noteId)
+}
+
+/**
+ * 更新普通可编辑字段。状态、生效时间、状态变更时间和提醒状态必须走专用业务操作。
+ */
+export function updateNote(id, fields = {}) {
+  const old = getNoteById(id)
+  if (!old) return null
+
+  const ts = now()
+  const requestedContent = fields.content === undefined ? old.content : String(fields.content ?? '')
+  const content = old.attachments.length
+    ? requestedContent
+    : normalizeRequiredNoteContent(requestedContent)
+  const contentColorRanges =
+    content === old.content
+      ? normalizeNoteTextColorRanges(old.content_color_ranges, content)
+      : reconcileNoteTextColorRanges(old.content_color_ranges, old.content, content)
+  const remark = fields.remark === undefined ? old.remark : String(fields.remark ?? '')
+  const duration = resolveNoteDurationUpdate(old, fields)
+  getDb()
+    .prepare(
+      `UPDATE notes SET
+         content = ?, content_color_ranges = ?, remark = ?, is_pinned = ?, duration_days = ?, duration_kind = ?, sort_order = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(
+      content,
+      JSON.stringify(contentColorRanges),
+      remark,
+      fields.is_pinned ?? old.is_pinned,
+      duration.durationDays,
+      duration.durationKind,
+      fields.sort_order ?? old.sort_order,
+      ts,
+      id
+    )
+
+  return getNoteById(id)
+}
+
+export function getNoteById(id) {
+  return measureSyncPerformance('database', 'getNoteById', () => {
+    const note = getDb().prepare('SELECT * FROM notes WHERE id = ? AND is_deleted = 0').get(id)
+    if (!note) return null
+    note.pending_reminder = getPendingReminder(note.id)
+
+    note.content_color_ranges = normalizeNoteTextColorRanges(
+      note.content_color_ranges,
+      note.content
+    )
+
+    note.attachments = getDb()
+      .prepare('SELECT * FROM note_attachments WHERE note_id = ? ORDER BY sort_order')
+      .all(id)
+    note.tags = getDb()
+      .prepare(
+        `SELECT t.* FROM tags t
+         INNER JOIN note_tags nt ON nt.tag_id = t.id
+         WHERE nt.note_id = ?
+         ORDER BY nt.rowid ASC`
+      )
+      .all(id)
+    note.attachment_count = note.attachments.length
+    note.has_text = Boolean(note.content?.trim())
+    note.has_image = note.attachment_count > 0
+
+    // 时间戳可能落在同一毫秒；版本同时覆盖实际字段和关系，供编辑草稿比较。
+    note.editVersion = createHash('sha256')
+      .update(
+        JSON.stringify({
+          content: note.content,
+          contentColorRanges: note.content_color_ranges,
+          remark: note.remark,
+          status: note.status,
+          effectiveAt: note.effective_at,
+          durationDays: note.duration_days,
+          durationKind: note.duration_kind,
+          notifyEnabled: note.notify_enabled,
+          reminderChannels: note.reminder_channels,
+          pendingReminder: note.pending_reminder,
+          isPinned: note.is_pinned,
+          finishedAt: note.finished_at,
+          updatedAt: note.updated_at,
+          tagIds: note.tags.map((tag) => tag.id).sort((a, b) => a - b),
+          attachments: note.attachments
+            .map(({ id, file_path, file_size, sort_order }) => [
+              id,
+              file_path,
+              file_size,
+              sort_order
+            ])
+            .sort((a, b) => a[0] - b[0])
+        })
+      )
+      .digest('hex')
+
+    return note
+  })
+}
+
+/**
+ * 设置或清除一个正文选区的颜色。正文和旧区间均参与冲突校验，避免跨视图静默覆盖。
+ */
+export function updateNoteTextColor(
+  id,
+  { start, end, color = null, expectedContent, expectedColorRanges } = {}
+) {
+  const db = getDb()
+  return db.transaction(() => {
+    const current = getNoteById(id)
+    if (!current) throw new Error('待办不存在或已被删除')
+    if (typeof expectedContent !== 'string' || current.content !== expectedContent) {
+      throw new Error('待办正文已发生变化，请重新选择文字后再设置颜色')
+    }
+    const expected = normalizeNoteTextColorRanges(expectedColorRanges, current.content)
+    if (JSON.stringify(expected) !== JSON.stringify(current.content_color_ranges)) {
+      throw new Error('待办文字颜色已发生变化，请重新选择后再试')
+    }
+
+    const nextRanges = applyNoteTextColorRange(current.content_color_ranges, {
+      content: current.content,
+      start,
+      end,
+      color
+    })
+    db.prepare(
+      `UPDATE notes
+       SET content_color_ranges = ?, updated_at = ?
+       WHERE id = ? AND is_deleted = 0`
+    ).run(serializeNoteTextColorRanges(nextRanges, current.content), now(), id)
+    return getNoteById(id)
+  })()
+}
+
+/** 逻辑删除：保留待办、标签关联和附件文件，物理清理由“清空待办数据”统一执行。 */
+export function deleteNote(id) {
+  const ts = now()
+  const result = getDb()
+    .prepare(
+      `UPDATE notes
+       SET is_deleted = 1, notify_enabled = 0, reminder_channels = 0, updated_at = ?
+       WHERE id = ? AND is_deleted = 0`
+    )
+    .run(ts, id)
+  return result.changes === 1
+}
+
+/** Restore keeps tags/files, disables notifications, and activates overdue scheduled notes. */
+export function restoreNote(id) {
+  const ts = now()
+  const result = getDb()
+    .prepare(
+      `UPDATE notes SET is_deleted = 0, notify_enabled = 0, reminder_channels = 0,
+    status = CASE WHEN status = 'initialized' AND effective_at <= ? THEN 'in_progress' ELSE status END,
+    updated_at = ? WHERE id = ? AND is_deleted = 1`
+    )
+    .run(ts, ts, id)
+  return result.changes === 1 ? getNoteById(id) : null
+}
+
+/** 所有未删除待办总数，不受当前列表筛选条件影响。 */
+export function countActiveNotes() {
+  return getDb().prepare('SELECT COUNT(*) AS total FROM notes WHERE is_deleted = 0').get().total
+}
+
+// ============================================================
+// 状态流转
+// ============================================================
+
+function transitionNote(id, targetStatus, { setEffectiveAtToNow = false } = {}) {
+  const db = getDb()
+  const current = db
+    .prepare('SELECT status, effective_at, finished_at FROM notes WHERE id = ? AND is_deleted = 0')
+    .get(id)
+  if (!current) return null
+
+  if (!TRANSITIONS[current.status]?.has(targetStatus)) {
+    console.warn(`[db-notes] 非法状态流转: ${current.status} → ${targetStatus} (note_id=${id})`)
+    return null
+  }
+
+  const ts = now()
+  const schedule = resolveNoteDraftSchedule({
+    status: current.status,
+    currentEffectiveAt: current.effective_at,
+    currentFinishedAt: current.finished_at,
+    requestedEffectiveAt: setEffectiveAtToNow ? null : undefined,
+    requestedStatus: targetStatus,
+    currentTime: ts
+  })
+  const result = db
+    .prepare(
+      `UPDATE notes
+       SET status = ?, effective_at = ?, notify_enabled = 0, reminder_channels = 0,
+           finished_at = ?, updated_at = ?
+       WHERE id = ? AND status = ? AND is_deleted = 0`
+    )
+    .run(schedule.status, schedule.effectiveAt, schedule.finishedAt, ts, id, current.status)
+
+  return result.changes === 1 ? getNoteById(id) : null
+}
+
+/** initialized → in_progress：手动提前开始时，实际生效时间同步为当前时间。 */
+export function startProgress(id) {
+  return transitionNote(id, 'in_progress', { setEffectiveAtToNow: true })
+}
+
+/** in_progress → completed。 */
+export function completeNote(id) {
+  return transitionNote(id, 'completed')
+}
+
+/** completed → in_progress：恢复原任务，保留原生效时间与持续区间。 */
+export function reopenNote(id) {
+  return transitionNote(id, 'in_progress')
+}
+
+/**
+ * 批量激活到期待办。
+ * 查询、状态切换、提醒清零与 updated_at 更新位于同一个事务。
+ */
+export function activateNotes() {
+  const db = getDb()
+  const ts = now()
+
+  return db.transaction(() => {
+    const due = measureSyncPerformance('database', 'activation.candidates', () =>
+      db
+        .prepare(
+          `SELECT id, content, notify_enabled, reminder_channels, effective_at
+         FROM notes
+         WHERE status = 'initialized' AND is_deleted = 0 AND effective_at <= ?`
+        )
+        .all(ts)
+    )
+
+    if (due.length === 0) return { count: 0, notified: [] }
+
+    for (const note of due) {
+      if (note.reminder_channels) enqueueReminder(note.id, note.effective_at, ts)
+    }
+
+    const result = db
+      .prepare(
+        `UPDATE notes
+         SET status = 'in_progress', notify_enabled = 0,
+             finished_at = ?, updated_at = ?
+         WHERE status = 'initialized' AND is_deleted = 0 AND effective_at <= ?`
+      )
+      .run(ts, ts, ts)
+
+    return {
+      count: result.changes,
+      notified: due
+        .filter((note) => note.notify_enabled === 1)
+        .map(({ id, content }) => ({ id, content }))
+    }
+  })()
+}
+
+// ============================================================
+// 列表 DTO
+// ============================================================
+
+/**
+ * @typedef {Object} NoteListItem
+ * @property {number} id
+ * @property {string} content
+ * @property {Array<{start:number,end:number,text:string,color:string}>} content_color_ranges
+ * @property {string} remark
+ * @property {'initialized'|'in_progress'|'completed'} status
+ * @property {number} is_pinned
+ * @property {number} is_deleted
+ * @property {number} notify_enabled
+ * @property {number} effective_at
+ * @property {number} duration_days
+ * @property {'single_day'|'fixed_days'|'until_completed'} duration_kind
+ * @property {number|null} finished_at
+ * @property {number} sort_order
+ * @property {Array<{id:number,name:string,color:string|null}>} tags
+ * @property {number} attachment_count
+ * @property {boolean} has_text
+ * @property {boolean} has_image
+ */
+
+function escapeLikePattern(value) {
+  return String(value).replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
+}
+
+function buildWhereClause({
+  statuses,
+  tagIds,
+  search,
+  includeDeleted = false,
+  extraWhere = [],
+  extraParams = []
+} = {}) {
+  const where = [...(includeDeleted ? [] : ['n.is_deleted = 0']), ...extraWhere]
+  const params = [...extraParams]
+
+  if (statuses?.length) {
+    where.push(`n.status IN (${statuses.map(() => '?').join(',')})`)
+    params.push(...statuses)
+  }
+
+  if (tagIds?.length) {
+    where.push(`n.id IN (
+      SELECT note_id FROM note_tags
+      WHERE tag_id IN (${tagIds.map(() => '?').join(',')})
+    )`)
+    params.push(...tagIds)
+  }
+
+  if (search?.trim()) {
+    where.push(`n.content LIKE '%' || ? || '%' ESCAPE '\\'`)
+    params.push(escapeLikePattern(search.trim()))
+  }
+
+  return { whereClause: where.length ? `WHERE ${where.join(' AND ')}` : '', params }
+}
+
+/** @returns {NoteListItem[]} */
+export function toNoteListItems(notes) {
+  return measureSyncPerformance('database', 'toNoteListItems', () => {
+    if (!notes?.length) return []
+
+    const db = getDb()
+    const tagsByNote = new Map()
+    const attachmentCounts = new Map()
+    const pendingReminders = new Map()
+    const ids = [...new Set(notes.map((note) => note.id))]
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const batch = ids.slice(offset, offset + 500)
+      const placeholders = batch.map(() => '?').join(',')
+      for (const reminder of db
+        .prepare(
+          `SELECT id, note_id, due_at FROM note_reminders
+        WHERE state = 'scheduled' AND note_id IN (${placeholders})`
+        )
+        .all(...batch)) {
+        pendingReminders.set(reminder.note_id, { id: reminder.id, due_at: reminder.due_at })
+      }
+      const tags = db
+        .prepare(
+          `SELECT nt.note_id, t.id, t.name, t.color FROM note_tags nt
+        INNER JOIN tags t ON t.id = nt.tag_id WHERE nt.note_id IN (${placeholders}) ORDER BY nt.rowid ASC`
+        )
+        .all(...batch)
+      for (const tag of tags) {
+        if (!tagsByNote.has(tag.note_id)) tagsByNote.set(tag.note_id, [])
+        tagsByNote.get(tag.note_id).push({ id: tag.id, name: tag.name, color: tag.color })
+      }
+      const counts = db
+        .prepare(
+          `SELECT note_id, COUNT(*) AS count FROM note_attachments
+        WHERE note_id IN (${placeholders}) GROUP BY note_id`
+        )
+        .all(...batch)
+      for (const row of counts) attachmentCounts.set(row.note_id, row.count)
+    }
+
+    return notes.map((note) => {
+      const attachmentCount = attachmentCounts.get(note.id) || 0
+      return {
+        id: note.id,
+        content: note.content,
+        content_color_ranges: normalizeNoteTextColorRanges(note.content_color_ranges, note.content),
+        remark: note.remark,
+        status: note.status,
+        is_pinned: note.is_pinned,
+        is_deleted: note.is_deleted,
+        notify_enabled: note.notify_enabled,
+        reminder_channels: note.reminder_channels,
+        pending_reminder: pendingReminders.get(note.id) || null,
+        effective_at: note.effective_at,
+        duration_days: note.duration_days,
+        duration_kind: note.duration_kind,
+        finished_at: note.finished_at,
+        sort_order: note.sort_order,
+        created_at: note.created_at,
+        updated_at: note.updated_at,
+        tags: tagsByNote.get(note.id) || [],
+        attachment_count: attachmentCount,
+        has_text: Boolean(note.content?.trim()),
+        has_image: attachmentCount > 0
+      }
+    })
+  })
+}
+
+/**
+ * 查询可能与当前日期范围相交的真实待办。固定天数待办从 candidateFrom 开始筛选；
+ * 进行中的“持续到完成”始终保留，已完成项按完成时间排除与可见范围无交集的历史数据。
+ */
+export function queryCalendarNotes({
+  candidateFrom,
+  visibleStart = candidateFrom,
+  visibleEndExclusive,
+  filter = () => true,
+  hydrate = true
+} = {}) {
+  return measureSyncPerformance('database', 'queryCalendarNotes', () => {
+    const from = Number(candidateFrom)
+    const start = Number(visibleStart)
+    const end = Number(visibleEndExclusive)
+    if (
+      !Number.isFinite(from) ||
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      from > start ||
+      start >= end
+    ) {
+      throw new Error('无效的月历查询范围')
+    }
+    const notes = getDb()
+      .prepare(
+        `SELECT n.* FROM notes n
+         WHERE n.is_deleted = 0 AND n.effective_at < ?
+           AND (
+             n.effective_at >= ?
+             OR (n.duration_kind = 'until_completed' AND n.status = 'in_progress')
+             OR (
+               n.duration_kind = 'until_completed'
+               AND n.status = 'completed'
+               AND n.finished_at >= ?
+             )
+           )
+         ORDER BY n.is_pinned DESC, n.effective_at ASC, n.duration_days DESC, n.id ASC`
+      )
+      .all(end, from, start)
+    const matching = notes.filter(filter)
+    return hydrate ? toNoteListItems(matching) : matching
+  })
+}
+
+// ============================================================
+// 时间线查询
+// ============================================================
+
+// 必须在 LIMIT/OFFSET 前排序，保证完成待办落到整个日期或标签组末尾。
+// 已完成按完成时间升序排列，新完成的待办追加在已有完成项之后。
+const COMPLETED_LAST_ORDER = `
+  (n.status = 'completed') ASC,
+  CASE WHEN n.status = 'completed' THEN n.finished_at END ASC`
+const TIMELINE_NOTE_ORDER = `
+  date(n.effective_at / 1000.0, 'unixepoch', 'localtime') DESC,
+  ${COMPLETED_LAST_ORDER}, n.effective_at DESC, n.created_at DESC, n.id DESC`
+
+export function queryPinnedNotes({ statuses, tagIds, search } = {}) {
+  return measureSyncPerformance('database', 'queryPinnedNotes', () => {
+    const db = getDb()
+    const { whereClause, params } = buildWhereClause({
+      statuses,
+      tagIds,
+      search,
+      extraWhere: ['n.is_pinned = 1', "n.status != 'completed'"]
+    })
+    const notes = db
+      .prepare(
+        `SELECT n.* FROM notes n ${whereClause} ORDER BY n.effective_at DESC, n.created_at DESC`
+      )
+      .all(...params)
+    return toNoteListItems(notes)
+  })
+}
+
+export function queryRecentNotes({ statuses, tagIds, search, cutoffTime } = {}) {
+  return measureSyncPerformance('database', 'queryRecentNotes', () => {
+    const db = getDb()
+    const { whereClause, params } = buildWhereClause({
+      statuses,
+      tagIds,
+      search,
+      extraWhere: ["(n.is_pinned = 0 OR n.status = 'completed')", 'n.effective_at > ?'],
+      extraParams: [cutoffTime]
+    })
+    const notes = db
+      .prepare(`SELECT n.* FROM notes n ${whereClause} ORDER BY ${TIMELINE_NOTE_ORDER}`)
+      .all(...params)
+    return toNoteListItems(notes)
+  })
+}
+
+/** 灵动岛只展示最近进入进行中的一条真实待办。 */
+export function queryCompactNote() {
+  return measureSyncPerformance('database', 'queryCompactNote', () => {
+    const note = getDb()
+      .prepare(
+        `SELECT n.* FROM notes n
+         WHERE n.is_deleted = 0 AND n.status = 'in_progress'
+         ORDER BY n.effective_at DESC, n.id DESC
+         LIMIT 1`
+      )
+      .get()
+    return note ? toNoteListItems([note])[0] : null
+  })
+}
+
+export function queryEarlierNotes({
+  statuses,
+  tagIds,
+  search,
+  cutoffTime,
+  limit = 10,
+  offset = 0
+} = {}) {
+  return measureSyncPerformance('database', 'queryEarlierNotes', () => {
+    const db = getDb()
+    const safeLimit = normalizeQueryLimit(limit, 10)
+    const safeOffset = normalizeQueryOffset(offset)
+    const { whereClause, params } = buildWhereClause({
+      statuses,
+      tagIds,
+      search,
+      extraWhere: ["(n.is_pinned = 0 OR n.status = 'completed')", 'n.effective_at <= ?'],
+      extraParams: [cutoffTime]
+    })
+    const { total } = db
+      .prepare(`SELECT COUNT(*) AS total FROM notes n ${whereClause}`)
+      .get(...params)
+    const notes = db
+      .prepare(
+        `SELECT n.* FROM notes n ${whereClause}
+         ORDER BY ${TIMELINE_NOTE_ORDER} LIMIT ? OFFSET ?`
+      )
+      .all(...params, safeLimit, safeOffset)
+    return { notes: toNoteListItems(notes), total }
+  })
+}
+
+// ============================================================
+// 自定义排序查询
+// ============================================================
+
+export function queryCustomPinned({ statuses, tagIds, search } = {}) {
+  return measureSyncPerformance('database', 'queryCustomPinned', () => {
+    const db = getDb()
+    const { whereClause, params } = buildWhereClause({
+      statuses,
+      tagIds,
+      search,
+      extraWhere: ['n.is_pinned = 1']
+    })
+    const notes = db
+      .prepare(
+        `SELECT n.* FROM notes n ${whereClause} ORDER BY n.sort_order ASC, n.created_at DESC`
+      )
+      .all(...params)
+    return toNoteListItems(notes)
+  })
+}
+
+export function queryCustomNormal({ statuses, tagIds, search, limit = 10, offset = 0 } = {}) {
+  return measureSyncPerformance('database', 'queryCustomNormal', () => {
+    const db = getDb()
+    const safeLimit = normalizeQueryLimit(limit, 10)
+    const safeOffset = normalizeQueryOffset(offset)
+    const { whereClause, params } = buildWhereClause({
+      statuses,
+      tagIds,
+      search,
+      extraWhere: ['n.is_pinned = 0']
+    })
+    const { total } = db
+      .prepare(`SELECT COUNT(*) AS total FROM notes n ${whereClause}`)
+      .get(...params)
+    const notes = db
+      .prepare(
+        `SELECT n.* FROM notes n ${whereClause}
+         ORDER BY n.sort_order ASC, n.created_at DESC LIMIT ? OFFSET ?`
+      )
+      .all(...params, safeLimit, safeOffset)
+    return { notes: toNoteListItems(notes), total }
+  })
+}
+
+// ============================================================
+// 标签分组查询
+// ============================================================
+
+/**
+ * 查询标签分组概览。标签筛选只决定展示哪些真实标签组；未筛选标签时，
+ * 额外返回一个“未分类”合成组。total 始终受状态条件约束。
+ */
+export function queryTagGroups({ statuses, tagIds } = {}) {
+  return measureSyncPerformance('database', 'queryTagGroups', () => {
+    const db = getDb()
+    const selectedTagIds = Array.isArray(tagIds)
+      ? [...new Set(tagIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))]
+      : []
+    const statusList = Array.isArray(statuses) ? statuses : []
+    const statusJoin = statusList.length
+      ? `AND n.status IN (${statusList.map(() => '?').join(',')})`
+      : ''
+    const tagWhere = selectedTagIds.length
+      ? `WHERE t.id IN (${selectedTagIds.map(() => '?').join(',')})`
+      : ''
+
+    const groups = db
+      .prepare(
+        `SELECT t.id, t.name, t.color, t.created_at, t.sort_order, COUNT(n.id) AS total
+         FROM tags t
+         LEFT JOIN note_tags nt ON nt.tag_id = t.id
+         LEFT JOIN notes n ON n.id = nt.note_id AND n.is_deleted = 0 ${statusJoin}
+         ${tagWhere}
+         GROUP BY t.id, t.name, t.color, t.created_at, t.sort_order
+         ORDER BY t.sort_order ASC, t.id ASC`
+      )
+      .all(...statusList, ...selectedTagIds)
+      .map((group) => ({
+        key: `tag:${group.id}`,
+        id: group.id,
+        name: group.name,
+        color: group.color,
+        sort_order: group.sort_order,
+        total: Number(group.total) || 0,
+        untagged: false
+      }))
+
+    if (selectedTagIds.length > 0) return groups
+
+    const { whereClause, params } = buildWhereClause({
+      statuses: statusList,
+      extraWhere: ['NOT EXISTS (SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id)']
+    })
+    const untaggedTotal = db
+      .prepare(`SELECT COUNT(*) AS total FROM notes n ${whereClause}`)
+      .get(...params).total
+    groups.push({
+      key: 'untagged',
+      id: null,
+      name: '未分类',
+      color: null,
+      total: Number(untaggedTotal) || 0,
+      untagged: true
+    })
+    return groups
+  })
+}
+
+/**
+ * 分页查询单个标签组。tagId 为 null 时查询“未分类”；未完成项按生效时间
+ * 从未来到过去排列，已完成项按完成时间排在组末尾，id 保证顺序稳定。
+ */
+export function queryTagGroupNotes({ tagId = null, statuses, limit = 10, offset = 0 } = {}) {
+  return measureSyncPerformance('database', 'queryTagGroupNotes', () => {
+    const db = getDb()
+    const untagged = tagId === null
+    const normalizedTagId = untagged ? null : Number(tagId)
+    if (!untagged && (!Number.isInteger(normalizedTagId) || normalizedTagId <= 0)) {
+      throw new Error('无效的标签 ID')
+    }
+
+    const extraWhere = untagged
+      ? ['NOT EXISTS (SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id)']
+      : ['EXISTS (SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?)']
+    const { whereClause, params } = buildWhereClause({
+      statuses,
+      extraWhere,
+      extraParams: untagged ? [] : [normalizedTagId]
+    })
+    const safeLimit = Math.min(100, Math.max(1, Math.trunc(Number(limit)) || 10))
+    const safeOffset = Math.max(0, Math.trunc(Number(offset)) || 0)
+    const { total } = db
+      .prepare(`SELECT COUNT(*) AS total FROM notes n ${whereClause}`)
+      .get(...params)
+    const notes = db
+      .prepare(
+        `SELECT n.* FROM notes n ${whereClause}
+         ORDER BY ${COMPLETED_LAST_ORDER}, n.effective_at DESC, n.id DESC LIMIT ? OFFSET ?`
+      )
+      .all(...params, safeLimit, safeOffset)
+
+    return { notes: toNoteListItems(notes), total: Number(total) || 0 }
+  })
+}
+
+// ============================================================
+// 独立搜索工作区
+// ============================================================
+
+/**
+ * 搜索全部待办。搜索拥有独立筛选状态，不继承首页列表条件。
+ * 多标签筛选采用 OR 语义；分页参数在主进程内收敛，避免异常大查询。
+ */
+export function searchNotes({
+  search,
+  statuses,
+  tagIds,
+  timeFrom,
+  timeTo,
+  onlyPinned = false,
+  hasAttachments = false,
+  includeDeleted = true,
+  sort = 'effective',
+  limit = 15,
+  offset = 0
+} = {}) {
+  return measureSyncPerformance('database', 'searchNotes', () => {
+    const db = getDb()
+    const extraWhere = []
+    const extraParams = []
+    const parsedFrom = Number(timeFrom)
+    const parsedTo = Number(timeTo)
+
+    if (Number.isFinite(parsedFrom) && parsedFrom > 0) {
+      extraWhere.push('n.effective_at >= ?')
+      extraParams.push(parsedFrom)
+    }
+    if (Number.isFinite(parsedTo) && parsedTo > 0) {
+      extraWhere.push('n.effective_at <= ?')
+      extraParams.push(parsedTo)
+    }
+    if (onlyPinned) extraWhere.push('n.is_pinned = 1')
+    if (hasAttachments) {
+      extraWhere.push('EXISTS (SELECT 1 FROM note_attachments a WHERE a.note_id = n.id)')
+    }
+
+    const { whereClause, params } = buildWhereClause({
+      search,
+      statuses,
+      tagIds,
+      includeDeleted,
+      extraWhere,
+      extraParams
+    })
+    const safeLimit = Math.min(100, Math.max(1, Math.trunc(Number(limit)) || 15))
+    const safeOffset = Math.max(0, Math.trunc(Number(offset)) || 0)
+    const orderBy =
+      sort === 'updated' ? 'n.updated_at DESC, n.id DESC' : 'n.effective_at DESC, n.created_at DESC'
+    const { total } = db
+      .prepare(`SELECT COUNT(*) AS total FROM notes n ${whereClause}`)
+      .get(...params)
+    const notes = db
+      .prepare(`SELECT n.* FROM notes n ${whereClause} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
+      .all(...params, safeLimit, safeOffset)
+
+    return { notes: toNoteListItems(notes), total }
+  })
+}
+
+export function reorderCustomSortOrder() {
+  const db = getDb()
+  const groups = db
+    .prepare(
+      `SELECT is_pinned, COUNT(*) AS total, COUNT(DISTINCT sort_order) AS distinct_total,
+              SUM(CASE WHEN sort_order <= 0 THEN 1 ELSE 0 END) AS invalid_total
+       FROM notes WHERE is_deleted = 0 GROUP BY is_pinned`
+    )
+    .all()
+  const needsRepair = groups.some(
+    (group) => group.total !== group.distinct_total || group.invalid_total > 0
+  )
+  if (!needsRepair) return false
+
+  const all = db
+    .prepare(
+      `SELECT n.id, n.is_pinned FROM notes n WHERE n.is_deleted = 0
+       ORDER BY n.is_pinned DESC, n.sort_order ASC, n.created_at DESC`
+    )
+    .all()
+
+  if (!all.length) return false
+
+  db.transaction(() => {
+    let pinnedOrder = 65536
+    let normalOrder = 65536
+    for (const note of all) {
+      const order = note.is_pinned ? pinnedOrder : normalOrder
+      db.prepare('UPDATE notes SET sort_order = ? WHERE id = ?').run(order, note.id)
+      if (note.is_pinned) pinnedOrder += 65536
+      else normalOrder += 65536
+    }
+  })()
+  return true
+}
+
+/** 在单个事务内提交一次拖拽产生的排序槽位交换。 */
+export function updateCustomSortOrders(items = []) {
+  if (!Array.isArray(items) || items.length === 0) return true
+  const normalized = items.map((item) => ({
+    id: Number(item?.id),
+    sortOrder: Number(item?.sortOrder)
+  }))
+  if (
+    normalized.some(
+      ({ id, sortOrder }) => !Number.isInteger(id) || id <= 0 || !Number.isFinite(sortOrder)
+    ) ||
+    new Set(normalized.map(({ id }) => id)).size !== normalized.length
+  ) {
+    throw new Error('无效的自定义排序数据')
+  }
+
+  const db = getDb()
+  const update = db.prepare(
+    'UPDATE notes SET sort_order = ?, updated_at = ? WHERE id = ? AND is_deleted = 0'
+  )
+  return db.transaction((rows) => {
+    const timestamp = now()
+    for (const { id, sortOrder } of rows) {
+      const result = update.run(sortOrder, timestamp, id)
+      if (result.changes !== 1) throw new Error(`待办不存在或已删除: ${id}`)
+    }
+    return true
+  })(normalized)
+}

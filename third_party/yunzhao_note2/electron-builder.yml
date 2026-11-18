@@ -1,0 +1,2 @@
+# 唯一桌面打包目标为 Windows x64，默认入口沿用 Windows 配置。
+extends: 'file:./electron-builder.win.yml'

@@ -1,0 +1,153 @@
+import { defineStore } from "pinia";
+import { ref } from "vue";
+import type { Base, BaseShare as BaseShareType } from "@/api/types";
+import { shareApiService } from "@/services/api/shareApiService";
+import { t } from "@/i18n";
+
+export type { BaseShareType as BaseShare };
+
+export const useShareStore = defineStore("share", () => {
+  const shares = ref<BaseShareType[]>([]);
+  const sharedWithMe = ref<Base[]>([]);
+  const sharedByMe = ref<BaseShareType[]>([]);
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+
+  async function fetchShares(baseId: string) {
+    loading.value = true;
+    error.value = null;
+    try {
+      const data = await shareApiService.getShares(baseId);
+      shares.value = data;
+      return data;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('common.share.fetchListFailed');
+      error.value = msg;
+      console.error("[shareStore] fetchShares failed:", e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function createShare(
+    baseId: string,
+    permission: "view" | "edit",
+    expiresAt?: number
+  ) {
+    loading.value = true;
+    try {
+      const data = await shareApiService.createShare(baseId, permission, expiresAt);
+      shares.value.unshift(data);
+      return data;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('common.share.createFailed');
+      error.value = msg;
+      console.error("[shareStore] createShare failed:", e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function deleteShare(shareId: string) {
+    loading.value = true;
+    try {
+      await shareApiService.deleteShare(shareId);
+      shares.value = shares.value.filter((s) => s.id !== shareId);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('common.share.deleteFailed');
+      error.value = msg;
+      console.error("[shareStore] deleteShare failed:", e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateShare(shareId: string, data: Partial<BaseShareType>) {
+    loading.value = true;
+    try {
+      const updated = await shareApiService.updateShare(shareId, data);
+      const idx = shares.value.findIndex((s) => s.id === shareId);
+      if (idx !== -1) {
+        shares.value[idx] = updated;
+      }
+      return updated;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('common.share.updateFailed');
+      error.value = msg;
+      console.error("[shareStore] updateShare failed:", e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function fetchSharedWithMe() {
+    loading.value = true;
+    error.value = null;
+    try {
+      const data = await shareApiService.getSharedWithMe();
+      sharedWithMe.value = data;
+      return data;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('common.share.fetchReceivedFailed');
+      error.value = msg;
+      console.error("[shareStore] fetchSharedWithMe failed:", e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function fetchSharedByMe() {
+    loading.value = true;
+    error.value = null;
+    try {
+      const data = await shareApiService.getSharedByMe();
+      sharedByMe.value = data;
+      return data;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('common.share.fetchCreatedFailed');
+      error.value = msg;
+      console.error("[shareStore] fetchSharedByMe failed:", e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  function clearShares() {
+    shares.value = [];
+  }
+
+  function clearError() {
+    error.value = null;
+  }
+
+  function $reset() {
+    shares.value = [];
+    sharedWithMe.value = [];
+    sharedByMe.value = [];
+    loading.value = false;
+    error.value = null;
+  }
+
+  return {
+    shares,
+    sharedWithMe,
+    sharedByMe,
+    loading,
+    error,
+    fetchShares,
+    createShare,
+    deleteShare,
+    updateShare,
+    fetchSharedWithMe,
+    fetchSharedByMe,
+    clearShares,
+    clearError,
+    $reset,
+  };
+});

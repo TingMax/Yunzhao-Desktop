@@ -1,0 +1,612 @@
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { join, resolve } from 'node:path'
+import Database from 'better-sqlite3'
+import { app, BrowserWindow } from 'electron'
+import { createElectronGuiResultLifecycle } from './helpers/electron-gui-result-lifecycle.mjs'
+import { dismissStartupShortcutNotice } from './helpers/startup-shortcut-notice.mjs'
+
+const lifecycle = createElectronGuiResultLifecycle({
+  app,
+  BrowserWindow,
+  suite: 'tests/note-duration-electron.mjs',
+  mode: 'electron-legacy-window-fixture',
+  prefix: 'yunzhao-note-duration-e2e-',
+  timeoutMs: 150000,
+  metadata: { realWindows: true, legacyFixture: true }
+})
+const { assert, root: testUserData } = lifecycle
+let activeTestWindow = null
+
+app.commandLine.appendSwitch('disable-gpu')
+app.disableHardwareAcceleration()
+
+const WAIT_STEP_MS = 25
+const require = createRequire(import.meta.url)
+const report = (message) => process.stderr.write(`[duration-e2e] ${message}\n`)
+
+function wait(ms) {
+  return new Promise((resolveWait) => setTimeout(resolveWait, ms))
+}
+
+async function waitUntil(predicate, message, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = await predicate()
+    if (value) return value
+    await wait(WAIT_STEP_MS)
+  }
+  throw new Error(message)
+}
+
+function seedLegacyListDatabase(userDataPath) {
+  mkdirSync(userDataPath, { recursive: true })
+  const db = new Database(join(userDataPath, 'app.db'))
+  const now = Date.now()
+  const future = now + 3 * 24 * 60 * 60 * 1000
+  db.exec(`
+    CREATE TABLE app_settings (
+      window_name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT,
+      remark TEXT DEFAULT '',
+      created_at INTEGER,
+      updated_at INTEGER,
+      PRIMARY KEY (window_name, key)
+    );
+    CREATE TABLE notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      note_type TEXT NOT NULL DEFAULT 'one_time' CHECK(note_type IN ('one_time')),
+      content TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'initialized'
+        CHECK(status IN ('initialized','in_progress','completed')),
+      is_deleted INTEGER NOT NULL DEFAULT 0 CHECK(is_deleted IN (0, 1)),
+      is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
+      notify_enabled INTEGER NOT NULL DEFAULT 0 CHECK(notify_enabled IN (0, 1)),
+      effective_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      remind_again_at INTEGER,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE note_tags (
+      note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+      tag_name TEXT NOT NULL REFERENCES tags(name) ON DELETE CASCADE,
+      PRIMARY KEY (note_id, tag_name)
+    );
+    PRAGMA user_version = 0;
+  `)
+  db.prepare(
+    `INSERT INTO notes (
+       content, status, effective_at, finished_at, created_at, updated_at
+     ) VALUES ('旧库单日便签', 'initialized', ?, ?, ?, ?)`
+  ).run(future, now, now, now)
+  db.prepare('INSERT INTO tags (name, color, created_at) VALUES (?, ?, ?)').run(
+    '旧库标签',
+    '#007aff',
+    now
+  )
+  db.prepare('INSERT INTO note_tags (note_id, tag_name) VALUES (1, ?)').run('旧库标签')
+  const insertSetting = db.prepare(`
+    INSERT INTO app_settings
+      (window_name, type, key, value, remark, created_at, updated_at)
+    VALUES (?, ?, ?, ?, '', ?, ?)
+  `)
+  insertSetting.run('application', 'application', 'active_view', 'list', now, now)
+  insertSetting.run('application', 'remote', 'receive_notices', 'false', now, now)
+  insertSetting.run('application', 'remote', 'upload_device_info', 'false', now, now)
+  insertSetting.run('application', 'onboarding', 'first_use_notice_version', '1', now, now)
+  insertSetting.run('main', 'system', 'blur_enabled', 'false', now, now)
+  db.close()
+}
+
+function getListWindow() {
+  return BrowserWindow.getAllWindows().find(
+    (window) =>
+      !window.isDestroyed() &&
+      /\/index\.html(?:$|[?#])/.test(window.webContents.getURL()) &&
+      !/\/sticky\.html(?:$|[?#])/.test(window.webContents.getURL())
+  )
+}
+
+try {
+  app.setPath('userData', testUserData)
+  process.env.YUNZHAO_INTEGRATION_TEST = '1'
+  process.env.YUNZHAO_INTEGRATION_APP_ROOT = process.cwd()
+  process.env.YUNZHAO_INTEGRATION_NATIVE_DLL = resolve(
+    'native_blur',
+    'build',
+    'bin',
+    'blur_engine.dll'
+  )
+  seedLegacyListDatabase(testUserData)
+  process.argv.push('yunzhao-note://notification/open?id=1')
+  require(resolve('out', 'main', 'index.js'))
+  const mainChunk = readdirSync(resolve('out', 'main', 'chunks')).find((name) =>
+    /^index-[\w-]+\.js$/.test(name)
+  )
+  assert.ok(mainChunk, '未找到构建后的主进程分块')
+  require(resolve('out', 'main', 'chunks', mainChunk))
+  app.once('ready', () => void runTests())
+} catch (error) {
+  report(`setup failed: ${error?.stack || error}`)
+  void lifecycle.finish({ error, window: activeTestWindow })
+}
+
+async function runTests() {
+  let failure = null
+  let restoreRendererExecution = () => {}
+  try {
+    const window = await waitUntil(() => getListWindow(), '列表主窗口未启动', 10000)
+    activeTestWindow = window
+    const originalExecuteJavaScript = window.webContents.executeJavaScript
+    const executeJavaScript = originalExecuteJavaScript.bind(window.webContents)
+    window.webContents.executeJavaScript = (code, ...args) =>
+      executeJavaScript(code, ...args).catch((error) => {
+        throw new Error(`${error.message}\nscript=${code}`, { cause: error })
+      })
+    restoreRendererExecution = () => {
+      if (!window.isDestroyed()) window.webContents.executeJavaScript = originalExecuteJavaScript
+    }
+    await waitUntil(() => window.isVisible(), '列表主窗口未显示')
+    await dismissStartupShortcutNotice(window)
+
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(Array.from(document.querySelectorAll('.nl-card')).find((card) => card.textContent.includes('旧库单日便签')))`
+        ),
+      '旧库便签未进入列表'
+    )
+    await wait(300)
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `Boolean(document.querySelector('.app-editor-dialog'))`
+      ),
+      false,
+      '点击通知只应显示主视图，不应打开便签编辑器'
+    )
+
+    await window.webContents.executeJavaScript(`(() => {
+      const card = Array.from(document.querySelectorAll('.nl-card')).find((node) => node.textContent.includes('旧库单日便签'))
+      card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 120 }))
+    })()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(Array.from(document.querySelectorAll('.nl-context-menu button')).find((button) => button.textContent.trim() === '修改'))`
+        ),
+      '便签操作菜单未打开'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const button = Array.from(document.querySelectorAll('.nl-context-menu button')).find((node) => node.textContent.trim() === '修改')
+      button.click()
+    })()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(document.querySelector('.app-editor-dialog textarea'))`
+        ),
+      '便签编辑器未打开'
+    )
+    const draftContent = '通知点击期间保留的未保存草稿'
+    await window.webContents.executeJavaScript(`(() => {
+      const textarea = document.querySelector('.app-editor-dialog textarea')
+      textarea.value = ${JSON.stringify(draftContent)}
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    app.emit('second-instance', {}, ['electron.exe', 'yunzhao-note://notification/open?id=1'])
+    await wait(500)
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.app-editor-dialog textarea')?.value`
+      ),
+      draftContent,
+      '点击通知不应关闭编辑器或覆盖未保存草稿'
+    )
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.app-editor-close').click()`
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(document.querySelector('.confirm-overlay.active'))`
+        ),
+      '未出现放弃编辑确认框'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const button = Array.from(document.querySelectorAll('.confirm-actions button')).find((node) => node.textContent.trim() === '放弃修改')
+      button.click()
+    })()`)
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.app-editor-dialog')`),
+      '测试便签编辑器未关闭'
+    )
+
+    const migrated = await window.webContents.executeJavaScript(`window.api.getNote(1)`)
+    assert.equal(migrated.duration_days, 1, '旧库便签必须自动补为持续 1 天')
+    assert.equal(migrated.tags[0]?.name, '旧库标签', 'V0 旧库标签关联迁移失败')
+    assert.equal(
+      existsSync(join(testUserData, 'app-v0-before-v3.db')),
+      true,
+      'V0 旧库在标签 ID 迁移前必须创建备份'
+    )
+
+    await window.webContents.executeJavaScript(`window.api.createTag('空层级测试', '#ff9500')`)
+    const filterPoint = await window.webContents.executeJavaScript(`(() => {
+      const rect = document.querySelector('.sg-btn--taiji').getBoundingClientRect()
+      return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) }
+    })()`)
+    window.webContents.sendInputEvent({ type: 'mouseMove', ...filterPoint })
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`!document.querySelector('.sg-btn--tags').disabled`),
+      '悬停太极后标签入口未展开'
+    )
+    await window.webContents.executeJavaScript(`document.querySelector('.sg-btn--tags').click()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `document.querySelector('.nl-tags .ts-more')?.textContent.includes('2')`
+        ),
+      '标签筛选面板没有载入新增标签'
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`(() => {
+        const panel = document.querySelector('.nl-panel-wrap')
+        return panel && !panel.getAnimations().some(animation => animation.playState === 'running')
+      })()`),
+      '标签筛选面板入场动画没有完成'
+    )
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.nl-tags .ts-more').click()`
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`(() => {
+        const panel = document.querySelector('.ts-panel')
+        return panel && !panel.getAnimations().some(animation => animation.playState === 'running')
+      })()`),
+      '标签下拉面板未打开'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const row = Array.from(document.querySelectorAll('.ts-panel-row')).find((node) => node.textContent.includes('空层级测试'))
+      row.querySelector('.ts-panel-select').click()
+    })()`)
+    // The fixed stacking context owns z-index; the card clone inside it is auto.
+    // Capture both live layers together before the short exit animation removes them.
+    const filterLayers = await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`(() => {
+          const clone = document.querySelector('[data-presence-clone]')
+          const layer = clone?.closest('[data-presence-layer]')
+          const popover = document.querySelector('.ts-panel')
+          if (!layer || !popover) return null
+          const layerStyle = getComputedStyle(layer)
+          const popoverStyle = getComputedStyle(popover)
+          return {
+            presence: Number.parseInt(layerStyle.zIndex, 10),
+            popover: Number.parseInt(popoverStyle.zIndex, 10),
+            sharedRoot: layer.parentElement === document.body && popover.parentElement === document.body,
+            fixedLayers: layerStyle.position === 'fixed' && popoverStyle.position === 'fixed'
+          }
+        })()`),
+      '标签筛选没有生成便签退场副本'
+    )
+    assert.ok(
+      Number.isFinite(filterLayers.presence) &&
+        Number.isFinite(filterLayers.popover) &&
+        filterLayers.sharedRoot &&
+        filterLayers.fixedLayers &&
+        filterLayers.presence < filterLayers.popover,
+      `便签退场层必须与标签浮层处于同一根节点且层级更低：${JSON.stringify(filterLayers)}`
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const row = Array.from(document.querySelectorAll('.ts-panel-row')).find((node) => node.textContent.includes('空层级测试'))
+      row.querySelector('.ts-panel-select').click()
+    })()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(Array.from(document.querySelectorAll('.nl-card:not([data-presence-clone])')).find((card) => card.textContent.includes('旧库单日便签')))`
+        ),
+      '取消标签筛选后便签没有恢复'
+    )
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.nl-tags .ts-more').click()`
+    )
+
+    await window.webContents.executeJavaScript(`(() => {
+      const card = Array.from(document.querySelectorAll('.nl-card')).find((node) => node.textContent.includes('旧库单日便签'))
+      card.querySelector('.sr-control[title="提前开始"]').click()
+    })()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(document.querySelector('.confirm-card.active'))`
+        ),
+      '单日便签提前执行未弹出确认框'
+    )
+    const ordinaryConfirmText = await window.webContents.executeJavaScript(
+      `document.querySelector('.confirm-message').textContent`
+    )
+    assert.doesNotMatch(ordinaryConfirmText, /持续 \d+ 天/)
+    await window.webContents.executeJavaScript(`(() => {
+      const cancel = Array.from(document.querySelectorAll('.confirm-actions button')).find((node) => node.textContent.trim() === '取消')
+      cancel.click()
+    })()`)
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.confirm-card')`),
+      '提前执行确认框未关闭'
+    )
+
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.ab-box-btn[title="新建"]').click()`
+    )
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`Boolean(document.querySelector('.nnp-body'))`),
+      '新建便签面板未展开'
+    )
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `Boolean(document.querySelector('.nnp-body .note-duration-field'))`
+      ),
+      true,
+      '完整新建器必须始终显示持续方式'
+    )
+
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.nnp-body .dt-trigger').click()`
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`Boolean(document.querySelector('.dt-panel-wrap'))`),
+      '生效时间选择器未打开'
+    )
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `document.querySelectorAll('.dt-panel-wrap .dt-header-input')[1].value`
+      ),
+      '00:01:00',
+      '列表新建便签打开生效时间面板时必须默认到当天 00:01'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const shortcut = Array.from(document.querySelectorAll('.dt-sc-chip')).find((node) => node.textContent.trim() === '明天')
+      shortcut.click()
+      document.querySelector('.dt-btn--confirm').click()
+    })()`)
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.dt-panel-wrap')`),
+      '生效时间选择器首次确认后未关闭'
+    )
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.nnp-body .note-duration-field .sel-trigger').textContent.trim()`
+      ),
+      '仅当天',
+      '持续方式默认值必须为仅当天'
+    )
+
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.nnp-body .dt-clear-btn').click()`
+    )
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `Boolean(document.querySelector('.nnp-body .note-duration-field'))`
+      ),
+      true,
+      '立即生效便签也必须可以选择持续方式'
+    )
+
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.nnp-body .dt-trigger').click()`
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`Boolean(document.querySelector('.dt-panel-wrap'))`),
+      '生效时间选择器未再次打开'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const shortcut = Array.from(document.querySelectorAll('.dt-sc-chip')).find((node) => node.textContent.trim() === '明天')
+      shortcut.click()
+      document.querySelector('.dt-btn--confirm').click()
+    })()`)
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.dt-panel-wrap')`),
+      '生效时间选择器未关闭'
+    )
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.nnp-body .note-duration-field .sel-trigger').click()`
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(document.querySelector('.sel-panel button[data-value="fixed_days"]'))`
+        ),
+      '持续方式下拉框未打开'
+    )
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.sel-panel button[data-value="fixed_days"]').click()`
+    )
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.sel-panel-wrap')`),
+      '持续方式下拉框未关闭'
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(document.querySelector('.nnp-body .note-duration-field input'))`
+        ),
+      '选择指定天数后未显示数字控件'
+    )
+
+    await window.webContents.executeJavaScript(`(() => {
+      const textarea = document.querySelector('.nnp-body .rt-textarea')
+      textarea.value = '月视图跨日便签'
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      const duration = document.querySelector('.nnp-body .note-duration-field input')
+      duration.value = '3'
+      duration.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.nnp-submit').disabled`),
+      '新建便签按钮未启用'
+    )
+    await window.webContents.executeJavaScript(`document.querySelector('.nnp-submit').click()`)
+    const created = await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`window.api.searchNotes({
+          search: '月视图跨日便签',
+          statuses: [],
+          tagIds: [],
+          includeDeleted: false,
+          sort: 'effective',
+          limit: 20,
+          offset: 0
+        }).then((result) => result.notes?.[0] || null)`),
+      '新建便签未持久化'
+    )
+    assert.equal(created.duration_days, 3, '新建便签未保存持续天数')
+    assert.equal(created.duration_kind, 'fixed_days', '新建便签未保存指定天数模式')
+
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(Array.from(document.querySelectorAll('.nl-card')).find((card) => card.textContent.includes('月视图跨日便签')))`
+        ),
+      '新建便签未进入列表'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const card = Array.from(document.querySelectorAll('.nl-card')).find((node) => node.textContent.includes('月视图跨日便签'))
+      card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 180 }))
+    })()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`Boolean(document.querySelector('.nl-context-menu'))`),
+      '便签操作菜单未打开'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const edit = Array.from(document.querySelectorAll('.nl-context-menu button')).find((node) => node.textContent.trim() === '修改')
+      edit.click()
+    })()`)
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`Boolean(document.querySelector('.ne-root'))`),
+      '便签修改器未打开'
+    )
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `document.querySelector('.ne-root .note-duration-field .sel-trigger').textContent.trim()`
+      ),
+      '指定天数',
+      '修改器未读取持续方式'
+    )
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.ne-root .note-duration-field .sel-trigger').click()`
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(document.querySelector('.sel-panel button[data-value="until_completed"]'))`
+        ),
+      '修改器持续方式下拉框未打开'
+    )
+    await window.webContents.executeJavaScript(
+      `document.querySelector('.sel-panel button[data-value="until_completed"]').click()`
+    )
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `document.querySelector('.ne-root .note-duration-field .sel-trigger').textContent.trim() === '持续到完成'`
+        ),
+      '修改器未切换到持续到完成模式'
+    )
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.sel-panel-wrap')`),
+      '修改器持续方式下拉框未关闭'
+    )
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.ne-submit').disabled`),
+      '修改便签保存按钮未启用'
+    )
+    await window.webContents.executeJavaScript(`document.querySelector('.ne-submit').click()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `window.api.getNote(${created.id}).then((note) => note.duration_kind === 'until_completed' && note.duration_days === 1)`
+        ),
+      '修改器未保存持续到完成模式'
+    )
+
+    await waitUntil(
+      () => window.webContents.executeJavaScript(`!document.querySelector('.app-editor-overlay')`),
+      '便签修改器未关闭'
+    )
+    await window.webContents.executeJavaScript(`(() => {
+      const card = Array.from(document.querySelectorAll('.nl-card')).find((node) => node.textContent.includes('月视图跨日便签'))
+      card.querySelector('.sr-control[title="提前开始"]').click()
+    })()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(
+          `Boolean(document.querySelector('.confirm-card.active'))`
+        ),
+      '多日便签提前执行未弹出确认框'
+    )
+    const confirmText = await window.webContents.executeJavaScript(
+      `document.querySelector('.confirm-message').textContent`
+    )
+    assert.match(confirmText, /持续到完成/)
+    assert.match(confirmText, /直到标记完成/)
+    assert.doesNotMatch(confirmText, /持续 \d+ 天/)
+
+    // Finish the tested user interaction before the lifecycle destroys windows;
+    // do not tear down Chromium while this modal is still entering/holding blur.
+    await window.webContents.executeJavaScript(`(() => {
+      const dialog = document.querySelector('.confirm-card.active[aria-label="提前执行便签？"]')
+      const cancel = Array.from(dialog.querySelectorAll('.confirm-actions button'))
+        .find(button => button.textContent.trim() === '取消' && !button.disabled)
+      cancel.click()
+    })()`)
+    await waitUntil(
+      () =>
+        window.webContents.executeJavaScript(`(() => {
+          const scene = document.querySelector('.app-scene')
+          return !document.querySelector('.confirm-overlay') && scene && !scene.inert
+        })()`),
+      '多日便签提前执行取消后未释放确认框与主视图'
+    )
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        `window.api.getNote(${created.id}).then(note => note.status)`
+      ),
+      'initialized',
+      '取消提前执行不得开始便签'
+    )
+    await window.webContents.executeJavaScript(
+      'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))'
+    )
+
+    report(
+      'legacy migration, animated duration field, create, edit and early-start confirmation passed'
+    )
+  } catch (error) {
+    console.error(error)
+    failure = error
+  } finally {
+    restoreRendererExecution()
+    await lifecycle.finish({
+      completed: !failure,
+      error: failure,
+      window: activeTestWindow
+    })
+  }
+}

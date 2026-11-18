@@ -1,0 +1,411 @@
+/**
+ * blur_api.cpp — C API 实现
+ */
+
+#include "blur_api.h"
+#include "blur_engine.h"
+#include "window_motion_edge_monitor.h"
+#include "window_z_order.h"
+#include "window_motion_diagnostics.h"
+#include <algorithm>
+#include <cstdlib>
+#include <cstdio>
+#include <winternl.h>
+
+namespace {
+constexpr int kNativeAbiVersion = 24;
+}
+
+int YunzhaoNative_GetAbiVersion(void) {
+    return kNativeAbiVersion;
+}
+
+int Blur_IsSupported(void) {
+    using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
+    const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto rtlGetVersion = ntdll
+        ? reinterpret_cast<RtlGetVersionFn>(GetProcAddress(ntdll, "RtlGetVersion"))
+        : nullptr;
+    if (!rtlGetVersion) {
+        BlurEngine::Engine::Instance().SetLastError(BlurEngine::BlurErrorCode::UnsupportedSystem);
+        return 0;
+    }
+
+    RTL_OSVERSIONINFOW version{};
+    version.dwOSVersionInfoSize = sizeof(version);
+    if (rtlGetVersion(&version) != 0) {
+        BlurEngine::Engine::Instance().SetLastError(BlurEngine::BlurErrorCode::UnsupportedSystem);
+        return 0;
+    }
+    const bool supported = version.dwMajorVersion > 10 ||
+        (version.dwMajorVersion == 10 && version.dwBuildNumber >= 18362);
+    BlurEngine::Engine::Instance().SetLastError(
+        supported ? BlurEngine::BlurErrorCode::None : BlurEngine::BlurErrorCode::UnsupportedSystem);
+    return supported ? 1 : 0;
+}
+
+int Blur_Init(void* hwnd) {
+    if (!hwnd) {
+        BlurEngine::Engine::Instance().SetLastError(BlurEngine::BlurErrorCode::InvalidParentWindow);
+        return 0;
+    }
+    if (!Blur_IsSupported()) return 0;
+    return BlurEngine::Engine::Instance().Initialize(static_cast<HWND>(hwnd)) ? 1 : 0;
+}
+
+int Blur_ApplyConfig(
+    int enabled,
+    float radiusDip,
+    float saturation,
+    float cornerRadiusDip,
+    int tintR,
+    int tintG,
+    int tintB,
+    float tintOpacity) {
+    BlurEngine::BlurConfig config;
+    config.enabled = enabled != 0;
+    config.radiusDip = radiusDip;
+    config.saturation = saturation;
+    config.cornerRadius = cornerRadiusDip;
+    config.tintR = tintR;
+    config.tintG = tintG;
+    config.tintB = tintB;
+    config.tintOpacity = tintOpacity;
+    return BlurEngine::Engine::Instance().ApplyConfigAndWait(config) ? 1 : 0;
+}
+
+void Blur_Destroy(void) {
+    WindowMotionEdgeMonitor::Shutdown();
+    BlurEngine::Engine::Instance().Destroy();
+}
+
+void Blur_SetRadius(float radiusDip) {
+    BlurEngine::Engine::Instance().SetRadius(radiusDip);
+}
+
+void Blur_SetTint(int r, int g, int b) {
+    BlurEngine::Engine::Instance().SetTint(r, g, b);
+}
+
+void Blur_SetEnabled(int enabled) {
+    BlurEngine::Engine::Instance().SetEnabled(enabled != 0);
+}
+
+void Blur_SetSaturation(float saturation) {
+    BlurEngine::Engine::Instance().SetSaturation(saturation);
+}
+
+void Blur_SetOpacity(float opacity) {
+    BlurEngine::Engine::Instance().SetTintOpacity(opacity);
+}
+
+void Blur_SetCornerRadius(float radiusDip) {
+    BlurEngine::Engine::Instance().SetCornerRadius(radiusDip);
+}
+
+void Blur_UpdateGeometry(void) {
+    BlurEngine::Engine::Instance().UpdateGeometry();
+}
+
+int Blur_SyncGeometryAndWait(int timeoutMs) {
+    const DWORD boundedTimeout = static_cast<DWORD>(std::clamp(timeoutMs, 1, 5'000));
+    return BlurEngine::Engine::Instance().SyncGeometryAndWait(boundedTimeout) ? 1 : 0;
+}
+
+void Blur_ReSyncOrder(void) {
+    BlurEngine::Engine::Instance().ReSyncZOrder();
+}
+
+int Blur_IsInitialized(void) {
+    return BlurEngine::Engine::Instance().IsInitialized() ? 1 : 0;
+}
+
+int Blur_IsHealthy(void) {
+    return BlurEngine::Engine::Instance().IsHealthy() ? 1 : 0;
+}
+
+int Blur_IsZOrderSynchronized(void) {
+    return BlurEngine::Engine::Instance().IsZOrderSynchronized() ? 1 : 0;
+}
+
+const char* Blur_GetZOrderDiagnosticJson(void) {
+    return BlurEngine::Engine::Instance().GetZOrderDiagnosticJson();
+}
+
+int Blur_GetLastErrorCode(void) {
+    return static_cast<int>(BlurEngine::Engine::Instance().GetLastError());
+}
+
+const char* Blur_GetLastFailureJson(void) {
+    return BlurEngine::Engine::Instance().GetLastFailureJson();
+}
+
+const char* Blur_GetLastErrorMessage(void) {
+    using BlurEngine::BlurErrorCode;
+    switch (BlurEngine::Engine::Instance().GetLastError()) {
+    case BlurErrorCode::None: return "none";
+    case BlurErrorCode::UnsupportedSystem: return "unsupported_system";
+    case BlurErrorCode::InvalidParentWindow: return "invalid_parent_window";
+    case BlurErrorCode::ComInitializationFailed: return "com_initialization_failed";
+    case BlurErrorCode::DispatcherQueueFailed: return "dispatcher_queue_failed";
+    case BlurErrorCode::OverlayWindowFailed: return "overlay_window_failed";
+    case BlurErrorCode::CompositionTargetFailed: return "composition_target_failed";
+    case BlurErrorCode::EffectGraphFailed: return "effect_graph_failed";
+    case BlurErrorCode::InitializationTimeout: return "initialization_timeout";
+    default: return "unknown_failure";
+    }
+}
+
+const char* WindowMotion_GetSnapshotJson(void* hwndValue) {
+    thread_local char json[768]{};
+    const HWND hwnd = static_cast<HWND>(hwndValue);
+    WindowMotionDiagnostics::SnapshotScope diagnostic(hwnd);
+    RECT windowRect{}, clientRect{};
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+
+    const bool windowValid = hwnd && IsWindow(hwnd) &&
+        GetWindowRect(hwnd, &windowRect) && GetClientRect(hwnd, &clientRect);
+    const HMONITOR monitor = windowValid
+        ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        : nullptr;
+    const bool monitorValid = monitor && GetMonitorInfoW(monitor, &monitorInfo);
+    diagnostic.SetResult(windowValid && monitorValid, windowValid ? &windowRect : nullptr);
+
+    sprintf_s(
+        json,
+        "{\"window\":{\"valid\":%s,\"left\":%ld,\"top\":%ld,\"right\":%ld,\"bottom\":%ld,"
+        "\"width\":%ld,\"height\":%ld,\"clientWidth\":%ld,\"clientHeight\":%ld,\"dpi\":%u},"
+        "\"monitor\":{\"valid\":%s,\"left\":%ld,\"top\":%ld,\"right\":%ld,\"bottom\":%ld,"
+        "\"workLeft\":%ld,\"workTop\":%ld,\"workRight\":%ld,\"workBottom\":%ld}}",
+        windowValid ? "true" : "false",
+        windowRect.left, windowRect.top, windowRect.right, windowRect.bottom,
+        windowRect.right - windowRect.left, windowRect.bottom - windowRect.top,
+        clientRect.right - clientRect.left, clientRect.bottom - clientRect.top,
+        windowValid ? GetDpiForWindow(hwnd) : 0,
+        monitorValid ? "true" : "false",
+        monitorInfo.rcMonitor.left, monitorInfo.rcMonitor.top,
+        monitorInfo.rcMonitor.right, monitorInfo.rcMonitor.bottom,
+        monitorInfo.rcWork.left, monitorInfo.rcWork.top,
+        monitorInfo.rcWork.right, monitorInfo.rcWork.bottom);
+    return json;
+}
+
+namespace {
+struct EdgeExposureContext {
+    HMONITOR currentMonitor = nullptr;
+    RECT currentBounds{};
+    RECT windowBounds{};
+    int side = 0;
+    bool blocked = false;
+};
+
+BOOL CALLBACK DetectAdjacentMonitor(
+    HMONITOR monitor,
+    HDC,
+    LPRECT,
+    LPARAM contextValue) {
+    auto* context = reinterpret_cast<EdgeExposureContext*>(contextValue);
+    if (!context || context->blocked || monitor == context->currentMonitor) return TRUE;
+
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(monitor, &info)) return TRUE;
+
+    const bool vertical = std::abs(context->side) == 2;
+    const bool touchesEdge = vertical
+        ? (context->side < 0
+            ? info.rcMonitor.bottom == context->currentBounds.top
+            : info.rcMonitor.top == context->currentBounds.bottom)
+        : (context->side < 0
+            ? info.rcMonitor.right == context->currentBounds.left
+            : info.rcMonitor.left == context->currentBounds.right);
+    if (!touchesEdge) return TRUE;
+
+    if (vertical) {
+        const LONG overlapLeft = std::max(context->windowBounds.left, info.rcMonitor.left);
+        const LONG overlapRight = std::min(context->windowBounds.right, info.rcMonitor.right);
+        if (overlapRight > overlapLeft) context->blocked = true;
+    } else {
+        const LONG overlapTop = std::max(context->windowBounds.top, info.rcMonitor.top);
+        const LONG overlapBottom = std::min(context->windowBounds.bottom, info.rcMonitor.bottom);
+        if (overlapBottom > overlapTop) context->blocked = true;
+    }
+    return context->blocked ? FALSE : TRUE;
+}
+}
+
+int WindowMotion_IsEdgeExposed(void* hwndValue, int side) {
+    const HWND hwnd = static_cast<HWND>(hwndValue);
+    if (!hwnd || !IsWindow(hwnd) ||
+        (side != -2 && side != -1 && side != 1 && side != 2)) return 0;
+
+    RECT windowBounds{};
+    if (!GetWindowRect(hwnd, &windowBounds)) return 0;
+
+    const HMONITOR currentMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO currentInfo{};
+    currentInfo.cbSize = sizeof(currentInfo);
+    if (!currentMonitor || !GetMonitorInfoW(currentMonitor, &currentInfo)) return 0;
+
+    // 任务栏占据目标边缘时，工作区边缘并不是桌面的真实外边缘。
+    if (side == -1 && currentInfo.rcWork.left != currentInfo.rcMonitor.left) return 0;
+    if (side == 1 && currentInfo.rcWork.right != currentInfo.rcMonitor.right) return 0;
+    if (side == -2 && currentInfo.rcWork.top != currentInfo.rcMonitor.top) return 0;
+    if (side == 2 && currentInfo.rcWork.bottom != currentInfo.rcMonitor.bottom) return 0;
+
+    EdgeExposureContext context{
+        currentMonitor,
+        currentInfo.rcMonitor,
+        windowBounds,
+        side,
+        false
+    };
+    if (!EnumDisplayMonitors(
+            nullptr,
+            nullptr,
+            DetectAdjacentMonitor,
+            reinterpret_cast<LPARAM>(&context)) &&
+        !context.blocked) {
+        return 0;
+    }
+    return context.blocked ? 0 : 1;
+}
+
+int WindowMotion_MoveWindow(void* hwndValue, int physicalX, int physicalY) {
+    const HWND hwnd = static_cast<HWND>(hwndValue);
+    WindowMotionDiagnostics::MoveScope diagnostic(hwnd, physicalX, physicalY);
+    auto& sample = diagnostic.Sample();
+    if (!hwnd || !IsWindow(hwnd)) {
+        sample.failureStage = "invalid-window";
+        return 0;
+    }
+
+    auto& engine = BlurEngine::Engine::Instance();
+    if (engine.IsInitialized() && engine.GetParentWindow() == hwnd) {
+        sample.path = "paired";
+        if (engine.MoveParentAndOverlay(hwnd, physicalX, physicalY)) {
+            sample.success = true;
+            return 1;
+        }
+
+        // 同步 Overlay 路径异常时仍保证主窗口可移动，并留下一个
+        // 异步自愈请求；返回 0 让 JS 动画及时中止，避免继续扩大窄缝。
+        sample.fallbackAttempted = true;
+        const auto fallbackStarted = WindowMotionDiagnostics::Clock(sample.enabled);
+        const BOOL fallbackMoved = SetWindowPos(
+            hwnd,
+            nullptr,
+            physicalX,
+            physicalY,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        sample.fallbackMoveMs = WindowMotionDiagnostics::Elapsed(fallbackStarted, sample.enabled);
+        sample.fallbackSucceeded = fallbackMoved != FALSE;
+        engine.UpdateGeometry();
+        return 0;
+    }
+
+    const auto directStarted = WindowMotionDiagnostics::Clock(sample.enabled);
+    const BOOL moved = SetWindowPos(
+        hwnd,
+        nullptr,
+        physicalX,
+        physicalY,
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    sample.directMoveMs = WindowMotionDiagnostics::Elapsed(directStarted, sample.enabled);
+    if (!moved) {
+        sample.failureStage = "direct-set-position";
+        return 0;
+    }
+    sample.success = true;
+    return 1;
+}
+
+void WindowMotion_SetDiagnosticLease(int remainingMs) {
+    WindowMotionDiagnostics::SetLease(remainingMs);
+}
+
+const char* WindowMotion_DrainDiagnosticsJson(void) {
+    try {
+        return WindowMotionDiagnostics::DrainJson();
+    } catch (...) {
+        // Diagnostic serialization failure must not unwind across the C ABI.
+        return "{\"schemaVersion\":1,\"observations\":1,\"coverage\":{\"serializationFailed\":true}}";
+    }
+}
+
+int WindowMotion_ArmEdgeMonitor(
+    void* hwndValue,
+    int side,
+    int thicknessDip,
+    int pollIntervalMs,
+    unsigned long long generation) {
+    return WindowMotionEdgeMonitor::Arm(
+        static_cast<HWND>(hwndValue),
+        side,
+        thicknessDip,
+        pollIntervalMs,
+        generation);
+}
+
+int WindowMotion_ArmEdgeMonitorEx(
+    void* hwndValue,
+    int side,
+    int thicknessDip,
+    int pollIntervalMs,
+    unsigned long long generation,
+    int revealMode) {
+    return WindowMotionEdgeMonitor::ArmEx(
+        static_cast<HWND>(hwndValue),
+        side,
+        thicknessDip,
+        pollIntervalMs,
+        generation,
+        revealMode);
+}
+
+int WindowMotion_DisarmEdgeMonitor(unsigned long long generation) {
+    return WindowMotionEdgeMonitor::Disarm(generation);
+}
+
+int WindowMotion_SetPersistentHandlePosition(
+    unsigned long long generation,
+    int positionPermille) {
+    return WindowMotionEdgeMonitor::SetPersistentHandlePosition(generation, positionPermille);
+}
+
+int WindowMotion_ShowPersistentHandle(unsigned long long generation) {
+    return WindowMotionEdgeMonitor::ShowPersistentHandle(generation);
+}
+
+unsigned int WindowMotion_GetEdgeMessageId(void) {
+    return WindowMotionEdgeMonitor::GetMessageId();
+}
+
+const char* WindowMotion_GetEdgeMonitorStatusJson(void) {
+    return WindowMotionEdgeMonitor::GetStatusJson();
+}
+
+const char* WindowMotion_ConsumeEdgeEventJson(void) {
+    return WindowMotionEdgeMonitor::ConsumeEventJson();
+}
+
+int WindowZOrder_SetBottom(void* hwndValue, int enabled) {
+    return WindowZOrder::SetBottom(static_cast<HWND>(hwndValue), enabled != 0);
+}
+
+int WindowZOrder_Reassert(void* hwndValue) {
+    return WindowZOrder::Reassert(static_cast<HWND>(hwndValue));
+}
+
+const char* WindowZOrder_GetStatusJson(void* hwndValue) {
+    return WindowZOrder::GetStatusJson(static_cast<HWND>(hwndValue));
+}
+
+const char* WindowZOrder_GetLastFailureJson(void) {
+    return WindowZOrder::GetLastFailureJson();
+}

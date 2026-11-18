@@ -1,0 +1,178 @@
+# SmartTable 完整部署配置
+# 包含 Flask 后端、PostgreSQL 数据库、Redis 缓存
+
+services:
+  # PostgreSQL 数据库服务
+  postgres:
+    image: postgres:16-alpine
+    container_name: smarttable-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-smarttable}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-smarttable123}
+      POSTGRES_DB: ${DB_NAME:-smarttable}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # 生产环境不应暴露数据库端口到宿主机，仅通过内部网络访问
+    # 开发调试时可取消注释以下端口映射
+    # ports:
+    #   - "${DB_PORT:-5432}:5432"
+    networks:
+      - smarttable-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-smarttable} -d ${DB_NAME:-smarttable}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存服务
+  redis:
+    image: redis:7-alpine
+    container_name: smarttable-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis123}
+    volumes:
+      - redis_data:/data
+    # 生产环境不应暴露 Redis 端口到宿主机，仅通过内部网络访问
+    # 开发调试时可取消注释以下端口映射
+    # ports:
+    #   - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - smarttable-network
+    healthcheck:
+      # redis 配置了 requirepass，健康检查必须带密码，否则 NOAUTH 导致永远失败
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-redis123} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO 对象存储服务（可选）
+  # 注意：后端 MinIO 上传功能尚未实现（attachment_service.py 中为 TODO），
+  # 当前附件存储在本地 uploads 目录（见下方 uploads_data 卷），此服务仅供未来扩展
+  minio:
+    image: minio/minio:latest
+    container_name: smarttable-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      - smarttable-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Flask 后端服务
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smarttable-backend
+    restart: unless-stopped
+    environment:
+      FLASK_ENV: ${FLASK_ENV:-production}
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-this}
+      DATABASE_URL: postgresql+psycopg://${DB_USER:-smarttable}:${DB_PASSWORD:-smarttable123}@postgres:5432/${DB_NAME:-smarttable}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-jwt-secret-change-this}
+      JWT_ACCESS_TOKEN_EXPIRES: ${JWT_ACCESS_TOKEN_EXPIRES:-86400}
+      # SocketIO 消息队列必须指向 redis 容器（config 默认值是 localhost:6379，
+      # 在独立后端容器内没有 Redis，ENABLE_REALTIME=true 时实时协作会初始化失败）
+      SOCKETIO_MESSAGE_QUEUE: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/2
+      ENABLE_REALTIME: ${ENABLE_REALTIME:-false}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_SECURE: "false"
+      UPLOAD_FOLDER: /app/uploads
+      MAX_CONTENT_LENGTH: 52428800
+    volumes:
+      - uploads_data:/app/uploads
+      - ./logs:/app/logs
+      # 插件引擎兼容校验（engines.smarttable）需读取宿主版本；
+      # 后端构建上下文不含仓库根目录的 version.json，运行时从宿主挂载
+      - ../version.json:/app/version.json:ro
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # MinIO 未加入 depends_on：后端 MinIO 功能尚未实现，不应对启动形成硬依赖
+    networks:
+      - smarttable-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 数据库迁移服务（一次性运行）
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smarttable-migrate
+    environment:
+      FLASK_ENV: ${FLASK_ENV:-production}
+      DATABASE_URL: postgresql+psycopg://${DB_USER:-smarttable}:${DB_PASSWORD:-smarttable123}@postgres:5432/${DB_NAME:-smarttable}
+    command: >
+      sh -c "python run.py migrate &&
+             echo 'Database migration completed'"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - smarttable-network
+    profiles:
+      - migrate
+
+  # 说明：原 celery-worker / celery-beat 服务已移除。
+  # 项目中不存在 app.celery 模块，celery 也未列入生产依赖（requirements.txt），
+  # 这两个服务一旦启动必然失败（ModuleNotFoundError）。如后续实现任务队列，
+  # 请先添加 celery 依赖与 app/celery.py，再恢复对应服务定义。
+
+  # Nginx 反向代理（可选）
+  nginx:
+    image: nginx:alpine
+    container_name: smarttable-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - uploads_data:/app/uploads:ro
+    depends_on:
+      - backend
+    networks:
+      - smarttable-network
+    profiles:
+      - nginx
+
+# 数据卷定义
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  uploads_data:
+    driver: local
+
+# 网络定义
+networks:
+  smarttable-network:
+    driver: bridge
