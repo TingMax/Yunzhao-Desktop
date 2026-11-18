@@ -15,13 +15,17 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
 
+#include <algorithm>
+#include <atomic>
 #include <ctime>
 #include <cwctype>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace json = winrt::Windows::Data::Json;
 
@@ -463,15 +467,177 @@ void SetStatus(Form* form, const std::wstring& text)
     SetWindowTextW(form->status, text.c_str());
 }
 
+// macOS installer / boot screen: black field, 200×4 pt capsule, 13 pt caption under it.
+// The bar is NSProgressIndicator's indeterminate sweep, not a custom drawing.
+struct MacWait {
+    std::wstring caption;
+    DWORD start = 0;
+    DWORD closeAt = 0;
+    std::vector<HWND> windows;
+};
+
+MacWait* gMacWait = nullptr;
+
+int Dip(HWND hwnd, int dip)
+{
+    return MulDiv(dip, GetDpiForWindow(hwnd), 96);
+}
+
+void PaintMacWait(HWND hwnd)
+{
+    PAINTSTRUCT ps{};
+    HDC dc = BeginPaint(hwnd, &ps);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    FillRect(dc, &client, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    const int barW = Dip(hwnd, 200);
+    const int barH = std::max(4, Dip(hwnd, 4));
+    const int gap = Dip(hwnd, 16);
+    const int textH = Dip(hwnd, 20);
+    const int blockH = barH + gap + textH;
+    const int x = (client.right - barW) / 2;
+    const int y = (client.bottom - blockH) / 2;
+    HRGN pill = CreateRoundRectRgn(x, y, x + barW + 1, y + barH + 1, barH, barH);
+    SelectClipRgn(dc, pill);
+    HBRUSH track = CreateSolidBrush(RGB(48, 48, 48));
+    RECT trackBox{x, y, x + barW, y + barH};
+    FillRect(dc, &trackBox, track);
+    DeleteObject(track);
+    const int segW = std::max(barH * 8, barW / 3);
+    const DWORD cycle = 1000;
+    const float t = float((GetTickCount() - (gMacWait ? gMacWait->start : 0)) % cycle) / float(cycle);
+    const int segX = x - segW + int(t * float(barW + segW));
+    HBRUSH fill = CreateSolidBrush(RGB(255, 255, 255));
+    RECT seg{segX, y, segX + segW, y + barH};
+    FillRect(dc, &seg, fill);
+    DeleteObject(fill);
+    SelectClipRgn(dc, nullptr);
+    DeleteObject(pill);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    HFONT font = CreateFontW(-Dip(hwnd, 13), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, GB2312_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"PingFang SC");
+    HGDIOBJ old = SelectObject(dc, font);
+    RECT text{0, y + barH + gap, client.right, y + barH + gap + textH};
+    DrawTextW(dc, gMacWait ? gMacWait->caption.c_str() : L"", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, old);
+    DeleteObject(font);
+    EndPaint(hwnd, &ps);
+}
+
+LRESULT CALLBACK MacWaitProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        PaintMacWait(hwnd);
+        return 0;
+    case WM_TIMER:
+        if (gMacWait) {
+            DWORD now = GetTickCount();
+            DWORD elapsed = now - gMacWait->start;
+            int alpha = elapsed < 250 ? int(elapsed * 255 / 250) : 255;
+            if (gMacWait->closeAt != 0) {
+                DWORD out = now - gMacWait->closeAt;
+                alpha = out >= 400 ? 0 : 255 - int(out * 255 / 400);
+            }
+            for (HWND window : gMacWait->windows) {
+                SetLayeredWindowAttributes(window, 0, BYTE(alpha), LWA_ALPHA);
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        }
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+}
+
+void RunMacWait(const wchar_t* caption, const std::function<void()>& work)
+{
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = MacWaitProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"YunzhaoMacWait";
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    RegisterClassW(&wc);
+    MacWait wait;
+    wait.caption = caption;
+    wait.start = GetTickCount();
+    gMacWait = &wait;
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR monitor, HDC, LPRECT, LPARAM lp) -> BOOL {
+        auto* state = reinterpret_cast<MacWait*>(lp);
+        MONITORINFO info{sizeof(info)};
+        if (!GetMonitorInfoW(monitor, &info))
+            return TRUE;
+        const int width = info.rcMonitor.right - info.rcMonitor.left;
+        const int height = info.rcMonitor.bottom - info.rcMonitor.top;
+        HWND hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
+            L"YunzhaoMacWait", L"", WS_POPUP,
+            info.rcMonitor.left, info.rcMonitor.top, width, height,
+            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!hwnd)
+            return TRUE;
+        SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        state->windows.push_back(hwnd);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&wait));
+    if (!wait.windows.empty())
+        SetTimer(wait.windows.front(), 1, 16, nullptr);
+    std::atomic<bool> finished{false};
+    std::thread worker([&] {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            work();
+            winrt::uninit_apartment();
+        } catch (...) {
+            finished = true;
+            return;
+        }
+        finished = true;
+    });
+    for (;;) {
+        DWORD now = GetTickCount();
+        if (finished && wait.closeAt == 0 && now - wait.start >= 250 + 1000)
+            wait.closeAt = now;
+        if (wait.closeAt != 0 && now - wait.closeAt >= 400)
+            break;
+        DWORD slice = 16;
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, slice, QS_ALLINPUT);
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                PostQuitMessage(int(msg.wParam));
+                finished = true;
+                if (wait.closeAt == 0)
+                    wait.closeAt = GetTickCount();
+                continue;
+            }
+            bool mine = false;
+            for (HWND window : wait.windows)
+                mine = mine || msg.hwnd == window;
+            if (mine)
+                DispatchMessageW(&msg);
+        }
+    }
+    for (HWND window : wait.windows)
+        DestroyWindow(window);
+    gMacWait = nullptr;
+    if (worker.joinable())
+        worker.join();
+}
+
 void Finish(Form* form, const Session& session)
 {
     Bind(session);
-    AdoptLocalFiles();
-    SetStatus(form, L"正在从服务器拉取数据");
-    UpdateWindow(form->window);
-    PullLayout(true);
-    WriteTextFile(AccountDataDir() + L"\\pull-notes.once", L"1");
-    WriteTextFile(AccountDataDir() + L"\\pull-sheet.once", L"1");
+    ShowWindow(form->window, SW_HIDE);
+    RunMacWait(L"正在载入数据", [&] {
+        AdoptLocalFiles();
+        PullLayout(true);
+        WriteTextFile(AccountDataDir() + L"\\pull-notes.once", L"1");
+        WriteTextFile(AccountDataDir() + L"\\pull-sheet.once", L"1");
+    });
     form->ok = true;
     form->done = true;
 }
@@ -679,8 +845,10 @@ bool AccountEnsure(HINSTANCE instance)
     Session session;
     if (LoadSession(session) && Usable(session)) {
         Bind(session);
-        AdoptLocalFiles();
-        PullLayout();
+        RunMacWait(L"正在载入数据", [] {
+            AdoptLocalFiles();
+            PullLayout();
+        });
         Log(L"account: %s", session.username.c_str());
         return true;
     }
@@ -689,30 +857,32 @@ bool AccountEnsure(HINSTANCE instance)
 
 void AccountSignOut()
 {
-    Session session;
-    if (LoadSession(session) && !session.access.empty()) {
+    RunMacWait(L"正在上传数据", [] {
+        Session session;
+        if (!LoadSession(session) || session.access.empty())
+            return;
         std::wstring file = AccountDataDir() + L"\\widgets.json";
         std::wstring text = ReadTextFile(file);
-        if (!text.empty() && text[0] == L'{') {
-            std::string payload = WideToUtf8(text);
-            std::wstring mapText = ReadTextFile(AccountDataDir() + L"\\sync.json");
-            json::JsonObject map{nullptr};
-            long long id = 0;
-            if (json::JsonObject::TryParse(mapText, map))
-                id = (long long)map.GetNamedNumber(L"widgets", 0);
-            HttpResult http;
-            if (id > 0)
-                http = Authed(L"PUT", L"/items/" + std::to_wstring(id), std::string("{\"payload\":") + payload + "}", session);
-            else
-                http = Authed(L"POST", L"/items", std::string("{\"kind\":\"widgets\",\"payload\":") + payload + "}", session);
-            json::JsonObject row{nullptr};
-            if ((http.status == 200 || http.status == 201) && json::JsonObject::TryParse(Utf8ToWide(http.body), row)) {
-                long long saved = (long long)row.GetNamedNumber(L"id", double(id));
-                if (saved > 0)
-                    WriteTextFile(AccountDataDir() + L"\\sync.json", L"{\"widgets\":" + std::to_wstring(saved) + L"}");
-            }
+        if (text.empty() || text[0] != L'{')
+            return;
+        std::string payload = WideToUtf8(text);
+        std::wstring mapText = ReadTextFile(AccountDataDir() + L"\\sync.json");
+        json::JsonObject map{nullptr};
+        long long id = 0;
+        if (json::JsonObject::TryParse(mapText, map))
+            id = (long long)map.GetNamedNumber(L"widgets", 0);
+        HttpResult http;
+        if (id > 0)
+            http = Authed(L"PUT", L"/items/" + std::to_wstring(id), std::string("{\"payload\":") + payload + "}", session);
+        else
+            http = Authed(L"POST", L"/items", std::string("{\"kind\":\"widgets\",\"payload\":") + payload + "}", session);
+        json::JsonObject row{nullptr};
+        if ((http.status == 200 || http.status == 201) && json::JsonObject::TryParse(Utf8ToWide(http.body), row)) {
+            long long saved = (long long)row.GetNamedNumber(L"id", double(id));
+            if (saved > 0)
+                WriteTextFile(AccountDataDir() + L"\\sync.json", L"{\"widgets\":" + std::to_wstring(saved) + L"}");
         }
-    }
+    });
     DeleteFileW(SessionPath().c_str());
     wchar_t path[MAX_PATH]{};
     GetModuleFileNameW(nullptr, path, MAX_PATH);
