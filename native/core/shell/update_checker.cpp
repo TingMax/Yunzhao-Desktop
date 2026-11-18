@@ -24,7 +24,7 @@ namespace atrium {
 namespace {
 namespace json = winrt::Windows::Data::Json;
 constexpr int64_t kIntervalSeconds = 12 * 60 * 60;
-constexpr wchar_t kLatest[] = L"https://api.github.com/repos/TingMax/Yunzhao-Desktop/releases/latest";
+constexpr wchar_t kReleases[] = L"https://api.github.com/repos/TingMax/Yunzhao-Desktop/releases?per_page=20";
 using Version = std::array<unsigned, 4>;
 
 std::optional<Version> ParseVersion(std::wstring_view tag)
@@ -141,7 +141,9 @@ void DownloadRelease(const json::JsonObject& release, const Version& current)
     std::wstring tag = release.GetNamedString(L"tag_name").c_str();
     auto latest = ParseVersion(tag);
     if (!latest) throw winrt::hresult_invalid_argument(L"Invalid release version");
-    if (*latest <= current || release.GetNamedBoolean(L"draft", false) || release.GetNamedBoolean(L"prerelease", false)) return;
+    std::wstring target;
+    if (release.HasKey(L"target_commitish")) target = release.GetNamedString(L"target_commitish").c_str();
+    if (target != L"main" || *latest <= current || release.GetNamedBoolean(L"draft", false) || release.GetNamedBoolean(L"prerelease", false)) return;
     std::wstring number = tag.substr(tag[0] == L'v' || tag[0] == L'V' ? 1 : 0);
     number = number.substr(0, number.find(L'+'));
     std::wstring assetName = L"Yunzhao-" + number + L"-win-x64.zip";
@@ -200,7 +202,7 @@ void UpdateChecker::Run()
                     winrt::Windows::Web::Http::HttpClient http;
                     http.DefaultRequestHeaders().UserAgent().TryParseAdd(L"Yunzhao-Desktop/1.0");
                     http.DefaultRequestHeaders().Accept().TryParseAdd(L"application/vnd.github+json");
-                    auto request = http.GetAsync(winrt::Windows::Foundation::Uri(kLatest));
+                    auto request = http.GetAsync(winrt::Windows::Foundation::Uri(kReleases));
                     const auto start = GetTickCount64();
                     while (request.Status() == winrt::Windows::Foundation::AsyncStatus::Started) {
                         if (WaitForSingleObject(stop_, 100) == WAIT_OBJECT_0 || GetTickCount64() - start >= 15000) {
@@ -215,8 +217,17 @@ void UpdateChecker::Run()
                         auto response = request.GetResults();
                         const auto code = response.StatusCode();
                         if (code == winrt::Windows::Web::Http::HttpStatusCode::Ok) {
-                            auto release = json::JsonObject::Parse(response.Content().ReadAsStringAsync().get());
-                            DownloadRelease(release, current);
+                            auto parsed = json::JsonValue::Parse(response.Content().ReadAsStringAsync().get());
+                            if (parsed.ValueType() == json::JsonValueType::Array) {
+                                for (const auto& value : parsed.GetArray()) {
+                                    auto release = value.GetObject();
+                                    std::wstring target;
+                                    if (release.HasKey(L"target_commitish")) target = release.GetNamedString(L"target_commitish").c_str();
+                                    if (target != L"main") continue;
+                                    DownloadRelease(release, current);
+                                    break;
+                                }
+                            }
                         } else if (code != winrt::Windows::Web::Http::HttpStatusCode::NotFound) {
                             StartWorker(L"--close-update");
                         }

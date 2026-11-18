@@ -1,0 +1,12 @@
+---
+description: 代码只进 dev，安装包只从 main 发布
+alwaysApply: true
+---
+
+# 分支与更新包
+
+- 本仓库的改动提交并推送到 `dev`：https://github.com/TingMax/Yunzhao-Desktop
+- 只有用户在对话里明确说「推送到 main」时，才合并或推送 `main`。
+- 软件更新只下载 `target_commitish` 为 `main` 的正式安装包 `Yunzhao-<版本>-win-x64.zip`。不拉取 `dev` 或其他分支的包。
+- 用户说发版时，再把已测过的 `dev` 合进 `main`，并在 `main` 上发布这个安装包。
+- 紧急修复是唯一例外，而且必须由用户在当次对话里明确说出。没有这句话，就保持上面的规则。

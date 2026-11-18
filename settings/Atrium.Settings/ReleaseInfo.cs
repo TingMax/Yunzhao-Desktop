@@ -20,12 +20,20 @@ internal sealed record ReleaseInfo(Version Version, string Tag, Uri Page, Uri? D
 
     public static async Task<ReleaseInfo?> FetchLatestAsync(CancellationToken cancel)
     {
-        using var response = await Http.GetAsync("https://api.github.com/repos/TingMax/Yunzhao-Desktop/releases/latest", cancel);
+        using var response = await Http.GetAsync("https://api.github.com/repos/TingMax/Yunzhao-Desktop/releases?per_page=20", cancel);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
         using var stream = await response.Content.ReadAsStreamAsync(cancel);
         using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancel);
-        return FromJson(json.RootElement);
+        if (json.RootElement.ValueKind != JsonValueKind.Array) return null;
+        foreach (var release in json.RootElement.EnumerateArray())
+        {
+            if (!release.TryGetProperty("target_commitish", out var target) || target.GetString() != "main") continue;
+            if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
+            if (release.TryGetProperty("prerelease", out var pre) && pre.GetBoolean()) continue;
+            return FromJson(release);
+        }
+        return null;
     }
 
     internal static ReleaseInfo FromJson(JsonElement release)
