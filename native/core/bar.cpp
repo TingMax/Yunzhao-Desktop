@@ -996,7 +996,11 @@ void Bar::Relayout()
 
     const int winW = roomW + 2 * side, winH = barH + insetTop + inset;
     const int x = wa.left + (wa.right - wa.left - winW) / 2;
-    const int y = wa.bottom - Px(st.margin, s) - barH - insetTop;
+    // A hidden system taskbar can leave its strip in the work area. Sit on the
+    // screen edge then, or the bar appears above a dead gap and slides into it.
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    const int anchorBottom = tray && IsWindowVisible(tray) ? wa.bottom : mi.rcMonitor.bottom;
+    const int y = std::max(int(mi.rcMonitor.top), anchorBottom - Px(st.margin, s) - barH - insetTop);
 
     // Display order: during a drag the dragged app leaves its slot and the
     // others close up around the insertion point.
@@ -1309,7 +1313,7 @@ bool Bar::MonitorCoveredByApp() const
             wcscmp(cls, L"Progman") == 0 || wcscmp(cls, L"WorkerW") == 0)
             continue;
         RECT frame{};
-        if (!GetWindowRect(window, &frame))
+        if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) && !GetWindowRect(window, &frame))
             continue;
         if (auto covered = WindowCoverOnMonitor(windowMonitor, frame, IsZoomed(window) != FALSE, hmonitor_, monitor_)) {
             if (*covered)
@@ -1399,7 +1403,13 @@ void Bar::WatchPointer()
         // The bar is hidden, so the pointer has to rest on this screen's bottom strip, not on a
         // two-pixel line. A two-pixel line cannot be held for the reveal delay.
         const int band = std::max(int(std::lround(48 * scale_)), int(scene_.bar.bottom - scene_.bar.top));
-        const bool atBottom = p.x >= monitor_.left && p.x < monitor_.right && p.y >= monitor_.bottom - band && p.y < monitor_.bottom;
+        MONITORINFO hot{sizeof(hot)};
+        GetMonitorInfoW(hmonitor_, &hot);
+        // The pointer on Windows 10 often cannot cross into a hidden taskbar's
+        // strip, so the work area's own bottom edge has to count as well.
+        const bool onScreen = p.x >= monitor_.left && p.x < monitor_.right;
+        const bool atBottom = onScreen && ((p.y >= monitor_.bottom - band && p.y < monitor_.bottom) ||
+                                           (p.y >= hot.rcWork.bottom - band && p.y < hot.rcWork.bottom));
         if (atBottom && !FullScreenInFront(hmonitor_) && now >= yieldUntil_) {
             if (!revealAt_)
                 revealAt_ = now;

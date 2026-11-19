@@ -1,5 +1,6 @@
 #include "displays.h"
 
+#include <dwmapi.h>
 #include <shellapi.h>
 
 #include <algorithm>
@@ -106,14 +107,17 @@ bool FullScreenApp(HWND window)
             return true;
     }
     // Maximized apps keep their title-bar behavior: the bar may climb back over them.
-    // A borderless window that covers the monitor is a game, caption bit or not.
-    if (IsZoomed(root))
+    // Windows 10 reports a titled window's rectangle past the monitor because of the
+    // invisible resize border. That is not a game, and it must not pin the bar down.
+    if (IsZoomed(root) || (GetWindowLongW(root, GWL_STYLE) & WS_CAPTION))
         return false;
     HMONITOR monitor = MonitorFromWindow(root, MONITOR_DEFAULTTONULL);
     MONITORINFO mi{sizeof(mi)};
     RECT r{};
-    if (monitor && GetMonitorInfoW(monitor, &mi) && GetWindowRect(root, &r) && r.left <= mi.rcMonitor.left + 8 &&
-        r.top <= mi.rcMonitor.top + 8 && r.right >= mi.rcMonitor.right - 8 && r.bottom >= mi.rcMonitor.bottom - 8)
+    if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
+        GetWindowRect(root, &r);
+    if (monitor && GetMonitorInfoW(monitor, &mi) && r.left <= mi.rcMonitor.left + 2 &&
+        r.top <= mi.rcMonitor.top + 2 && r.right >= mi.rcMonitor.right - 2 && r.bottom >= mi.rcMonitor.bottom - 2)
         return true;
     // Alt-tab leaves the game minimized and without a title bar. It is about to
     // take the screen again; the bar has to be gone before that happens.
@@ -149,9 +153,12 @@ bool FullScreenInFront(HMONITOR monitor)
     // Maximized fills only the work area (all of it when Windows' taskbar is hidden).
     MONITORINFO mi{sizeof(mi)};
     RECT r{};
-    if (IsZoomed(root) || IsIconic(root) || !GetMonitorInfoW(monitor, &mi) || !GetWindowRect(root, &r))
+    if (IsZoomed(root) || IsIconic(root) || (GetWindowLongW(root, GWL_STYLE) & WS_CAPTION) || !GetMonitorInfoW(monitor, &mi))
         return false;
-    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+    if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
+        GetWindowRect(root, &r);
+    return r.left <= mi.rcMonitor.left + 2 && r.top <= mi.rcMonitor.top + 2 && r.right >= mi.rcMonitor.right - 2 &&
+           r.bottom >= mi.rcMonitor.bottom - 2;
 }
 
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary,

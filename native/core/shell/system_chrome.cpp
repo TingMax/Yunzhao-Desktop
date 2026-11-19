@@ -63,6 +63,8 @@ void SetAutoHide(bool on)
 {
     APPBARDATA abd{sizeof(abd)};
     abd.hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+    // Windows 10 applies a zero edge as the top. Keep the taskbar where the user put it.
+    SHAppBarMessage(ABM_GETTASKBARPOS, &abd);
     abd.lParam = on ? ABS_AUTOHIDE : ABS_ALWAYSONTOP;
     SHAppBarMessage(ABM_SETSTATE, &abd);
 }
