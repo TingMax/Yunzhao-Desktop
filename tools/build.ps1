@@ -38,7 +38,7 @@ try {
         Remove-Item -Recurse -Force $dist
     }
     New-Item -ItemType Directory -Force $dist | Out-Null
-    dotnet publish settings/Atrium.Settings/Atrium.Settings.csproj -c $Configuration -p:AtriumDevelopment=$($Development.IsPresent.ToString().ToLowerInvariant()) -o (Join-Path $dist "Settings")
+    dotnet publish settings/Atrium.Settings/Atrium.Settings.csproj -c $Configuration -p:AtriumDevelopment=$($Development.IsPresent.ToString().ToLowerInvariant()) -o $dist
     if ($LASTEXITCODE) { throw "settings publish failed" }
 
     Copy-Item (Join-Path "$buildDirectory/$Configuration" "Yunzhao.exe") $dist
@@ -50,6 +50,8 @@ try {
     }
     dotnet publish tools/Atrium.Table/Atrium.Table.csproj -c $Configuration -r win-x64 --self-contained true -o (Join-Path $dist "Table")
     if ($LASTEXITCODE) { throw "table window publish failed" }
+    Get-ChildItem $dist -Recurse -File | Where-Object { $_.Extension -eq '.pdb' -or $_.Name -eq 'createdump.exe' -or $_.Name -eq 'Microsoft.DiaSymReader.Native.amd64.dll' } | Remove-Item -Force
+    Get-ChildItem $dist -Directory -Recurse | Where-Object { $_.Name -match '^(cs|de|es|fr|it|ja|ko|pl|pt-BR|ru|tr|zh-Hant)$' } | Remove-Item -Recurse -Force
     if ($Development) { Set-Content -LiteralPath (Join-Path $dist 'development.txt') -Value 'Development distribution: does not register or change Windows startup.' }
     Copy-Item (Join-Path $PSScriptRoot "Uninstall.ps1") $dist
     Copy-Item LICENSE $dist

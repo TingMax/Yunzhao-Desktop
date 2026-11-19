@@ -1559,6 +1559,12 @@ void StartHostedCalendar()
             return std::wstring();
         return std::wstring(full);
     };
+    std::wstring packaged = resolve(folder + L"\\Calendar\\YunzhaoNote.exe");
+    if (!packaged.empty()) {
+        std::wstring calendarDir = packaged.substr(0, packaged.find_last_of(L"\\/"));
+        ShellExecuteW(nullptr, L"open", packaged.c_str(), nullptr, calendarDir.c_str(), SW_SHOWNORMAL);
+        return;
+    }
     std::wstring script = resolve(folder + L"\\..\\..\\..\\tools\\yunzhao-note.ps1");
     if (script.empty())
         script = resolve(folder + L"\\tools\\yunzhao-note.ps1");
@@ -2621,6 +2627,14 @@ void DesktopWidgets::SyncYunzhao(Widget& w)
             return std::wstring();
         return std::wstring(full);
     };
+    std::wstring packaged = resolve(folder + L"\\Calendar\\YunzhaoNote.exe");
+    if (!packaged.empty()) {
+        std::wstring calendarDir = packaged.substr(0, packaged.find_last_of(L"\\/"));
+        HINSTANCE startedPackaged = ShellExecuteW(nullptr, L"open", packaged.c_str(), nullptr, calendarDir.c_str(), SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(startedPackaged) > 32)
+            launched = true;
+        return;
+    }
     std::wstring script = resolve(folder + L"\\..\\..\\..\\tools\\yunzhao-note.ps1");
     if (script.empty())
         script = resolve(folder + L"\\tools\\yunzhao-note.ps1");
@@ -5385,7 +5399,9 @@ void LaunchBitable(RECT monitor)
         SetWindowPos(existing, HWND_TOP, x, y, width, height, SWP_SHOWWINDOW);
         return;
     }
-    std::wstring host = resolve(dir + L"\\Table\\Atrium.Table.exe");
+    std::wstring host = resolve(dir + L"\\Atrium.Table.exe");
+    if (host.empty())
+        host = resolve(dir + L"\\Table\\Atrium.Table.exe");
     if (host.empty())
         host = resolve(dir + L"\\..\\..\\..\\tools\\Atrium.Table\\bin\\Release\\net10.0-windows\\win-x64\\Atrium.Table.exe");
     if (host.empty())

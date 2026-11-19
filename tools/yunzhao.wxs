@@ -1,0 +1,46 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Yunzhao" Manufacturer="Yunzhao" Version="2.5.0.0"
+           UpgradeCode="8C4A1E2B-6D47-4F0A-9C55-2B7E91A4D310" Scope="perUser"
+           Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="已经安装了更新的 Yunzhao。" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="AppIcon" SourceFile="..\assets\atrium.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Yunzhao" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MenuFolder" Name="Yunzhao" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Yunzhao" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+
+    <CustomAction Id="CleanupStartup" Directory="INSTALLFOLDER"
+                  ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Uninstall.ps1&quot; -StartupOnly"
+                  Execute="immediate" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="CleanupStartup" Before="RemoveFiles" Condition='REMOVE="ALL"' />
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="..\dist\Atrium\**" />
+    </ComponentGroup>
+    <Component Id="StartMenu" Directory="MenuFolder" Guid="B1C85E40-7A2D-4E18-9F63-0D4C6A8B2E71">
+      <Shortcut Id="Start" Name="Yunzhao" Target="[INSTALLFOLDER]Yunzhao.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" />
+      <Shortcut Id="Uninstall" Name="卸载 Yunzhao" Target="[System64Folder]msiexec.exe" Arguments="/x [ProductCode]" />
+      <RemoveFolder Id="RemoveMenu" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Yunzhao" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>

@@ -7,6 +7,10 @@
     <UseWPF>true</UseWPF>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <DebuggerSupport>false</DebuggerSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
     <ApplicationTitle>Yunzhao_table</ApplicationTitle>
     <ApplicationIcon>..\..\assets\atrium.ico</ApplicationIcon>
     <RootNamespace>Atrium.Table</RootNamespace>

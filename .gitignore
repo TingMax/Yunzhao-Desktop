@@ -1,6 +1,7 @@
 # Build output
 bin/
 obj/
+tools/.wix/
 native/build/
 dist/
 **/.git.localkeep/

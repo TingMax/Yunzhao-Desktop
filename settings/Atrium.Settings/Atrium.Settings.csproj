@@ -15,6 +15,10 @@
     <!-- Needed for `dotnet publish` to include the compiled XAML (.xbf) and resources.pri. -->
     <EnableMsixTooling>true</EnableMsixTooling>
     <SelfContained>true</SelfContained>
+    <!-- Diagnostics and hot-reload support are not part of the running app. -->
+    <DebuggerSupport>false</DebuggerSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <EventSourceSupport>false</EventSourceSupport>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AtriumDevelopment Condition="'$(AtriumDevelopment)' == ''">true</AtriumDevelopment>

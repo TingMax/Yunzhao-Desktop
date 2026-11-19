@@ -1,5 +1,5 @@
 ﻿# Removes this distribution only. Personal settings and widget layouts are retained.
-param([switch]$Confirmed)
+param([switch]$Confirmed, [switch]$StartupOnly)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -7,16 +7,17 @@ Add-Type -AssemblyName System.Windows.Forms
 try {
     $installRoot = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
     $coreExe = Join-Path $installRoot 'Yunzhao.exe'
-    $settingsExe = Join-Path $installRoot 'Settings\Atrium.Settings.exe'
+    $settingsExe = Join-Path $installRoot 'Atrium.Settings.exe'
+    if (!(Test-Path -LiteralPath $settingsExe)) { $settingsExe = Join-Path $installRoot 'Settings\Atrium.Settings.exe' }
     if ($installRoot -eq [IO.Path]::GetPathRoot($installRoot).TrimEnd('\') -or
         !(Test-Path -LiteralPath $coreExe -PathType Leaf) -or
         !(Test-Path -LiteralPath $settingsExe -PathType Leaf)) {
-        throw '请从 Atrium 安装目录运行卸载程序。'
+        throw '请从 Yunzhao 安装目录运行卸载程序。'
     }
 
-    if (!$Confirmed) {
+    if (!$Confirmed -and !$StartupOnly) {
         $answer = [Windows.Forms.MessageBox]::Show(
-            '卸载 Atrium？个人设置和桌面小组件布局将会保留。',
+            '卸载 Yunzhao？个人设置和桌面小组件布局将会保留。',
             'Yunzhao', 'YesNo', 'Question', 'Button2')
         if ($answer -ne [Windows.Forms.DialogResult]::Yes) { exit 0 }
     }
@@ -30,14 +31,12 @@ try {
     $quit = Start-Process -FilePath $coreExe -ArgumentList '--exit' -WindowStyle Hidden -PassThru
     if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Atrium 未能退出，请关闭后重试。' }
 
-    # Resolve and check every removal before changing files. Never remove the parent folder's contents.
-    $files = @('Settings', 'Table', 'Island', 'Atrium.Core.exe', 'Atrium.exe', 'Yunzhao.exe', 'LICENSE', 'Uninstall.ps1') | ForEach-Object {
-        $target = [IO.Path]::GetFullPath((Join-Path $installRoot $_))
-        if (!$target.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
-            throw '安装目录无效。'
-        }
+    # Everything in this folder belongs to the install. Account data lives in %LOCALAPPDATA%\Yunzhao.
+    $files = @(Get-ChildItem -LiteralPath $installRoot -Force | Where-Object { $_.Name -ne 'Uninstall.exe' } | ForEach-Object {
+        $target = [IO.Path]::GetFullPath($_.FullName)
+        if (!$target.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw '安装目录无效。' }
         $target
-    }
+    })
     $shell = New-Object -ComObject WScript.Shell
     $programs = [Environment]::GetFolderPath('Programs')
     foreach ($name in @('Atrium.lnk', 'Atrium.Core.lnk')) {
@@ -59,6 +58,7 @@ try {
     if ($startup -eq ('"' + $coreExe + '"') -or $startup -eq ('"' + (Join-Path $installRoot 'Atrium.Core.exe') + '"')) {
         Remove-ItemProperty -LiteralPath $runKey -Name Atrium
     }
+    if ($StartupOnly) { exit 0 }
 
     foreach ($file in $files) {
         if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Recurse -Force }
