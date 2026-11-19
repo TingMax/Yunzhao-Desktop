@@ -2,6 +2,7 @@ import { useTranslation } from "../../i18n";
 import { MailPanel, type MailController } from "./mail/MailPanel";
 import { QQNotificationPanel, type QQNotificationsController } from "./qq-notifications/QQNotifications";
 import { WeChatReminderPanel, type WeChatRemindersController } from "./wechat/WeChatReminders";
+import { WeComReminderPanel, type WeComRemindersController } from "./wecom/WeComReminders";
 import { MessageSourceIcon } from "./MessageSourceIcon";
 import { mailBadgeCount, type MessageSource } from "./messagePreview";
 import "./MessageToolbar.css";
@@ -14,6 +15,7 @@ type MessagesProps = {
   qqMail: MailController;
   qqNotifications: QQNotificationsController;
   wechatReminders: WeChatRemindersController;
+  wecomReminders: WeComRemindersController;
   source: MessageView;
   /** Sources switched on; the tabs of the others are hidden. */
   enabledSources: Record<Exclude<MessageSource, "plugin">, boolean> & { plugin?: boolean };
@@ -26,16 +28,17 @@ export function messagePanelHeight(source: MessageView, readingMail = false) {
   return source === "qqMail" && readingMail ? 450 : 350;
 }
 
-export function MessagesPanel({ qqMail, qqNotifications, wechatReminders, source: requestedSource, enabledSources, onSourceChange, onOpenMailSettings }: MessagesProps) {
+export function MessagesPanel({ qqMail, qqNotifications, wechatReminders, wecomReminders, source: requestedSource, enabledSources, onSourceChange, onOpenMailSettings }: MessagesProps) {
   const t = useTranslation();
   const source = requestedSource === "plugin" && !PLUGINS_ENABLED
-    ? enabledSources.wechat ? "wechat" : enabledSources.qq ? "qq" : "qqMail"
+    ? enabledSources.wechat ? "wechat" : enabledSources.wecom ? "wecom" : enabledSources.qq ? "qq" : "qqMail"
     : requestedSource;
   const { snapshot: qq } = qqNotifications;
   const navigate = (next: MessageView) => onSourceChange(next);
   const navigation = (
     <div className="message-sources" role="group" aria-label={t.messages.sources}>
       {enabledSources.wechat && <button type="button" aria-label={t.messages.wechatReminders} aria-pressed={source === "wechat"} onClick={() => navigate("wechat")}><MessageSourceIcon source="wechat" /><span className="message-source-label">{t.messages.wechat}</span>{wechatReminders.snapshot.pending && <span className="message-source-dot" aria-label={t.messages.newReminder} />}</button>}
+      {enabledSources.wecom && <button type="button" aria-label={t.messages.wecomReminders} aria-pressed={source === "wecom"} onClick={() => navigate("wecom")}><MessageSourceIcon source="wecom" /><span className="message-source-label">{t.messages.wecom}</span>{wecomReminders.snapshot.pending && <span className="message-source-dot" aria-label={t.messages.newReminder} />}</button>}
       {enabledSources.qq && <button type="button" aria-label={t.messages.qqNotifications} aria-pressed={source === "qq"} onClick={() => navigate("qq")}><MessageSourceIcon source="qq" /><span className="message-source-label">QQ</span>{qq.items.length > 0 && <span className="message-source-count">{mailBadgeCount(qq.items.length)}</span>}</button>}
       {enabledSources.qqMail && <button type="button" aria-label={t.messages.qqMail} aria-pressed={source === "qqMail"} onClick={() => navigate("qqMail")}><MessageSourceIcon source="qqMail" /><span className="message-source-label">{t.messages.mail}</span>{qqMail.unreadTotal > 0 && <span className="message-source-count">{mailBadgeCount(qqMail.unreadTotal)}</span>}</button>}
       {PLUGINS_ENABLED && enabledSources.plugin && <button type="button" aria-label={t.messages.sourceLabels.plugin} aria-pressed={source === "plugin"} onClick={() => navigate("plugin")}><MessageSourceIcon source="plugin" /><span className="message-source-label">{t.messages.sourceLabels.plugin}</span></button>}
@@ -45,5 +48,6 @@ export function MessagesPanel({ qqMail, qqNotifications, wechatReminders, source
   if (source === "qqMail") return <MailPanel controller={qqMail} navigation={navigation} onOpenSettings={onOpenMailSettings} />;
   if (source === "plugin") return <PluginMessagesPanel navigation={navigation} />;
   if (source === "wechat") return <WeChatReminderPanel controller={wechatReminders} navigation={navigation} />;
+  if (source === "wecom") return <WeComReminderPanel controller={wecomReminders} navigation={navigation} />;
   return <QQNotificationPanel controller={qqNotifications} navigation={navigation} />;
 }

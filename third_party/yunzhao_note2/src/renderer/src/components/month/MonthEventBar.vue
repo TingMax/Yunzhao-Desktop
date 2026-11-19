@@ -345,29 +345,39 @@ watch(
     :style="{
       '--event-accent': accent,
       '--event-lane': segment.lane,
+      '--event-span': segment.columnSpan,
       gridColumn: `${segment.columnStart} / span ${segment.columnSpan}`
     }"
     :data-preview="previewText"
     :data-note-id="note.id"
-    :data-segment-key="`${note.id}:${segment.weekIndex}`"
+    :data-segment-key="`${note.id}:${segment.weekIndex}:${segment.columnStart}`"
     :aria-label="fullTitle"
     :aria-expanded="tooltipVisible"
     @click.stop="scheduleTooltipToggle"
     @dblclick="openQuickEditor"
     @contextmenu.prevent.stop="openContextMenu"
   >
-    <span v-if="!segment.continuesBefore" class="month-event-bar__dot" aria-hidden="true" />
-    <span class="month-event-bar__text">
+    <span v-for="day in segment.columnSpan" :key="day" class="month-event-bar__day">
       <span
-        v-for="(colorSegment, index) in previewSegments"
-        :key="`${index}:${colorSegment.start ?? 0}:${colorSegment.end ?? 0}:${colorSegment.color || 'default'}`"
-        :style="colorSegment.color ? { color: colorSegment.color } : undefined"
-        >{{ colorSegment.text }}</span
+        v-if="day === 1 && !segment.continuesBefore"
+        class="month-event-bar__dot"
+        aria-hidden="true"
+      />
+      <span class="month-event-bar__text">
+        <span
+          v-for="(colorSegment, index) in previewSegments"
+          :key="`${day}:${index}:${colorSegment.start ?? 0}:${colorSegment.end ?? 0}:${colorSegment.color || 'default'}`"
+          :style="colorSegment.color ? { color: colorSegment.color } : undefined"
+          >{{ colorSegment.text }}</span
+        >
+      </span>
+      <span
+        v-if="day === segment.columnSpan && segment.continuesAfter"
+        class="month-event-bar__continuation"
+        aria-hidden="true"
+        >›</span
       >
     </span>
-    <span v-if="segment.continuesAfter" class="month-event-bar__continuation" aria-hidden="true"
-      >›</span
-    >
   </button>
 
   <QuickNoteContentEditor
@@ -422,20 +432,19 @@ watch(
 .month-event-bar {
   position: relative;
   z-index: var(--z-local-overlay);
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--event-span), minmax(0, 1fr));
+  column-gap: var(--calendar-gap);
   grid-row: 1;
   height: max(19rem, calc(var(--fs-month-event) + 6rem));
-  align-items: center;
   align-self: start;
-  gap: 5rem;
   min-width: 0;
-  margin-block: 0;
-  margin-inline: 6rem;
-  padding: 0 7rem;
+  margin: 0;
+  padding: 0;
   border: 0;
-  border-radius: 5rem;
-  background: color-mix(in srgb, var(--event-accent) 82%, transparent);
-  box-shadow: 0 1rem 3rem color-mix(in srgb, var(--event-accent) 22%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   color: #fff;
   cursor: pointer;
   font: inherit;
@@ -445,31 +454,35 @@ watch(
   transform: translateY(calc(var(--event-lane) * max(22rem, calc(var(--fs-month-event) + 9rem))));
   transition: filter 140ms ease;
 }
+.month-event-bar__day {
+  display: flex;
+  align-items: center;
+  gap: 5rem;
+  min-width: 0;
+  height: 100%;
+  margin-inline: 6rem;
+  padding: 0 7rem;
+  border-radius: 5rem;
+  background: color-mix(in srgb, var(--event-accent) 82%, transparent);
+  box-shadow: 0 1rem 3rem color-mix(in srgb, var(--event-accent) 22%, transparent);
+}
 .month-event-bar:hover {
   filter: brightness(1.08);
 }
 .month-event-bar:active {
   filter: brightness(0.94);
 }
-.month-event-bar.continues-before {
-  margin-inline-start: 0;
-  border-top-left-radius: 1rem;
-  border-bottom-left-radius: 1rem;
-}
-.month-event-bar.continues-after {
-  margin-inline-end: 0;
-  border-top-right-radius: 1rem;
-  border-bottom-right-radius: 1rem;
-}
 .month-event-bar.is-completed {
   opacity: 0.72;
 }
 .month-event-bar.is-recurring-preview {
-  background: color-mix(in srgb, var(--event-accent) 24%, var(--ui-surface-subtle));
-  box-shadow: none;
   color: var(--text-color-secondary);
   cursor: help;
   opacity: 0.72;
+}
+.month-event-bar.is-recurring-preview .month-event-bar__day {
+  background: color-mix(in srgb, var(--event-accent) 24%, var(--ui-surface-subtle));
+  box-shadow: none;
 }
 .month-event-bar.is-recurring-preview:hover {
   filter: none;

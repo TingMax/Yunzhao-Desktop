@@ -211,11 +211,7 @@ export class ReminderService {
       )
     )
     independently(() => this.tray.sync(rounds.filter((r) => hasChannel(r, 4)).map((r) => r.id)))
-    independently(() =>
-      this.syncForce(
-        rounds.filter((r) => hasChannel(r, 8) && !(r.dismissed_channels & 8))
-      )
-    )
+    independently(() => this.syncForce([]))
     // A single precise timer handles snoozes; the minute scheduler also recovers
     // overdue tasks after startup/resume and failures.
     clearTimeout(this.timer)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildMonthGrid, buildWeekGrid } from '../src/shared/calendar/calendar-date-rules.js'
 import {
   buildCalendarEventSegments,
+  calendarDayChips,
   hasHiddenCalendarNotes,
   noteCountsByDate,
   notesCoveringDate
@@ -153,6 +154,20 @@ describe('month multi-day event layout', () => {
       25,
       preview.id
     ])
+  })
+
+  it('packs a date from the top when its only note sits in a later week lane', () => {
+    const grid = buildMonthGrid(2026, 11)
+    const segments = buildCalendarEventSegments(grid.days, [
+      note(1, 2026, 11, 19, 4),
+      note(2, 2026, 11, 19, 1),
+      note(3, 2026, 11, 20, 4)
+    ])
+    const chips = calendarDayChips(segments)
+    const onDay = (key) =>
+      chips.filter((chip) => grid.days[chip.weekIndex * 7 + chip.columnStart - 1].key === key)
+    expect(onDay('2026-11-23').map((chip) => [chip.noteId, chip.lane])).toEqual([[3, 0]])
+    expect(onDay('2026-11-20').map((chip) => chip.lane)).toEqual([0, 1])
   })
 
   it('reports overflow even when no event lane fits in the date cell', () => {

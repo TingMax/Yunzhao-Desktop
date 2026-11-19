@@ -14,7 +14,7 @@ Yunzhao 运行时使用自己的任务栏。任务栏自动隐藏，鼠标靠向
 
 ## 灵动岛
 
-灵动岛是 Yunzhao 拉起的一个独立程序，不单独占一个任务栏图标，设置也嵌在 Yunzhao 的「灵动岛」页里。它的源码在 `third_party/fly-island`，许可证是 GPL-3.0，不编进 Yunzhao 主程序。
+灵动岛是 Yunzhao 仓库里的独立程序，进程名仍是 `focusd-island.exe`，不编进 `Yunzhao.exe`。Yunzhao 启动它，设置嵌在「灵动岛」页里，不单独占一个任务栏图标。源码在 `third_party/fly-island`，许可证是 GPL-3.0。
 
 ## 设置
 

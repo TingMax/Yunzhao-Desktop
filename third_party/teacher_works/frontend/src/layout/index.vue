@@ -1,8 +1,8 @@
 <template>
   <el-container class="layout-container">
     <!-- 移动端抽屉导航遮罩：仅窄屏显示，点击关闭 -->
-    <div v-if="mobileNavOpen" class="mobile-nav-mask" @click="mobileNavOpen = false"></div>
-    <el-aside width="220px" class="aside" :class="{ 'aside-open': mobileNavOpen }">
+    <div v-if="mobileNavOpen && !soloPage" class="mobile-nav-mask" @click="mobileNavOpen = false"></div>
+    <el-aside v-if="!soloPage" width="220px" class="aside" :class="{ 'aside-open': mobileNavOpen }">
       <div class="logo">
         <h2>教师工作台</h2>
       </div>
@@ -29,22 +29,6 @@
             <el-icon><Files /></el-icon>
             <span>资源管理</span>
           </el-menu-item>
-          <el-menu-item index="/teacher/exams">
-            <el-icon><Document /></el-icon>
-            <span>试卷管理</span>
-          </el-menu-item>
-          <el-menu-item index="/teacher/homework">
-            <el-icon><EditPen /></el-icon>
-            <span>作业管理</span>
-          </el-menu-item>
-          <el-menu-item index="/teacher/ai-grading">
-            <el-icon><MagicStick /></el-icon>
-            <span>AI 批改</span>
-          </el-menu-item>
-          <el-menu-item index="/teacher/recitations">
-            <el-icon><Reading /></el-icon>
-            <span>背书情况</span>
-          </el-menu-item>
           <el-menu-item index="/teacher/schedule">
             <el-icon><Calendar /></el-icon>
             <span>我的课程表</span>
@@ -60,33 +44,9 @@
             <el-icon><Avatar /></el-icon>
             <span>班主任工作</span>
           </template>
-          <el-menu-item index="/advisor/students">
-            <el-icon><User /></el-icon>
-            <span>学生档案</span>
-          </el-menu-item>
-          <el-menu-item index="/advisor/scores">
-            <el-icon><DataLine /></el-icon>
-            <span>成绩分析</span>
-          </el-menu-item>
           <el-menu-item index="/advisor/points">
             <el-icon><Trophy /></el-icon>
             <span>积分管理</span>
-          </el-menu-item>
-          <el-menu-item index="/advisor/leaves">
-            <el-icon><Calendar /></el-icon>
-            <span>请假管理</span>
-          </el-menu-item>
-          <el-menu-item index="/advisor/evaluations">
-            <el-icon><Star /></el-icon>
-            <span>期末评价</span>
-          </el-menu-item>
-          <el-menu-item index="/advisor/communications">
-            <el-icon><ChatDotRound /></el-icon>
-            <span>家校沟通</span>
-          </el-menu-item>
-          <el-menu-item index="/advisor/seats">
-            <el-icon><Grid /></el-icon>
-            <span>座位表</span>
           </el-menu-item>
         </el-sub-menu>
       </el-menu>
@@ -96,7 +56,7 @@
       <el-header class="header">
         <div class="header-left">
           <!-- 移动端菜单按钮（桌面端隐藏，≤768px 显示），图标已由 main.js 全局注册 -->
-          <button class="menu-btn" type="button" aria-label="打开菜单" @click="mobileNavOpen = !mobileNavOpen">
+          <button v-if="!soloPage" class="menu-btn" type="button" aria-label="打开菜单" @click="mobileNavOpen = !mobileNavOpen">
             <el-icon :size="20"><Menu /></el-icon>
           </button>
           <span class="page-title">{{ pageTitle }}</span>
@@ -322,6 +282,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
+const soloPage = computed(() => route.query.solo === '1')
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta.title || '工作台')
 

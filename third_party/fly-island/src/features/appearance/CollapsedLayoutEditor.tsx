@@ -70,14 +70,13 @@ export function CollapsedLayoutEditor({
     >
       <div className="collapsed-layout">
         <div className="collapsed-layout__island" ref={(node) => { containerRef.current = node; }}>
-          {layout.map((slot) => (
+          {layout.filter((slot) => slot !== "agents").map((slot) => (
             <button
               key={slot}
               type="button"
               className={[
                 "collapsed-layout__slot",
                 `collapsed-layout__slot--${slot}`,
-                slot === "agents" && !settings.agentStatusEnabled ? "collapsed-layout__slot--tuck" : "",
                 on[slot] ? "" : "collapsed-layout__slot--off",
                 draggingId === slot ? "collapsed-layout__slot--dragging" : "",
               ].filter(Boolean).join(" ")}

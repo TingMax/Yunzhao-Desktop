@@ -18,6 +18,16 @@ export function assertSnoozeTime(value, now = Date.now()) {
   return dueAt
 }
 
+/** Force popup follows the daily clock. Other channels still require a future effective time. */
+export function storedReminderChannels(
+  value,
+  { completed = false, canScheduleAtEffectiveTime = false } = {}
+) {
+  if (completed) return 0
+  const channels = normalizeReminderChannels(value)
+  return canScheduleAtEffectiveTime ? channels : channels & REMINDER_CHANNELS.force
+}
+
 export function reminderChannelLabels(value) {
   const channels = normalizeReminderChannels(value)
   return [

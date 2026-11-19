@@ -484,7 +484,14 @@ const api = {
     ipcRenderer.on('atrium:day-show', handler)
     return () => ipcRenderer.removeListener('atrium:day-show', handler)
   },
+  onAtriumPeek: (callback) => {
+    const handler = (_event, payload) => callback(payload || {})
+    ipcRenderer.on('atrium:peek', handler)
+    return () => ipcRenderer.removeListener('atrium:peek', handler)
+  },
   atriumDayCreate: (dateKey) => ipcRenderer.send('atrium:day-create', dateKey),
+  atriumDayHold: () => ipcRenderer.invoke('atrium:day-hold'),
+  atriumDayReveal: () => ipcRenderer.invoke('atrium:day-reveal'),
   atriumDayEdit: (id) => ipcRenderer.send('atrium:day-edit', id),
   onAtriumDayData: (callback) => {
     const handler = (_event, data) => callback(data || {})
@@ -532,6 +539,11 @@ const api = {
     const handler = (_event, state) => callback(state || { board: 0, lock: false })
     ipcRenderer.on('atrium:state', handler)
     return () => ipcRenderer.removeListener('atrium:state', handler)
+  },
+  onAtriumUiSetting: (callback) => {
+    const handler = (_event, change) => callback(change || {})
+    ipcRenderer.on('atrium:ui-setting', handler)
+    return () => ipcRenderer.removeListener('atrium:ui-setting', handler)
   }
 }
 

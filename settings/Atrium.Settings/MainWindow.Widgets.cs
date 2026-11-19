@@ -21,7 +21,8 @@ public sealed partial class MainWindow
     private sealed record WidgetChoice(string Kind, string Size, string Name, string Note, string Category);
 
     // The gallery's groups, in order; a segmented control above shows all of them or one.
-    private static readonly string[] WidgetCategoryNames = { "时钟", "天气", "日历", "效率", "系统" };
+    private static readonly string[] WidgetCategoryNames = { "时钟", "天气", "效率", "系统" };
+    private static readonly WidgetChoice CalendarChoice = new("calendar", "medium", "日历", "和桌面上同一套月历", "日历");
 
     private static readonly WidgetChoice[] WidgetChoices =
     {
@@ -32,7 +33,6 @@ public sealed partial class MainWindow
         new("weather", "small", "天气", "气温与天气", "天气"),
         new("weather", "medium", "天气", "再加逐小时预报", "天气"),
         new("weather", "large", "天气", "再加五天预报", "天气"),
-        new("calendar", "medium", "日历", "和桌面上同一套月历", "日历"),
         new("marks", "medium", "纪念日", "纪念日和倒数日", "效率"),
         new("focus", "medium", "番茄钟", "开始后全屏，结束自动回来", "效率"),
         new("habits", "medium", "习惯打卡", "点圆圈打卡，连续天数会记下", "效率"),
@@ -64,6 +64,13 @@ public sealed partial class MainWindow
         WarmDragGhost();
     }
 
+    private void BuildCalendarGallery()
+    {
+        CalendarGallery.Children.Clear();
+        CalendarGallery.Children.Add(GalleryCard(CalendarChoice));
+        WarmDragGhost();
+    }
+
     private void OnWidgetCategoryChecked(object sender, RoutedEventArgs e)
     {
         if (sender is not RadioButton { Tag: string category }) return;
@@ -76,8 +83,18 @@ public sealed partial class MainWindow
     {
         WidgetGallery.Opacity = WidgetsSwitch.IsOn ? 1 : 0.45;
         WidgetGallery.IsHitTestVisible = WidgetsSwitch.IsOn;
-        if (!WidgetsSwitch.IsOn) WidgetHint.Text = "先打开“桌面组件”。";
-        else if (WidgetHint.Text == "先打开“桌面组件”。") WidgetHint.Text = "按住拖到桌面上。桌面上已经有的不会再放一个";
+        CalendarGallery.Opacity = WidgetsSwitch.IsOn ? 1 : 0.45;
+        CalendarGallery.IsHitTestVisible = WidgetsSwitch.IsOn;
+        if (!WidgetsSwitch.IsOn)
+        {
+            WidgetHint.Text = "先打开“桌面组件”。";
+            CalendarHint.Text = "先打开“桌面组件”。";
+        }
+        else
+        {
+            if (WidgetHint.Text == "先打开“桌面组件”。") WidgetHint.Text = "按住拖到桌面上。桌面上已经有的不会再放一个";
+            if (CalendarHint.Text == "先打开“桌面组件”。") CalendarHint.Text = "按住拖到桌面上。桌面上已经有的不会再放一个";
+        }
     }
 
     // A gallery card: the widget on a piece of the bar's glass over the picture, rendered like the hero.
@@ -237,7 +254,8 @@ public sealed partial class MainWindow
         var error = await _client.AddWidgetAsync(c.Kind, c.Size);
         if (error == "exists")
         {
-            WidgetHint.Text = $"桌面上已经有“{c.Name}”。";
+            if (c.Kind == "calendar") CalendarHint.Text = $"桌面上已经有“{c.Name}”。";
+            else WidgetHint.Text = $"桌面上已经有“{c.Name}”。";
             var dialog = new ContentDialog
             {
                 Title = "桌面已有",
@@ -248,9 +266,11 @@ public sealed partial class MainWindow
             await dialog.ShowAsync();
             return;
         }
-        WidgetHint.Text = error == null ? $"已把“{c.Name}”放到桌面上。"
+        var hint = error == null ? $"已把“{c.Name}”放到桌面上。"
             : error == "removed" ? $"已把“{c.Name}”从桌面移除。"
             : error.Contains("room") ? "桌面上没有空位了：先移除或缩小一个组件。" : "没有添加：" + error;
+        if (c.Kind == "calendar") CalendarHint.Text = hint;
+        else WidgetHint.Text = hint;
     }
 
     // The gallery again when the picture or the material changed since it was drawn.

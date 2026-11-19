@@ -42,6 +42,12 @@ try {
     if ($LASTEXITCODE) { throw "settings publish failed" }
 
     Copy-Item (Join-Path "$buildDirectory/$Configuration" "Yunzhao.exe") $dist
+    $island = Join-Path $root "third_party\fly-island\src-tauri\target\release\focusd-island.exe"
+    if (Test-Path -LiteralPath $island) {
+        $islandDir = Join-Path $dist "Island"
+        New-Item -ItemType Directory -Force -Path $islandDir | Out-Null
+        Copy-Item -LiteralPath $island -Destination (Join-Path $islandDir "focusd-island.exe")
+    }
     dotnet publish tools/Atrium.Table/Atrium.Table.csproj -c $Configuration -r win-x64 --self-contained true -o (Join-Path $dist "Table")
     if ($LASTEXITCODE) { throw "table window publish failed" }
     if ($Development) { Set-Content -LiteralPath (Join-Path $dist 'development.txt') -Value 'Development distribution: does not register or change Windows startup.' }

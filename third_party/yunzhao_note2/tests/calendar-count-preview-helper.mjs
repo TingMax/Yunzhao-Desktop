@@ -57,7 +57,7 @@ export async function verifyCalendarCountPreview(window, waitUntil) {
     const badge = await readBadge()
     return badge?.text === String(total) && !badge.overflow ? badge : null
   }, '所有便签显示后数量标记未恢复普通状态')
-  assert.equal(normal.tag, 'SPAN')
+  assert.equal(normal.tag, 'BUTTON')
   window.setSize(720, compactHeight)
   const overflow = await waitUntil(async () => {
     const badge = await readBadge()
@@ -216,16 +216,16 @@ export async function verifyCalendarCountPreview(window, waitUntil) {
   window.setSize(720, 900)
   await waitUntil(async () => {
     const badge = await readBadge()
-    return badge?.tag === 'SPAN' && !badge.overflow
+    return badge?.tag === 'BUTTON' && !badge.overflow
   }, '放大窗口后数量仍错误提示有便签未显示')
   window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
   window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
   await waitUntil(
     () =>
       window.webContents.executeJavaScript(
-        `!document.querySelector('.month-day-preview') && document.activeElement?.matches('.month-day-cell[data-date="${key}"]')`
+        `!document.querySelector('.month-day-preview') && document.activeElement === document.querySelector('${badgeSelector}')`
       ),
-    '数量按钮消失后关闭预览未回退到日期格焦点'
+    '全部待办都显示时，关闭预览未回到数量按钮'
   )
   const normalPoint = await window.webContents.executeJavaScript(`(() => {
     const badge = document.querySelector('${badgeSelector}')
@@ -247,12 +247,16 @@ export async function verifyCalendarCountPreview(window, waitUntil) {
   await waitUntil(
     () =>
       window.webContents.executeJavaScript(
-        `document.activeElement?.matches('.month-day-cell[data-date="${key}"] .month-day-cell__quick-create input')`
+        `document.querySelector('.month-day-preview')?.querySelectorAll('.month-day-preview__note').length === ${total}`
       ),
-    '普通数量区域未保留原有快速新建行为'
+    '没有隐藏待办时，点击数量仍应打开当天全部待办'
   )
   window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
   window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+  await waitUntil(
+    () => window.webContents.executeJavaScript(`!document.querySelector('.month-day-preview')`),
+    '方向测试前数量预览未关闭'
+  )
   await window.webContents.executeJavaScript(
     `Promise.all(${JSON.stringify(ids)}.map((id) => window.api.deleteNote(id)))`
   )

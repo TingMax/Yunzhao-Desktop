@@ -2,10 +2,12 @@ export type MessagesText = {
   title: string;
   sources: string;
   wechat: string;
+  wecom: string;
   mail: string;
   qqMail: string;
   qqNotifications: string;
   wechatReminders: string;
+  wecomReminders: string;
   newReminder: string;
   yesterday: string;
   clearAll: string;
@@ -14,10 +16,12 @@ export type MessagesText = {
   newMessage: string;
   newMail: string;
   wechatPreview: string;
+  wecomPreview: string;
   newMailLabel: string;
   sourceLabels: {
     qq: string;
     wechat: string;
+    wecom: string;
     qqMail: string;
     plugin: string;
   };
@@ -33,10 +37,12 @@ export const zhCN: MessagesText = {
   title: "消息",
   sources: "消息来源",
   wechat: "微信",
+  wecom: "企业微信",
   mail: "邮箱",
   qqMail: "邮箱",
   qqNotifications: "QQ 通知",
   wechatReminders: "微信提醒",
+  wecomReminders: "企业微信提醒",
   newReminder: "有新提醒",
   yesterday: "昨天",
   clearAll: "全部已读并清空",
@@ -45,10 +51,12 @@ export const zhCN: MessagesText = {
   newMessage: "收到一条新消息",
   newMail: "收到一封新邮件",
   wechatPreview: "你收到了一条消息",
+  wecomPreview: "企业微信有新消息",
   newMailLabel: "邮箱有新邮件，查看邮件",
   sourceLabels: {
     qq: "QQ",
     wechat: "微信",
+    wecom: "企业微信",
     qqMail: "邮箱",
     plugin: "插件",
   },
@@ -64,10 +72,12 @@ export const en: MessagesText = {
   title: "Messages",
   sources: "Message sources",
   wechat: "WeChat",
+  wecom: "WeCom",
   mail: "Mail",
   qqMail: "Mail",
   qqNotifications: "QQ notifications",
   wechatReminders: "WeChat reminders",
+  wecomReminders: "WeCom reminders",
   newReminder: "New reminder",
   yesterday: "Yesterday",
   clearAll: "Mark all read and clear",
@@ -76,10 +86,12 @@ export const en: MessagesText = {
   newMessage: "New message",
   newMail: "New email",
   wechatPreview: "You received a message",
+  wecomPreview: "New WeCom message",
   newMailLabel: "New email, view mail",
   sourceLabels: {
     qq: "QQ",
     wechat: "WeChat",
+    wecom: "WeCom",
     qqMail: "Mail",
     plugin: "Plugin",
   },

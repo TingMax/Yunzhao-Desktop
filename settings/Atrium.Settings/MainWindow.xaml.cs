@@ -70,6 +70,8 @@ public sealed partial class MainWindow : Window
         "材质", "形状", "任务栏", "通知", "组件", "灵动岛", "显示器", "系统", "设计语言", "关于",
         "开始菜单", "托盘", "状态栏", "时间", // the bar's parts, listed under it
         "账号",
+        "教师工作台",
+        "日历",
     };
     private readonly CoreClient _client = new();
     private readonly List<(SliderDef Def, SliderTile Tile)> _rows = new();
@@ -143,6 +145,12 @@ public sealed partial class MainWindow : Window
         SetWindowSubclass(hwnd, _updateMessage, (UIntPtr)1, UIntPtr.Zero);
         Closed += (_, _) =>
         {
+            _islandPage = false;
+            _islandDock?.Stop();
+            var islandSettings = FindIslandWindow();
+            if (islandSettings != IntPtr.Zero) ShowWindow(islandSettings, 0);
+            var calendarSettings = FindCalendarSettingsWindow();
+            if (calendarSettings != IntPtr.Zero) ShowWindow(calendarSettings, 0);
             _client.Dispose();
             RemoveWindowSubclass(hwnd, _updateMessage, (UIntPtr)1);
             _updateCheck?.Cancel();
@@ -168,12 +176,29 @@ public sealed partial class MainWindow : Window
         };
 
         _mains = new FrameworkElement[] { MainMaterial, MainShape, MainDock, MainNotify, MainWidgets, MainStage, MainDisplays, MainSystem, DesignStack, MainAbout,
-                                          MainStart, MainTray, MainStatus, MainClock, MainAccount };
+                                          MainStart, MainTray, MainStatus, MainClock, MainAccount, PageSlot15, MainCalendar };
         _sides = new FrameworkElement?[] { SideMaterial, SideShape, SideDock, SideNotify, SideWidgets, null, null, null, null, null,
-                                           SideStart, SideTray, SideStatus, SideClock, null };
+                                           SideStart, SideTray, SideStatus, SideClock, null, null, null };
+        RootGrid.Loaded += (_, _) => { HideCalendarSettings(); HideIslandHost(); };
         InitDisplays();
         LoupeSwitch.IsOn = true;
         BuildRows();
+        BarRevealDelay.Flat = true;
+        BarRevealDelay.Configure("出现前停留", 200, 5000, 100, "ms");
+        BarRevealDelay.UserValueChanged += v =>
+        {
+            if (_loading) return;
+            _current.BarRevealDelay = v;
+            Changed();
+        };
+        BarHideDelay.Flat = true;
+        BarHideDelay.Configure("离开后隐藏", 200, 5000, 100, "ms");
+        BarHideDelay.UserValueChanged += v =>
+        {
+            if (_loading) return;
+            _current.BarHideDelay = v;
+            Changed();
+        };
         DateSizeSlider.Flat = true;
         DateSizeSlider.Configure("日期字号", 12, 36, 1, "px");
         DateSizeSlider.UserValueChanged += v =>
@@ -190,12 +215,59 @@ public sealed partial class MainWindow : Window
             _current.TimetableDateSize = v;
             Changed();
         };
+        BadgeScaleSlider.Flat = true;
+        BadgeScaleSlider.Configure("角标大小", 40, 160, 5, "%");
+        BadgeScaleSlider.UserValueChanged += v =>
+        {
+            if (_loading) return;
+            _current.TimetableBadgeScale = v / 100;
+            Changed();
+        };
+        DockSpeedSlider.Flat = true;
+        DockSpeedSlider.Configure("收起速度", 80, 1200, 1, "ms");
+        DockSpeedSlider.UserValueChanged += v =>
+        {
+            if (_loading) return;
+            _current.CalendarDockMs = v;
+            Changed();
+        };
+        IconScaleSlider.Flat = true;
+        IconScaleSlider.Configure("导航图标大小", 100, 150, 5, "%");
+        IconScaleSlider.UserValueChanged += v => SendCalendarUi("appearance.titlebarIconScale", (int)v);
+        FontSizeSlider.Flat = true;
+        FontSizeSlider.Configure("字体大小", 8, 40, 1, "");
+        FontSizeSlider.UserValueChanged += v => SendCalendarUi("css.fontSizeBase", (int)v);
+        RemarkSizeSlider.Flat = true;
+        RemarkSizeSlider.Configure("备注字号", 8, 40, 1, "");
+        RemarkSizeSlider.UserValueChanged += v => SendCalendarUi("css.noteRemarkFontSize", (int)v);
+        CompactFontSlider.Flat = true;
+        CompactFontSlider.Configure("灵动岛字号", 8, 40, 1, "");
+        CompactFontSlider.UserValueChanged += v => SendCalendarUi("window.compactFontSize", (int)v);
+        WindowOpacitySlider.Flat = true;
+        WindowOpacitySlider.Configure("玻璃浓度", 0, 100, 1, "%");
+        WindowOpacitySlider.UserValueChanged += v => SendCalendarUi("css.windowOpacity", v / 100);
+        BlurRadiusSlider.Flat = true;
+        BlurRadiusSlider.Configure("模糊半径", 0, 40, 1, "DIP");
+        BlurRadiusSlider.UserValueChanged += v => SendCalendarUi("blur.radius", (int)v);
+        BlurSaturationSlider.Flat = true;
+        BlurSaturationSlider.Configure("饱和度", 0, 2, 0.1, "x");
+        BlurSaturationSlider.UserValueChanged += v => SendCalendarUi("blur.saturation", Math.Round(v, 1));
+        CornerSlider.Flat = true;
+        CornerSlider.Configure("窗口圆角", 0, 30, 1, "px");
+        CornerSlider.UserValueChanged += v => SendCalendarUi("blur.cornerRadius", (int)v);
+        GlassBlurSlider.Flat = true;
+        GlassBlurSlider.Configure("模糊基准", 5, 30, 1, "px");
+        GlassBlurSlider.UserValueChanged += v => SendCalendarUi("css.bgBlur", (int)v);
+        GlassOpacitySlider.Flat = true;
+        GlassOpacitySlider.Configure("霜层基准", 0, 100, 1, "%");
+        GlassOpacitySlider.UserValueChanged += v => SendCalendarUi("css.popupOpacity", v / 100);
         BuildTintSwatches();
         InitPins();
         InitHero();
         PhotoChanged += () =>
         {
             if (_page == 4) { ShowWidgetMap(); RefreshGallery(); }
+            if (_page == 16) RefreshGallery();
             if (_page == 3) ShowNotifyPreview(false);
             if (_page == 5) ShowStagePreview(false);
             if (_page >= 10) ShowModulePreview(_page);
@@ -210,7 +282,7 @@ public sealed partial class MainWindow : Window
         var args = Environment.GetCommandLineArgs();
         int page = Array.IndexOf(args, "--page") is int i && i >= 0 && i + 1 < args.Length
             ? args[i + 1] switch { "dock" => 2, "notify" => 3, "widgets" => 4, "stage" => 5, "displays" => 6, "system" => 7, "about" => 9,
-                                 "start" => 10, "tray" => 11, "status" => 12, "clock" => 13, _ => 0 } : 0;
+                                 "start" => 10, "tray" => 11, "status" => 12, "clock" => 13, "calendar" => 16, _ => 0 } : 0;
         SelectPage(page);
         _ = ConnectAndLoadAsync();
     }
@@ -282,13 +354,20 @@ public sealed partial class MainWindow : Window
             else RefreshGallery();
             ShowWidgetMap();
         }
+        if (_mains[index] == MainCalendar)
+        {
+            _ = RefreshCalendarSwitchAsync();
+            LoadCalendarUi();
+            HideCalendarSettings();
+        }
+        else HideCalendarSettings();
         if (_mains[index] == MainNotify) ShowNotifyPreview(true);
         if (_mains[index] == MainStage) ShowStagePreview(true);
         if (_mains[index] == MainDisplays) RefreshDisplays();
         if (_mains[index] == MainAccount) RefreshAccount();
         if (_mains[index] == MainAbout) _ = CheckForUpdatesAsync();
-        if (_mains[index] == MainStage) RefreshIsland();
-        else HideIslandHost();
+        HideIslandHost();
+        if (_mains[index] == MainStage) LoadIslandUi();
         if (index >= 10) EnterModulePage(index);
         else LeaveModulePages();
         PageTitle.Text = PageTitles[index];
@@ -348,6 +427,199 @@ public sealed partial class MainWindow : Window
         double w = e.NewSize.Width;
         HeroFrame.Height = Math.Clamp(Math.Round(w * 0.52), 280, 580);
         NotifyStage.Height = Math.Clamp(Math.Round(w * 0.42), 260, 440);
+    }
+
+    private bool _settingCalendarSwitch;
+    private bool _settingCalendarUi;
+
+    private static string CalendarUiPath(string name) =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Yunzhao", name);
+
+    private void SendCalendarUi(string id, object value)
+    {
+        if (_loading || _settingCalendarUi) return;
+        var file = CalendarUiPath("calendar-ui.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            id,
+            value
+        }));
+    }
+
+    private void LoadCalendarUi()
+    {
+        var file = CalendarUiPath("calendar-ui-state.json");
+        if (!File.Exists(file)) return;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(file));
+            var root = doc.RootElement;
+            _settingCalendarUi = true;
+            if (root.TryGetProperty("titlebarIconScale", out var icon)) IconScaleSlider.SetValue(icon.GetDouble());
+            if (root.TryGetProperty("fontSizeBase", out var font)) FontSizeSlider.SetValue(font.GetDouble());
+            if (root.TryGetProperty("noteRemarkFontSize", out var remark)) RemarkSizeSlider.SetValue(remark.GetDouble());
+            if (root.TryGetProperty("compactFontSize", out var compact)) CompactFontSlider.SetValue(compact.GetDouble());
+            if (root.TryGetProperty("popupOpacity", out var glass)) GlassOpacitySlider.SetValue(glass.GetDouble() * 100);
+            if (root.TryGetProperty("bgBlur", out var blur)) GlassBlurSlider.SetValue(blur.GetDouble());
+            if (root.TryGetProperty("blurRadius", out var radius)) BlurRadiusSlider.SetValue(radius.GetDouble());
+            if (root.TryGetProperty("blurSaturation", out var saturation)) BlurSaturationSlider.SetValue(saturation.GetDouble());
+            if (root.TryGetProperty("cornerRadius", out var corner)) CornerSlider.SetValue(corner.GetDouble());
+            if (root.TryGetProperty("windowOpacity", out var opacity)) WindowOpacitySlider.SetValue(opacity.GetDouble() * 100);
+            if (root.TryGetProperty("windowBorder", out var border)) CalendarBorderSwitch.IsOn = border.GetBoolean();
+            if (root.TryGetProperty("blurEnabled", out var blurOn)) CalendarBlurSwitch.IsOn = blurOn.GetBoolean();
+            if (root.TryGetProperty("tagColorEnabled", out var tags)) TagColorSwitch.IsOn = tags.GetBoolean();
+            if (root.TryGetProperty("doubleClickQuickEdit", out var quick)) QuickEditSwitch.IsOn = quick.GetBoolean();
+            if (root.TryGetProperty("minimalMode", out var minimal)) MinimalModeSwitch.IsOn = minimal.GetBoolean();
+            if (root.TryGetProperty("hideMainViewDuringScreenshot", out var hideShot)) HideShotSwitch.IsOn = hideShot.GetBoolean();
+            if (root.TryGetProperty("weatherEnabled", out var weather)) WeatherSwitch.IsOn = weather.GetBoolean();
+            if (root.TryGetProperty("receiveNotices", out var notices)) NoticeSwitch.IsOn = notices.GetBoolean();
+            if (root.TryGetProperty("uploadDeviceInfo", out var device)) DeviceSwitch.IsOn = device.GetBoolean();
+            if (root.TryGetProperty("iconColor", out var color))
+                (color.GetString() == "white" ? IconWhite : IconBlack).IsChecked = true;
+            if (root.TryGetProperty("bgColor", out var bg)) CalendarBgColor.Text = RgbToHex(bg.GetString());
+            if (root.TryGetProperty("textColor", out var text)) CalendarTextColor.Text = text.GetString() ?? "";
+            if (root.TryGetProperty("viewVisibility", out var viewKey)) ShortcutView.Text = viewKey.GetString() ?? "";
+            if (root.TryGetProperty("newNote", out var newNote)) ShortcutNewNote.Text = newNote.GetString() ?? "";
+            if (root.TryGetProperty("screenshot", out var shot)) ShortcutShot.Text = shot.GetString() ?? "";
+            if (root.TryGetProperty("screenshotCopy", out var shotCopy)) ShortcutShotCopy.Text = shotCopy.GetString() ?? "";
+            if (root.TryGetProperty("uiScale", out var scale)) SelectCombo(CalendarUiScale, scale.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (root.TryGetProperty("zOrderMode", out var layer)) SelectCombo(CalendarZOrder, layer.GetString());
+            if (root.TryGetProperty("revealHandleMode", out var reveal)) SelectCombo(CalendarDockReveal, reveal.GetString());
+            if (root.TryGetProperty("enabledEdges", out var edges) && edges.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                var selected = new HashSet<string>(edges.EnumerateArray().Select(item => item.GetString() ?? ""));
+                DockEdgeTop.IsChecked = selected.Contains("top");
+                DockEdgeLeft.IsChecked = selected.Contains("left");
+                DockEdgeRight.IsChecked = selected.Contains("right");
+            }
+        }
+        catch
+        {
+            // A missing or partial snapshot keeps the controls at their defaults.
+        }
+        finally
+        {
+            _settingCalendarUi = false;
+        }
+    }
+
+    private static string RgbToHex(string? rgb)
+    {
+        var parts = (rgb ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3 || !parts.All(part => byte.TryParse(part, out _))) return "#FFFFFF";
+        return "#" + string.Concat(parts.Select(part => byte.Parse(part).ToString("X2")));
+    }
+
+    private static string? HexToRgb(string? hex)
+    {
+        hex = (hex ?? "").Trim();
+        if (hex.StartsWith('#')) hex = hex[1..];
+        if (hex.Length != 6 || !hex.All(Uri.IsHexDigit)) return null;
+        return $"{Convert.ToInt32(hex[..2], 16)} {Convert.ToInt32(hex[2..4], 16)} {Convert.ToInt32(hex[4..], 16)}";
+    }
+
+    private void OnCalendarIconColorChecked(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton { IsChecked: true, Tag: string color }) SendCalendarUi("appearance.iconColor", color);
+    }
+
+    private void OnCalendarBorderToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("css.windowBorder", CalendarBorderSwitch.IsOn);
+
+    private void OnCalendarBlurToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("blur.enabled", CalendarBlurSwitch.IsOn);
+
+    private void OnCalendarUiScaleChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CalendarUiScale.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            double.TryParse(tag, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale))
+            SendCalendarUi("appearance.uiScale", scale);
+    }
+
+    private void OnCalendarBgColorChanged(object sender, RoutedEventArgs e)
+    {
+        var rgb = HexToRgb(CalendarBgColor.Text);
+        if (rgb != null) SendCalendarUi("css.bgColor", rgb);
+    }
+
+    private void OnCalendarTextColorChanged(object sender, RoutedEventArgs e)
+    {
+        var hex = (CalendarTextColor.Text ?? "").Trim();
+        if (hex.Length == 7 && hex[0] == '#' && hex[1..].All(Uri.IsHexDigit))
+            SendCalendarUi("css.textColor", hex.ToLowerInvariant());
+    }
+
+    private static void SelectCombo(ComboBox box, string? tag)
+    {
+        if (string.IsNullOrEmpty(tag)) return;
+        foreach (ComboBoxItem item in box.Items)
+            if (item.Tag as string == tag) { box.SelectedItem = item; return; }
+    }
+
+    private void OnCalendarZOrderChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CalendarZOrder.SelectedItem is ComboBoxItem { Tag: string tag }) SendCalendarUi("window.zOrderMode", tag);
+    }
+
+    private void OnCalendarDockRevealChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CalendarDockReveal.SelectedItem is ComboBoxItem { Tag: string tag }) SendCalendarUi("dock.revealHandleMode", tag);
+    }
+
+    private void OnCalendarDockEdgesChanged(object sender, RoutedEventArgs e)
+    {
+        var edges = new List<string>();
+        if (DockEdgeTop.IsChecked == true) edges.Add("top");
+        if (DockEdgeLeft.IsChecked == true) edges.Add("left");
+        if (DockEdgeRight.IsChecked == true) edges.Add("right");
+        SendCalendarUi("dock.enabledEdges", edges);
+    }
+
+    private void OnCalendarShortcutChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender == ShortcutView) SendCalendarUi("shortcuts.viewVisibility", (ShortcutView.Text ?? "").Trim());
+        else if (sender == ShortcutNewNote) SendCalendarUi("shortcuts.newNote", (ShortcutNewNote.Text ?? "").Trim());
+        else if (sender == ShortcutShot) SendCalendarUi("shortcuts.screenshot", (ShortcutShot.Text ?? "").Trim());
+        else if (sender == ShortcutShotCopy) SendCalendarUi("shortcuts.screenshotCopy", (ShortcutShotCopy.Text ?? "").Trim());
+    }
+
+    private void OnCalendarTagColorToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("notes.tagColorEnabled", TagColorSwitch.IsOn);
+
+    private void OnCalendarQuickEditToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("interaction.doubleClickQuickEdit", QuickEditSwitch.IsOn);
+
+    private void OnCalendarMinimalToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("listAppearance.minimalMode", MinimalModeSwitch.IsOn);
+
+    private void OnCalendarHideShotToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("interaction.hideMainViewDuringScreenshot", HideShotSwitch.IsOn);
+
+    private void OnCalendarWeatherToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("weather.enabled", WeatherSwitch.IsOn);
+
+    private void OnCalendarNoticeToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("remote.receiveNotices", NoticeSwitch.IsOn);
+
+    private void OnCalendarDeviceToggled(object sender, RoutedEventArgs e) =>
+        SendCalendarUi("remote.uploadDeviceInfo", DeviceSwitch.IsOn);
+
+
+    private async Task RefreshCalendarSwitchAsync()
+    {
+        bool open = await _client.CalendarOpenAsync();
+        if (_updatesClosed) return;
+        _settingCalendarSwitch = true;
+        CalendarOpenSwitch.IsOn = open;
+        _settingCalendarSwitch = false;
+    }
+
+    private async void OnCalendarOpenToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _settingCalendarSwitch) return;
+        await _client.SetCalendarOpenAsync(CalendarOpenSwitch.IsOn);
     }
 
     private void OnEdgeHideToggled(object sender, RoutedEventArgs e)
@@ -845,13 +1117,20 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);
 
     private bool _islandPage;
+    private bool _calendarSettingsPage;
     private bool _hostMinimized;
     private bool _islandLaunching;
     private DispatcherTimer? _islandDock;
+    private DispatcherTimer? _calendarSettingsDock;
     private EnumWindowsProc? _islandEnum;
+    private EnumWindowsProc? _calendarSettingsEnum;
 
     private IntPtr FindIslandWindow()
     {
@@ -898,19 +1177,20 @@ public sealed partial class MainWindow : Window
         EnsureFlyIsland();
         if (_islandDock == null)
         {
-            _islandDock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            _islandDock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(32) };
             _islandDock.Tick += (_, _) => DockIsland();
             AppWindow.Changed += (_, _) => { if (_islandPage) DockIsland(); };
             IslandHost.SizeChanged += (_, _) => DockIsland();
             CenterScroll.ViewChanged += (_, _) => { if (_islandPage) DockIsland(); };
         }
         _islandDock.Start();
+        double room = CenterScroll.ViewportHeight - 8;
+        if (room > 480) IslandHost.Height = room;
         DockIsland();
     }
 
     private void HideIslandHost()
     {
-        if (!_islandPage && _islandDock?.IsEnabled != true) return;
         _islandPage = false;
         _islandLaunching = false;
         _islandDock?.Stop();
@@ -946,15 +1226,80 @@ public sealed partial class MainWindow : Window
             return;
         }
         _islandLaunching = false;
-        if (IslandHost.ActualWidth < 80 || IslandHost.ActualHeight < 80 || IslandHost.XamlRoot == null) return;
-        var origin = IslandHost.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
-        var scale = IslandHost.XamlRoot.RasterizationScale;
+        FitHostToWindow(IslandHost);
+        PlaceDocked(IslandHost, hwnd);
+    }
+
+    private IntPtr FindCalendarSettingsWindow()
+    {
+        IntPtr found = IntPtr.Zero;
+        _calendarSettingsEnum = (hwnd, _) =>
+        {
+            var text = new System.Text.StringBuilder(256);
+            GetWindowText(hwnd, text, text.Capacity);
+            if (text.ToString() == "Yunzhao 日历设置")
+            {
+                found = hwnd;
+                return false;
+            }
+            return true;
+        };
+        EnumWindows(_calendarSettingsEnum, IntPtr.Zero);
+        return found;
+    }
+
+    private void HideCalendarSettings()
+    {
+        _calendarSettingsPage = false;
+        _calendarSettingsDock?.Stop();
+        var hwnd = FindCalendarSettingsWindow();
+        if (hwnd != IntPtr.Zero) ShowWindow(hwnd, 0);
+    }
+
+    // The hosted surface is a separate window. Keep it inside this window, including while the page scrolls.
+    private void FitHostToWindow(FrameworkElement host)
+    {
+        if (host.XamlRoot == null) return;
+        double scale = host.XamlRoot.RasterizationScale;
+        if (scale <= 0) return;
+        var origin = host.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
+        double available = AppWindow.Size.Height / scale - 12 - origin.Y;
+        if (available < 48) return;
+        if (double.IsNaN(host.Height) || Math.Abs(host.Height - available) > 2)
+            host.Height = available;
+    }
+
+    private void PlaceDocked(FrameworkElement host, IntPtr hwnd)
+    {
+        if (host.XamlRoot == null || host.ActualWidth < 40 || host.ActualHeight < 40)
+        {
+            ShowWindow(hwnd, 0);
+            return;
+        }
+        double scale = host.XamlRoot.RasterizationScale;
+        var origin = host.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
         var pos = AppWindow.Position;
-        var x = pos.X + (int)Math.Round(origin.X * scale);
-        var y = pos.Y + (int)Math.Round(origin.Y * scale);
-        var width = (int)Math.Round(IslandHost.ActualWidth * scale);
-        var height = (int)Math.Round(IslandHost.ActualHeight * scale);
+        int hostLeft = pos.X + (int)Math.Round(origin.X * scale);
+        int hostTop = pos.Y + (int)Math.Round(origin.Y * scale);
+        int hostRight = pos.X + (int)Math.Round((origin.X + host.ActualWidth) * scale);
+        int hostBottom = pos.Y + (int)Math.Round((origin.Y + host.ActualHeight) * scale);
         var owner = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        if (!GetWindowRect(owner, out var frame))
+        {
+            ShowWindow(hwnd, 0);
+            return;
+        }
+        int x = Math.Max(hostLeft, frame.Left);
+        int y = Math.Max(hostTop, frame.Top);
+        int right = Math.Min(hostRight, frame.Right);
+        int bottom = Math.Min(hostBottom, frame.Bottom);
+        int width = right - x;
+        int height = bottom - y;
+        if (width < 80 || height < 48)
+        {
+            ShowWindow(hwnd, 0);
+            return;
+        }
         SetWindowLongPtr(hwnd, -8, owner);
         const int extendedStyle = -20;
         var style = GetWindowLong(hwnd, extendedStyle);
@@ -1166,12 +1511,16 @@ public sealed partial class MainWindow : Window
         (_current.WidgetMaterial switch { "dusk" => MaterialDusk, "color" => MaterialColor, _ => MaterialGlass }).IsChecked = true;
         DateSizeSlider.SetValue(_current.CalendarDateSize);
         TableSizeSlider.SetValue(_current.TimetableDateSize);
+        BadgeScaleSlider.SetValue(_current.TimetableBadgeScale * 100);
+        DockSpeedSlider.SetValue(_current.CalendarDockMs);
         EdgeHideSwitch.IsOn = _current.CalendarEdgeHide;
         HideBannersSwitch.IsOn = _current.HideBanners;
         WinKeySwitch.IsOn = _current.WinKeyStart;
         WinNumbersSwitch.IsOn = _current.WinNumbers;
         (_current.StatusStyle == "icons" ? StatusIcons : StatusRing).IsChecked = true;
         (_current.AutoHide switch { "never" => HideNever, "always" => HideAlways, _ => HideFullscreen }).IsChecked = true;
+        BarRevealDelay.SetValue(_current.BarRevealDelay);
+        BarHideDelay.SetValue(_current.BarHideDelay);
         StartupSwitch.IsOn = _current.StartOnLogin;
         LoadDisplayControls();
         (_current.TextColor switch { "light" => TextLight, "dark" => TextDark, _ => TextAuto }).IsChecked = true;
@@ -1346,6 +1695,7 @@ public sealed partial class MainWindow : Window
         _current.WidgetMaterial = tag;
         Changed();
         if (_page == 4) { ShowWidgetMap(); RefreshGallery(); }
+        if (_page == 16) RefreshGallery();
     }
 
     private void OnWidgetBackdropChecked(object sender, RoutedEventArgs e)

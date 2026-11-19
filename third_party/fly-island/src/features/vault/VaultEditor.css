@@ -1,0 +1,31 @@
+.vault-editor {
+  min-height: 100%;
+  padding: 22px;
+  background: var(--color-window);
+  color: var(--text-1);
+}
+
+.vault-editor h1 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.vault-editor textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: none;
+  padding: 8px;
+  border: 1px solid var(--color-white-a12);
+  border-radius: var(--corner-sm);
+  background: rgba(var(--panel-deep-rgb), 0.72);
+  color: var(--text-1);
+  font: inherit;
+  user-select: text;
+}
+
+html:has(.vault-editor),
+html:has(.vault-editor) body,
+html:has(.vault-editor) #root {
+  background: var(--color-window);
+}

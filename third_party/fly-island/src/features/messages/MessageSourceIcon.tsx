@@ -5,13 +5,16 @@ import type { MessageSource } from "./messagePreview";
 import { Puzzle } from "lucide-react";
 import "./MessageSourceIcon.css";
 
-const SOURCE_ICONS: Record<Exclude<MessageSource, "plugin">, string> = {
+const SOURCE_ICONS: Record<Exclude<MessageSource, "plugin" | "wecom">, string> = {
   qq: qqIcon,
   wechat: wechatIcon,
   qqMail: qqMailIcon,
 };
 
 export function MessageSourceIcon({ source, icon, size = 16 }: { source: MessageSource; icon?: string; size?: number }) {
+  if (source === "wecom") {
+    return <span className="message-plugin-badge message-plugin-badge--wework" style={{ width: size, height: size }} aria-hidden="true">企</span>;
+  }
   if (source === "plugin") {
     const badge = ({ wework: "W", dingtalk: "D", feishu: "F" } as Record<string, string>)[icon ?? ""];
     return badge ? <span className={`message-plugin-badge message-plugin-badge--${icon}`} style={{ width: size, height: size }} aria-hidden="true">{badge}</span> : <Puzzle size={size} aria-hidden="true" />;

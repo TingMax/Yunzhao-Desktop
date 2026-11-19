@@ -58,10 +58,10 @@ function Fixture() {
   const state = useSyncExternalStore(subscribeToUpdate, getUpdateState);
   const visibleTodo = syncUpdateTodo([], { ...state, hasVersion: state.nextVersion !== "" }, "Update").length > 0;
   return <>
-    <IslandHeader isExpanded={expanded} page={page} features={{ todo: true, music: true, clipboard: true, shelf: true,
-      agents: true, translation: true, qq: true, wechat: true, qqMail: true }} pageOrder={["todo", "music", "clipboard", "shelf", "translation"]}
+    <IslandHeader isExpanded={expanded} page={page} features={{ todo: false, music: true, clipboard: false, shelf: false, vault: true,
+      agents: true, translation: true, qq: true, wechat: true, wecom: true, qqMail: true }} pageOrder={["music", "vault", "translation"]}
       pageButtonStyle={style} onPageOrderChange={() => {}} showTitle={false} isDetached={false} agentVisualState="idle"
-      agentStatusLabel="Agent" qqNotificationCount={0} wechatPending={false} onPageChange={changePage} onCollapse={() => changeExpanded(false)}
+      agentStatusLabel="Agent" qqNotificationCount={0} wechatPending={false} wecomPending={false} onPageChange={changePage} onCollapse={() => changeExpanded(false)}
       onOpenSettings={() => {}} onOpenMessages={() => {}} onOpenTranslator={() => {}} onResetPosition={() => {}}
       minimizesToTray={false} onMinimize={() => {}} />
     {page === "todo" && visibleTodo && <div className="todo-item"><span /><span>检测到新版本</span><UpdateTodoAction /></div>}
@@ -88,13 +88,13 @@ try {
     const button = badge.closest("button")!;
     const box = badge.getBoundingClientRect();
     const parent = button.getBoundingClientRect();
-    check(button.offsetWidth === 24 && button.offsetHeight === 34 && css.width === "6px" && css.height === "6px"
+    check(button.offsetWidth === 34 && button.offsetHeight === 34 && css.width === "6px" && css.height === "6px"
       && css.backgroundColor === "rgb(255, 69, 58)" && css.boxShadow === "none" && css.borderWidth === "0px"
       && css.animationName === "none" && box.right <= parent.right + 1 && box.top >= parent.top
       && badge.getAttribute("aria-hidden") === "true" && button.getAttribute("aria-label")?.includes(en ? "update available" : "有新版本"),
       `${style}: solid red decorative dot, no ring/glow/pulse, same button size and localized announcement`);
   }
-  await act(async () => document.querySelector<HTMLButtonElement>(".dot-button--todo")!.click());
+  await act(async () => setPage("todo"));
   check(dot() && document.querySelector(".todo-update-dot"),
     "Opening Todo keeps the header dot and the row dot until the update is installed");
   const badgeCss = getComputedStyle(document.querySelector(".todo-update-dot")!);

@@ -10,20 +10,22 @@ export type IslandFeatures = {
   shelf: boolean;
   qq: boolean;
   wechat: boolean;
+  wecom: boolean;
   qqMail: boolean;
   plugin?: boolean;
+  vault: boolean;
   /** The AI Agent switch; off hides the Agent page. */
   agents: boolean;
   /** Translation is on and set to open as an island page rather than its own window. */
   translation: boolean;
 };
 
-const PAGE_ORDER: IslandPage[] = ["todo", "music", "clipboard", "shelf", "qq", "agents", "translation"];
-const SOURCE_ORDER: MessageSource[] = ["wechat", "qq", "qqMail", "plugin"];
+const PAGE_ORDER: IslandPage[] = ["music", "vault", "qq", "translation"];
+const SOURCE_ORDER: MessageSource[] = ["wechat", "wecom", "qq", "qqMail", "plugin"];
 
 export function isPageEnabled(page: IslandPage, features: IslandFeatures): boolean {
   if (page === "settings") return true;
-  return page === "qq" ? features.qq || features.wechat || features.qqMail || (PLUGINS_ENABLED && features.plugin === true) : features[page] === true;
+  return page === "qq" ? features.qq || features.wechat || features.wecom || features.qqMail || (PLUGINS_ENABLED && features.plugin === true) : features[page] === true;
 }
 
 /** `page` when it is on, otherwise the first page that is, or null when every page is off. */

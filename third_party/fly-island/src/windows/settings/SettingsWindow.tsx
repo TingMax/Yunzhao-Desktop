@@ -4,6 +4,7 @@ import { useIslandSettings } from "../../features/appearance/useIslandSettings";
 import { useDocumentTheme, useSystemIsDark } from "../../features/appearance/useDocumentTheme";
 import { useQQNotifications } from "../../features/messages/qq-notifications/QQNotifications";
 import { useWeChatReminders } from "../../features/messages/wechat/WeChatReminders";
+import { useWeComReminders } from "../../features/messages/wecom/useWeComReminders";
 import { useTranslation } from "../../i18n";
 import { dockSettingsWindow, setSettingsWindowTheme, showSettingsWindow } from "./api";
 import { saveDetachedSettings } from "./storage";
@@ -17,6 +18,7 @@ export function SettingsWindow() {
   const [settings, setSettings] = useIslandSettings();
   const qqNotifications = useQQNotifications(false);
   const wechatReminders = useWeChatReminders(false, { restore: false });
+  const wecomReminders = useWeComReminders(false, { restore: false });
   const detached = useSettingsPresentation();
   const scheme = useDocumentTheme(settings);
   const systemDark = useSystemIsDark();
@@ -78,6 +80,7 @@ export function SettingsWindow() {
         onSettingsChange={setSettings}
         qqNotifications={qqNotifications}
         wechatReminders={wechatReminders}
+        wecomReminders={wecomReminders}
         detached={detached}
         onDetachedChange={(value) => void changePresentation(value)}
       />

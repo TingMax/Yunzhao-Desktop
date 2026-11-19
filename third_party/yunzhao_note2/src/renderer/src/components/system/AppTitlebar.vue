@@ -44,12 +44,17 @@ const tableEditing = ref(false)
 const toolsOpen = ref(false)
 const toolsMenuRef = ref(null)
 const tools = [
-  { kind: 0, label: '倒计时' },
-  { kind: 1, label: '秒表' },
-  { kind: 2, label: '随机抽签' },
-  { kind: 3, label: '分组' },
-  { kind: 5, label: '定时任务' },
-  { kind: 4, label: '多维表格' }
+  { kind: 'table', label: '多维表格' },
+  { kind: 'page', path: '/teacher/exams', label: '试卷管理' },
+  { kind: 'page', path: '/teacher/homework', label: '作业管理' },
+  { kind: 'page', path: '/teacher/ai-grading', label: 'AI批改' },
+  { kind: 'page', path: '/teacher/recitations', label: '背书情况' },
+  { kind: 'page', path: '/advisor/students', label: '学生档案' },
+  { kind: 'page', path: '/advisor/scores', label: '成绩分析' },
+  { kind: 'page', path: '/advisor/leaves', label: '请假管理' },
+  { kind: 'page', path: '/advisor/evaluations', label: '期末评价' },
+  { kind: 'page', path: '/advisor/communications', label: '家校沟通' },
+  { kind: 'page', path: '/advisor/seats', label: '座位表' }
 ]
 const scheduleOpen = ref(false)
 const scheduleTime = ref('08:00')
@@ -561,16 +566,13 @@ function toggleTableEdit() {
   window.dispatchEvent(new CustomEvent('atrium-table-edit', { detail: tableEditing.value }))
 }
 
-async function chooseTool(kind) {
+function chooseTool(tool) {
   toolsOpen.value = false
-  if (kind === 5) {
-    const plan = await window.api.atriumDailyPlan?.()
-    scheduleTime.value = plan?.time || '08:00'
-    scheduleChannels.value = Number(plan?.channels) || 0
-    scheduleOpen.value = true
+  if (tool.kind === 'page') {
+    void window.api.atriumCommand?.({ cmd: 'teacher-page', path: tool.path })
     return
   }
-  window.api.atriumCommand?.({ cmd: 'tool', kind })
+  window.api.atriumCommand?.({ cmd: 'tool', kind: 4 })
 }
 
 async function saveSchedule() {
@@ -699,11 +701,11 @@ onBeforeUnmount(() => {
         <AtriumDock>
           <template #tools>
             <div class="hosted-tools">
-              <button type="button" class="hosted-icon" title="小工具" @click.stop="toolsOpen = !toolsOpen">
+              <button type="button" class="hosted-icon" title="工具" @click.stop="toolsOpen = !toolsOpen">
                 <span class="mdl-glyph" aria-hidden="true">{{ toolsOpen ? '\uE70D' : '\uE76C' }}</span>
               </button>
               <div v-if="toolsOpen" ref="toolsMenuRef" class="hosted-tools-menu" @click.stop>
-                <button v-for="tool in tools" :key="tool.kind" type="button" @click="chooseTool(tool.kind)">
+                <button v-for="tool in tools" :key="tool.path || tool.kind" type="button" @click="chooseTool(tool)">
                   {{ tool.label }}
                 </button>
               </div>
@@ -768,7 +770,7 @@ onBeforeUnmount(() => {
     <form class="account-card" @submit.prevent="saveSchedule">
       <h3>定时任务</h3>
       <label class="account-line">每日提醒时间<input v-model="scheduleTime" type="time" required /></label>
-      <ReminderChannelPicker v-model="scheduleChannels" help-text="到点后按这里选中的方式提醒今天的待办。" />
+      <ReminderChannelPicker v-model="scheduleChannels" help-text="到点后列出今天和更早没完成的待办。今天以前的用红色标出。桌面弹窗必须点确认后才能继续操作。这个时间与待办生效时间无关。" />
       <div class="account-actions">
         <button type="button" @click="scheduleOpen = false">取消</button>
         <button type="submit" class="is-primary">保存</button>
@@ -1073,7 +1075,9 @@ onBeforeUnmount(() => {
   left: 0;
   display: flex;
   flex-direction: column;
-  min-width: 112px;
+  min-width: 128px;
+  max-height: 360px;
+  overflow: auto;
   padding: 4px;
   border-radius: 10px;
   background: #fff;

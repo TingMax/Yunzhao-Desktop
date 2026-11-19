@@ -13,6 +13,8 @@ import type { TodoText } from "./sections/todo";
 import type { ClipboardText } from "./sections/clipboard";
 import type { FileShelfText } from "./sections/fileShelf";
 import type { SettingsText } from "./sections/settings/index";
+import type { VaultText } from "./sections/vault";
+import type { WecomText } from "./sections/wecom";
 
 export type LocaleCode = "zh-CN" | "en";
 
@@ -46,4 +48,6 @@ export type Translations = {
   fileShelf: FileShelfText;
 
   settings: SettingsText;
+  vault: VaultText;
+  wecom: WecomText;
 };

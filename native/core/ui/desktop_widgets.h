@@ -35,12 +35,16 @@ public:
     void SetMonitor(HMONITOR monitor, bool refresh = false);
     void SetMaterial(WidgetMaterial material);
     void SetCalendarType(float datePx, float tablePx);
+    void SetTimetableBadge(float scale);
     // Adds a widget in the first free place; false when there is no room.
     bool Add(WidgetKind kind, WidgetSize size);
     // One of each kind. 1 added, 3 already on the desktop, 0 when there was no room to add.
     int Toggle(WidgetKind kind, WidgetSize size);
     // Every calendar: 0 shows only today, 1 fills that monitor's work area.
     void SetCalendarScale(float t);
+    // The desktop calendar window. Off closes it and takes it off the desktop.
+    bool CalendarOpen() const;
+    void SetCalendarOpen(bool open);
     // The same by name ("clock", "medium"; the settings app's gallery).
     bool AddNamed(const std::wstring& kind, const std::wstring& size);
     static bool ParseNames(const std::wstring& kind, const std::wstring& size, WidgetKind& outKind, WidgetSize& outSize);

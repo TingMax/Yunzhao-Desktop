@@ -23,6 +23,8 @@ constexpr UINT WM_ATRIUM_SETTINGS = WM_APP + 1;
 constexpr UINT WM_ATRIUM_ADD_WIDGET = WM_APP + 9;
 // wParam: calendar size 0..1000 (today .. the whole work area).
 constexpr UINT WM_ATRIUM_SIZE_CALENDAR = WM_APP + 13;
+// wParam: 0 close the desktop calendar, 1 open it, 2 ask whether it is open.
+constexpr UINT WM_ATRIUM_CALENDAR = WM_APP + 14;
 
 std::wstring SettingsPipeName();
 

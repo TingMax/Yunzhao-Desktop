@@ -98,19 +98,28 @@ function Fixture() {
   const canPreview = mode === "collapsed" && !tucked;
   const qq = useQQNotifications(canPreview);
   const wechat = useWeChatReminders(canPreview);
+  const wecom = {
+    snapshot: { revision: 0, enabled: false, status: "disabled" as const, pending: false, lastAttentionAt: null, error: null },
+    busy: false,
+    actionError: null,
+    clear: async () => false,
+    setEnabled: async () => false,
+    openWeCom: async () => false,
+    preview: null,
+  };
   const qqMail = useMail(canPreview, { autoCopyOtp });
   changeMode = setMode; changeTucked = setTucked; changeCount = setCount; changeTask = setTask;
   changeWidth = setWidth; changeTitle = setTitle; changeFont = setPixel; changeAgent = setAgent;
   return <div className={`stage${pixel ? " stage--font-pixel" : ""}`} style={{ "--collapsed-island-width": `${width}px` } as CSSProperties}>
-    <IslandShell qqNotifications={qq} wechatReminders={wechat} qqMail={qqMail}
+    <IslandShell qqNotifications={qq} wechatReminders={wechat} wecomReminders={wecom} qqMail={qqMail}
       mode={mode} page="todo" expandedHeight={306} isTucked={tucked} tuckStyle="edge" topEdgeShoulders={false} positionLocked={false} isDetached={true} showTitle={title}
       showCollapsedText={true} collapsedTaskTitle={task ?? `剩余${count}个待办`} collapsedTodoCount={null} agentSession={agent} activeAgentSessionCount={agentCount}
       collapsedItem={agent ? "agent" : "todo"} collapsedLayout={["text", "mail", "shelf", "music", "agents"]} collapsedCover={null} lyricsSettings={{ lyricsFolder: "", lyricsOnline: false, lyricsOffsetMs: 0 }}
-      pageOrder={["todo", "music", "clipboard", "shelf"]} onPageOrderChange={() => {}}
+      pageOrder={["music", "vault", "translation"]} onPageOrderChange={() => {}}
       pageButtonStyle="capsule"
       material="classic" nativeGlassState="disabled" agentVisualState="idle" agentStatusLabel="AI Agent 空闲或已完成"
       mediaState={UNAVAILABLE_MEDIA}
-      features={{ todo: true, music: true, clipboard: true, shelf: true, qq: true, wechat: true, qqMail: true, agents: agentsEnabled, translation: false }}
+      features={{ todo: false, music: true, clipboard: false, shelf: false, vault: true, qq: true, wechat: true, wecom: false, qqMail: true, agents: agentsEnabled, translation: false }}
       shelfCount={null}
       onOpenPage={(page) => { openedPage = page; }} onOpenMessages={(source) => { openedPage = source; }}
       onPageChange={() => {}} onWindowDragStart={() => {}} onCollapse={() => setMode("collapsed")}

@@ -65,8 +65,6 @@ constexpr UINT_PTR kDisplayTimer = 6; // the shared Dock's cross-display gesture
 constexpr UINT_PTR kCoverTimer = 7;   // windows moved on this monitor: look at what covers it, once for a burst
 constexpr UINT kCoverMs = 50;
 constexpr UINT kPointerMs = 50;
-constexpr DWORD kLeaveMs = 500;       // a revealed bar goes down this long after the pointer left it
-
 std::map<HWINEVENTHOOK, Bar*> g_guards; // each display has its own stacking guard
 struct CaptureWindows { HWND visual, input; bool visible; };
 std::map<Bar*, CaptureWindows> g_capturePolicies; // UI-thread only
@@ -907,7 +905,7 @@ void Bar::Relayout()
     const bool showClock = showRight && st.showClock;
     const bool showTray = showRight && st.showTray;
     const bool showStatus = showRight && st.showStatus;
-    const bool showNotifications = showRight && st.showNotifications;
+    const bool showNotifications = false; // notices are shown on the island, not as a bell
 
     // Metrics (px). Every icon sits centred on a square plate (press and drag
     // feedback); the plate has the same gap `v` to the top and bottom edge,
@@ -1344,7 +1342,10 @@ void Bar::UpdateCover()
     POINT p{};
     GetCursorPos(&p);
     RECT bar = BarRect(), zone{bar.left, window_.top, bar.right, monitor_.bottom};
-    revealed_ = covered && !slidOut_ && PtInRect(&zone, p) && !FullScreenInFront(hmonitor_) && GetTickCount64() >= yieldUntil_;
+    // The pointer has to rest on the edge before the bar comes up. Arriving there only starts the wait.
+    revealed_ = false;
+    revealAt_ = covered && !slidOut_ && PtInRect(&zone, p) && !FullScreenInFront(hmonitor_) && GetTickCount64() >= yieldUntil_
+        ? GetTickCount64() : 0;
     leftAt_ = 0;
     if (mode == L"fullscreen")
         Log(L"bar: monitor %p %s", hmonitor_, covered ? L"covered by its top app: auto-hide" : L"not covered by its top app");
@@ -1391,13 +1392,25 @@ void Bar::WatchPointer()
     POINT p{};
     GetCursorPos(&p);
     RECT bar = BarRect();
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG revealMs = static_cast<ULONGLONG>(settings_.barRevealDelay);
+    const ULONGLONG hideMs = static_cast<ULONGLONG>(settings_.barHideDelay);
     if (!revealed_) {
-        // The bottom edge of the screen, below the bar.
-        if (AtDisplayBottom(p, monitor_) && p.x >= bar.left && p.x < bar.right && !FullScreenInFront(hmonitor_) &&
-            GetTickCount64() >= yieldUntil_) {
-            revealed_ = true;
-            leftAt_ = 0;
-            UpdateAutoHide();
+        // The bar is hidden, so the pointer has to rest on this screen's bottom strip, not on a
+        // two-pixel line. A two-pixel line cannot be held for the reveal delay.
+        const int band = std::max(int(std::lround(48 * scale_)), int(scene_.bar.bottom - scene_.bar.top));
+        const bool atBottom = p.x >= monitor_.left && p.x < monitor_.right && p.y >= monitor_.bottom - band && p.y < monitor_.bottom;
+        if (atBottom && !FullScreenInFront(hmonitor_) && now >= yieldUntil_) {
+            if (!revealAt_)
+                revealAt_ = now;
+            else if (now - revealAt_ >= revealMs) {
+                revealed_ = true;
+                revealAt_ = 0;
+                leftAt_ = 0;
+                UpdateAutoHide();
+            }
+        } else {
+            revealAt_ = 0;
         }
         return;
     }
@@ -1406,10 +1419,9 @@ void Bar::WatchPointer()
         leftAt_ = 0;
         return;
     }
-    ULONGLONG now = GetTickCount64();
     if (!leftAt_)
         leftAt_ = now;
-    else if (now - leftAt_ >= kLeaveMs) {
+    else if (now - leftAt_ >= hideMs) {
         revealed_ = false;
         leftAt_ = 0;
         UpdateAutoHide();
@@ -1429,6 +1441,7 @@ void Bar::YieldToGame(HWND cover)
         return;
     revealed_ = false;
     leftAt_ = 0;
+    revealAt_ = 0;
     tucked_ = true;
     scene_.tucked = true;
     HideTooltip();

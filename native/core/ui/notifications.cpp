@@ -3,7 +3,10 @@
 #include "clock.h"
 #include "log.h"
 #include "motion.h"
+#include "settings.h"
 #include "ui/notification_layout.h"
+
+#include <chrono>
 
 #include <shellapi.h>
 #include <shellscalingapi.h>
@@ -141,6 +144,41 @@ void Notifications::ClearPreparedUpdate()
     Changed();
 }
 
+namespace {
+
+std::wstring JsonEscape(const std::wstring& text)
+{
+    std::wstring out;
+    out.reserve(text.size());
+    for (wchar_t c : text) {
+        if (c == L'\\' || c == L'"')
+            out.push_back(L'\\');
+        if (c == L'\n' || c == L'\r') {
+            out += L"\\n";
+            continue;
+        }
+        if (c >= 0x20)
+            out.push_back(c);
+    }
+    return out;
+}
+
+// The island reads this file and shows the notice on its collapsed bar.
+void PublishIslandNotice(const Notice& n)
+{
+    std::wstring settings = SettingsPath();
+    const size_t slash = settings.find_last_of(L"\\/");
+    if (slash == std::wstring::npos)
+        return;
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::wstring json = L"{\"app\":\"" + JsonEscape(n.app) + L"\",\"title\":\"" + JsonEscape(n.title) +
+        L"\",\"body\":\"" + JsonEscape(n.body) + L"\",\"at\":" + std::to_wstring(now) + L"}";
+    WriteTextFile(settings.substr(0, slash) + L"\\island-notice.json", json);
+}
+
+} // namespace
+
 void Notifications::Post(Notice n, bool silent)
 {
     n.time = GetTickCount64();
@@ -188,30 +226,10 @@ void Notifications::Post(Notice n, bool silent)
         std::erase_if(popupIds_, [&](uint64_t id) { return std::none_of(notices_.begin(), notices_.end(), [&](const Notice& o) { return o.id == id; }); });
     }
     Log(L"notify: posted %llu from %s (%s)", n.id, n.app.c_str(), n.source.c_str());
-
-    // The open list shows it right away; otherwise it pops up, unless the user
-    // is in a full-screen app, presenting or in quiet hours.
-    if (silent || center_.surface->Visible()) {
-        Changed();
-        return;
-    }
-    int quiet = QuietState();
-    if (quiet != QUNS_ACCEPTS_NOTIFICATIONS && quiet != QUNS_APP) {
-        Log(L"notify: popup suppressed (user notification state %d)", quiet);
-        Changed();
-        return;
-    }
-    if (auto old = std::find(popupIds_.begin(), popupIds_.end(), n.id); old != popupIds_.end()) {
-        ShiftStack(Mode::Popup, size_t(old - popupIds_.begin()), -1);
-        popupIds_.erase(old);
-    }
-    popupIds_.insert(popupIds_.begin(), n.id);
-    if (topRight_)
-        popup_.scroll = popup_.scrollTarget = 0; // a new arrival takes the top slot
-    ShiftStack(Mode::Popup, 0, +1);
-    Layout(Mode::Popup);
-    if (popup_.surface->Visible())
-        SetTimer(popup_.surface->Hwnd(), kPopupTimer, UINT(timeout_ * 1000), nullptr);
+    (void)silent;
+    PublishIslandNotice(n);
+    if (popup_.surface && popup_.surface->Visible())
+        HidePopup(L"shown on the island");
     Changed();
 }
 

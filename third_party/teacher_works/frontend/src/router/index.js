@@ -132,7 +132,10 @@ async function ensureDesktopSession() {
   }
 }
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
+  if (from.query.solo === '1' && to.query.solo !== '1') {
+    return { path: to.path, query: { ...to.query, solo: '1' }, hash: to.hash }
+  }
   const ready = await ensureDesktopSession()
   if (!ready && to.path !== '/login') return '/login'
   if (ready && to.path === '/login') return '/dashboard'

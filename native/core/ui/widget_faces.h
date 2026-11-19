@@ -188,6 +188,7 @@ struct WidgetWorld {
     bool bluetoothRead = false;              // false until the first reading
     float dateSize = 20;   // week and month dates, set in the settings app
     float tableSize = 24;  // timetable header dates, set in the settings app
+    float badgeScale = 0.7f; // timetable date badge, relative to the original circle
 };
 
 // Places in a widget that respond to the pointer (content DIP): "toggle:<i>"

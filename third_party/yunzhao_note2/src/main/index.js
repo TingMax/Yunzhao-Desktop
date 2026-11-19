@@ -44,7 +44,7 @@ import { createShutdownCoordinator } from './application/shutdown-coordinator.js
 import { createMainWindowHost } from './windows/main-window-host.js'
 import { installRendererRecovery } from './windows/renderer-recovery.js'
 import { beginPerformanceOperation } from './logging/operation-performance.js'
-import { atriumInitialBounds, atriumHosted, noteAtriumBounds, publishAtriumFrame, readAtriumLaunch, startAtriumHost } from './atrium-host.js'
+import { atriumInitialBounds, atriumHosted, atriumPeeking, atriumWindowStaysVisible, clampAtriumBounds, noteAtriumBounds, publishAtriumFrame, readAtriumLaunch, startAtriumHost } from './atrium-host.js'
 import { startCloudSync } from './cloud-sync.js'
 import { createEditingDraftGuard } from './windows/editing-draft-guard.js'
 /**
@@ -300,6 +300,8 @@ let startupShortcutNoticeDismissed = false
 const viewVisibilityShortcutCaptureSenders = new WeakSet()
 const captureWindowIntegration = createCaptureWindowIntegration({
   getWindow: getMainWindow,
+  getWindows: getApplicationWindows,
+  shouldUncover: () => atriumWindowStaysVisible(),
   isDockHidden: () => dockRuntime.hidden,
   shouldHide: () => settingsRuntime.values.interaction.hideMainViewDuringScreenshot,
   isQuitting: () => shutdownCoordinator.isQuitting(),
@@ -2181,11 +2183,12 @@ const applicationBootstrap = createApplicationBootstrap({
       endTitlebarWindowDrag(diagnostics)
     )
     mainWindowIpc.handle('window-resize:end', () => {
-      if (atriumHosted()) publishAtriumFrame(getMainWindow())
+      if (atriumHosted() && !atriumPeeking()) publishAtriumFrame(getMainWindow())
       return finishCompactWindowResize()
     })
     // 【缩放手柄 - 设置边界】根据渲染进程传入的 bounds 调整窗口大小/位置
     ipcMain.on('window-set-bounds', (event, bounds) => {
+      if (atriumPeeking()) return
       const win = BrowserWindow.fromWebContents(event.sender)
       const values = bounds && [bounds.x, bounds.y, bounds.width, bounds.height].map(Number)
       const compact = presentationRuntime.isCompact()
@@ -2207,12 +2210,13 @@ const applicationBootstrap = createApplicationBootstrap({
         values[3] <= maxHeight
       ) {
         // Math.round 确保像素值为整数，避免亚像素渲染问题
-        const next = {
+        const raw = {
           x: Math.round(values[0]),
           y: Math.round(values[1]),
           width: Math.round(values[2]),
           height: Math.round(values[3])
         }
+        const next = hosted ? clampAtriumBounds(raw) : raw
         win.setBounds(next)
         if (hosted) noteAtriumBounds(next)
         if (compact) presentationRuntime.handleResize(win.getBounds())
@@ -2440,7 +2444,9 @@ const applicationBootstrap = createApplicationBootstrap({
       getWindow: getMainWindow,
       getMode: () => mainViewNavigation.mode,
       switchView: (view) => switchMainView(view),
-      suspendDock: () => dockRuntime.beginDockInteractionSuspension('atrium')
+      suspendDock: () => dockRuntime.beginDockInteractionSuspension('atrium'),
+      getSettings: () => settingsRuntime.values,
+      applyUiSetting: (id, value) => Promise.resolve(persistSettingValue(id, value))
     })
     remoteCoordinator = new RemoteCoordinator({
       app,

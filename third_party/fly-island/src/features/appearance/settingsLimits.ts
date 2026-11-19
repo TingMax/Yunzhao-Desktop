@@ -73,7 +73,7 @@ export const COLLAPSED_ITEMS: readonly CollapsedItem[] = ["agent", "lyrics", "to
 /** The collapsed island's layout as it always was: the text, then the icons on its right. */
 export const COLLAPSED_SLOTS: readonly CollapsedSlot[] = ["text", "mail", "shelf", "music", "agents"];
 /** The header's page dots in their default order; translation joined last (2026-11-11). */
-export const PAGE_DOTS: readonly PageDot[] = ["todo", "music", "clipboard", "shelf", "translation"];
+export const PAGE_DOTS: readonly PageDot[] = ["music", "vault", "translation"];
 
 /** `value` when it is one of `allowed`, else `fallback`: a saved choice from an older or newer build. */
 export function oneOf<T>(allowed: readonly T[], value: unknown, fallback: T): T {

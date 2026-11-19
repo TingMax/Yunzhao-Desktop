@@ -2,6 +2,8 @@
 //! every change, and the snapshot sent to every window used to carry each one inline as a
 //! data URL, which reached tens of MB with 500 images; windows now read them one by one.
 
+#![allow(dead_code)]
+
 use base64::{engine::general_purpose, Engine as _};
 use std::{fs, path::Path};
 

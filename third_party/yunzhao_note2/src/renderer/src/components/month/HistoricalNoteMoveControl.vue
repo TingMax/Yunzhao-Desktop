@@ -61,19 +61,15 @@ const resultsRef = ref(null)
 const selectionNotice = ref('')
 const moving = ref(false)
 const autoEnabled = ref(false)
-const quickCreateEnabled = ref(false)
 const settingsLoading = ref(true)
 const settingsError = ref('')
 const autoSaving = ref(false)
-const quickCreateSaving = ref(false)
-const settingsSaving = computed(() => autoSaving.value || quickCreateSaving.value)
+const settingsSaving = computed(() => autoSaving.value)
 const autoToggleRef = ref(null)
-const quickCreateToggleRef = ref(null)
 const triggerRef = ref(null)
 let triggerFocusPending = false
 let triggerFocusFrame = null
 const autoError = ref('')
-const quickCreateError = ref('')
 let previewSequence = 0
 let settingsRevision = 0
 let settingsLoadSequence = 0
@@ -359,7 +355,6 @@ function applySettings(snapshot) {
   if (disposed) return
   settingsRevision += 1
   autoEnabled.value = Boolean(snapshot?.values?.notes?.autoMoveToToday)
-  quickCreateEnabled.value = Boolean(snapshot?.values?.notes?.quickCreateUntilCompleted)
   settingsError.value = ''
 }
 
@@ -370,7 +365,6 @@ async function loadSettings() {
   settingsLoading.value = true
   settingsError.value = ''
   autoError.value = ''
-  quickCreateError.value = ''
   try {
     await settingsSnapshots.read()
   } catch (error) {
@@ -400,25 +394,6 @@ async function saveAutoSetting(value) {
     await nextTick()
     if (!disposed && open.value && restoreToggleFocus && document.activeElement === document.body) {
       autoToggleRef.value?.$el?.focus({ preventScroll: true })
-    }
-  }
-}
-
-async function saveQuickCreateSetting(value) {
-  if (disposed || settingsSaving.value || settingsLoading.value || moving.value) return
-  const restoreToggleFocus = document.activeElement === quickCreateToggleRef.value?.$el
-  quickCreateSaving.value = true
-  quickCreateError.value = ''
-  try {
-    await window.api.setSettingValue('notes.quickCreateUntilCompleted', Boolean(value))
-    if (!disposed) await loadSettings()
-  } catch (error) {
-    if (!disposed) quickCreateError.value = error?.message || '无法保存快捷新建设置'
-  } finally {
-    if (!disposed) quickCreateSaving.value = false
-    await nextTick()
-    if (!disposed && open.value && restoreToggleFocus && document.activeElement === document.body) {
-      quickCreateToggleRef.value?.$el?.focus({ preventScroll: true })
     }
   }
 }
@@ -520,35 +495,13 @@ onBeforeUnmount(() => {
     v-model:visible="open"
     :queue="modalShellQueue"
     title="待办延续与移动"
-    subtitle="设置快捷新建的持续方式，或将未完成的仅当天待办移至今天。"
+    subtitle="将未完成的仅当天待办移至今天。"
     width="min(560rem, calc(100vw - 32rem))"
     :height="cardHeight"
     :close-disabled="moving || settingsSaving"
     @opened="loadPreview()"
   >
     <div class="historical-note-move" :aria-busy="previewLoading || moving">
-      <section class="historical-note-move__automatic">
-        <div>
-          <strong id="historical-move-quick-create-label">快捷新建默认持续到完成</strong>
-          <p id="historical-move-quick-create-help">
-            开启后，周/月日期格快捷新建的待办从生效日持续显示，直到完成。关闭时仅在生效当天显示；不改变已有待办与完整新建选项。
-          </p>
-          <p v-if="quickCreateError" class="historical-note-move__error" role="alert">
-            {{ quickCreateError }}
-          </p>
-        </div>
-        <AppToggle
-          id="historical-move-quick-create-toggle"
-          ref="quickCreateToggleRef"
-          data-quick-create-until-completed
-          :model-value="quickCreateEnabled"
-          :disabled="settingsLoading || settingsSaving || moving || Boolean(settingsError)"
-          size="sm"
-          aria-labelledby="historical-move-quick-create-label"
-          aria-describedby="historical-move-quick-create-help"
-          @update:model-value="saveQuickCreateSetting"
-        />
-      </section>
       <section class="historical-note-move__automatic">
         <div>
           <strong id="historical-move-auto-label">每天自动移至今天</strong>

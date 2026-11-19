@@ -18,6 +18,8 @@ mod system;
 mod translation;
 mod tray;
 mod wechat_reminders;
+mod wecom_reminders;
+mod vault_editor;
 mod win32;
 
 use tauri::WindowEvent;
@@ -69,15 +71,11 @@ pub fn run() {
             if !yunzhao {
                 tray::build_tray(app)?;
             }
-            if let Err(error) = clipboard_history::init(app.handle()) {
-                eprintln!("failed to initialize clipboard history: {error}");
-            }
             translation::init(app.handle());
-            if let Err(error) = file_shelf::init(app.handle()) {
-                eprintln!("failed to initialize the file shelf: {error}");
-            }
-            if let Err(error) = agent_approval::init(app.handle()) {
-                eprintln!("failed to start the agent approval endpoint: {error}");
+            if !yunzhao {
+                if let Err(error) = agent_approval::init(app.handle()) {
+                    eprintln!("failed to start the agent approval endpoint: {error}");
+                }
             }
             if let Err(error) = mail::init(app.handle()) {
                 eprintln!("failed to initialize QQ mail: {error}");
@@ -88,6 +86,10 @@ pub fn run() {
             if let Err(error) = wechat_reminders::init(app.handle()) {
                 eprintln!("failed to initialize WeChat reminders: {error}");
             }
+            if let Err(error) = wecom_reminders::init(app.handle()) {
+                eprintln!("failed to initialize WeCom reminders: {error}");
+            }
+            vault_editor::init(app.handle());
             if let Err(error) = notification_diagnostics::start(app.handle()) {
                 eprintln!("failed to initialize notification diagnostics: {error}");
             }
@@ -115,7 +117,9 @@ pub fn run() {
             if let Err(error) = plugin_host::init(app.handle()) {
                 eprintln!("failed to initialize plugins: {error}");
             }
-            agent_status::reply_marker::init();
+            if !yunzhao {
+                agent_status::reply_marker::init();
+            }
             if yunzhao {
                 let _ = settings_window::open(app.handle());
             }
@@ -125,6 +129,7 @@ pub fn run() {
             file_shelf;
             mail;
             wechat_reminders;
+            wecom_reminders;
             qq_notifications;
             island;
             system;
@@ -136,7 +141,8 @@ pub fn run() {
             lyrics;
             clipboard_history;
             translation;
-            settings_window
+            settings_window;
+            vault_editor
             ; clipboard_window
         ))
         .build(context)
@@ -147,6 +153,7 @@ pub fn run() {
                     clipboard_window::remember_bounds(handle);
                     agent_approval::shutdown();
                     wechat_reminders::shutdown();
+                    wecom_reminders::shutdown();
                     plugin_host::shutdown(handle);
                 }
             })

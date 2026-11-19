@@ -137,7 +137,7 @@ if (!automated) {
       check(category === "messages" || rowCount <= maxRows, `${category}: the page keeps to a handful of rows (${rowCount})`);
     }
     check(settingsCategoryFor("sounds") === "agents" && settingsCategoryFor("agentAlerts") === "agents" && settingsCategoryFor("agentApprovals") === "agents"
-      && settingsCategoryFor("shelf") === "clipboard", "Old names of merged pages open the page they became");
+      && settingsCategoryFor("shelf") === "general" && settingsCategoryFor("todos") === "general" && settingsCategoryFor("clipboard") === "general", "Old names of removed pages open General");
     if (PLUGINS_ENABLED) {
       await openPage("plugins");
       const plugins = element(".editor-panel .plugins-settings");
@@ -185,15 +185,8 @@ if (!automated) {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); });
     check(agentPolls() === pollsAway, "Agent status is not polled while its page is closed");
 
-    await act(async () => {
-      localStorage.setItem("focusd-island-settings-focus", JSON.stringify({ section: "savePath", requestedAt: Date.now() }));
-      window.dispatchEvent(new StorageEvent("storage", { key: "focusd-island-settings-focus", newValue: "x", storageArea: localStorage }));
-    });
-    check(element(".settings-sidebar__item[data-category='todos']").getAttribute("aria-current") === "page", "A save path request from the island opens the todos page");
-    check(document.querySelector(".editor-panel .save-path-panel--attention"), "A save path request from the island highlights the save path");
-    await click(".save-path-panel .settings-link-button");
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1_500)); });
-    check(document.querySelector(".save-path-panel .save-path-saved"), "The saved confirmation stays long enough to notice");
+    await openPage("vault");
+    check(document.querySelector(".editor-panel")?.textContent?.includes("查看密码"), "The account page asks for a view password before the table can be used");
 
     await openPage("messages");
     const rows = () => [...document.querySelectorAll<HTMLElement>(".mail-settings__account")];
@@ -318,20 +311,6 @@ if (!automated) {
     await type(element<HTMLInputElement>(".editor-panel input[placeholder*='模型']"), "demo-model");
     check(storedShortcut() === "Ctrl+Alt+J" && recordButtonText() === "Ctrl+Alt+J",
       "Editing the model afterwards keeps the new translation shortcut");
-    await openPage("clipboard");
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-    await record({ key: "?", code: "Slash", ctrlKey: true, shiftKey: true });
-    const clipboardSaved = commands.lastIndexOf("set_clipboard_history_settings") >= 0;
-    check(clipboardSaved && recordButtonText() === "Ctrl+Shift+/",
-      "Recording Ctrl+Shift+/ for clipboard history saves it");
-    await record({ key: "J", code: "KeyJ", ctrlKey: true, altKey: true });
-    check(element(".shortcut-control__error").textContent?.includes("Ctrl+Alt+J"), "Keys translation already uses are refused for clipboard history");
-    // Reopening the pages reads the keys back from where they are kept.
-    await openPage("translation");
-    check(recordButtonText() === "Ctrl+Alt+J", "The translation page shows the recorded shortcut when opened again");
-    await openPage("clipboard");
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-    check(recordButtonText() === "Ctrl+Shift+/", `The clipboard page shows the recorded shortcut when opened again (${recordButtonText()})`);
 
     // About: one group holds the community group (red dots lead to it until it is opened), the star
     // and the tip; no update row, history or issue links (the changelog and the group took them over).

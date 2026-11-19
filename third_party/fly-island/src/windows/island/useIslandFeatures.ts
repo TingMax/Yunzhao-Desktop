@@ -7,9 +7,9 @@ import type { IslandPage } from "./types";
 
 type IslandFeatureOptions = {
   settings: IslandSettings;
-  clipboardEnabled: boolean;
   qqEnabled: boolean;
   wechatEnabled: boolean;
+  wecomEnabled: boolean;
   qqMail: MailController;
   page: IslandPage;
   messageSource: MessageView;
@@ -26,9 +26,9 @@ type IslandFeatureOptions = {
  */
 export function useIslandFeatures({
   settings,
-  clipboardEnabled,
   qqEnabled,
   wechatEnabled,
+  wecomEnabled,
   qqMail,
   page,
   messageSource,
@@ -40,16 +40,18 @@ export function useIslandFeatures({
   const hasPluginMessages = Object.values(plugins.registry.installed).some((p) => p.enabled && p.manifest.contributes.includes("notifications"));
   const features = useMemo<IslandFeatures>(() => ({
     plugin: hasPluginMessages,
-    todo: settings.todoEnabled,
+    todo: false,
     music: settings.musicEnabled,
-    clipboard: clipboardEnabled,
-    shelf: settings.shelfEnabled,
+    clipboard: false,
+    shelf: false,
     qq: qqEnabled,
     wechat: wechatEnabled,
+    wecom: wecomEnabled,
     qqMail: settings.mailEnabled,
-    agents: settings.agentStatusEnabled,
+    vault: true,
+    agents: false,
     translation: settings.translationEnabled && settings.translationTarget === "island",
-  }), [clipboardEnabled, qqEnabled, settings.agentStatusEnabled, settings.mailEnabled, settings.musicEnabled, settings.shelfEnabled, settings.todoEnabled, settings.translationEnabled, settings.translationTarget, wechatEnabled, hasPluginMessages]);
+  }), [qqEnabled, settings.agentStatusEnabled, settings.mailEnabled, settings.musicEnabled, settings.translationEnabled, settings.translationTarget, wechatEnabled, wecomEnabled, hasPluginMessages]);
 
   useEffect(() => {
     const next = islandPageFor(page, features, settings.clipboardDetached);

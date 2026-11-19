@@ -194,6 +194,19 @@ internal sealed class CoreClient : IDisposable
         return r["message"]?.GetValue<string>();
     }
 
+    // Whether the desktop calendar window is open.
+    public async Task<bool> CalendarOpenAsync()
+    {
+        var r = await RequestAsync(new JsonObject { ["op"] = "calendar" });
+        return r?["message"]?.GetValue<string>() == "on";
+    }
+
+    // Opens the desktop calendar, or closes it and takes it off the desktop.
+    public async Task SetCalendarOpenAsync(bool open)
+    {
+        await RequestAsync(new JsonObject { ["op"] = "calendar", ["on"] = open });
+    }
+
     // 0 shows only today, 1 fills the screen. Resizes every calendar on the desktop.
     public async Task SizeCalendarAsync(double t)
     {

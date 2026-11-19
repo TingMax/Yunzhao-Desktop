@@ -212,15 +212,15 @@ if (!automated) {
     check(barItems.every((rect) => rect.left >= collapsed.left + 10 && rect.right <= collapsed.right - 10), "收起的岛上的内容离两侧圆角有距离");
 
     if (query.has("update")) {
-      check(document.querySelector(".dot-button--todo .island-update-dot") && document.querySelector(".island__collapsed .island-update-dot"),
-        "新更新在待办入口和收起的岛上都显示红点");
+      check(document.querySelector(".island-settings-button .island-update-dot") && document.querySelector(".island__collapsed .island-update-dot"),
+        "新更新在设置入口和收起的岛上都显示红点");
     }
     await click(".island__open-button");
     check(island().classList.contains("island--expanded"), "点击后展开");
     if (query.has("update")) {
-      await click(".dot-button--todo");
-      check(document.querySelector(".dot-button--todo .island-update-dot") && document.querySelector(".todo-update-dot"),
-        "进入待办后入口红点和更新按钮红点都保留，直到安装");
+      await click(".island-settings-button");
+      check(document.querySelector(".island-settings-button .island-update-dot"),
+        "进入设置后更新红点仍在");
     }
     checkShapeMotion(0.56);
     if (query.has("theme") || query.has("bg")) checkTone(check, query.get("theme") === "light" || (query.get("bg") ?? "").toUpperCase() === "FFFFFF");
@@ -244,12 +244,12 @@ if (!automated) {
       await act(async () => { fire("pointermove", target.left + target.width / 2); });
       await act(async () => { fire("pointerup", target.left + target.width / 2); source.click(); });
     };
-    await drag(".dot-button--todo", ".dot-button--clipboard");
+    await drag(".dot-button--vault", ".dot-button--translation");
     const savedOrder = JSON.parse(localStorage.getItem("focusd-island-settings") ?? "{}").pageOrder as string[] | undefined;
-    check(dotOrder().join() === "music,clipboard,todo,shelf,translation" && savedOrder?.join() === "music,clipboard,todo,shelf,translation" && island().className === pageBefore,
+    check(dotOrder().join() === "music,translation,vault" && savedOrder?.join() === "music,translation,vault" && island().className === pageBefore,
       `拖动页面圆点可以调整顺序并保存，拖完不切页（${dotOrder().join()}）`);
-    await drag(".dot-button--todo", ".dot-button--music");
-    check(dotOrder()[0] === "todo", "圆点可以拖回原来的位置");
+    await drag(".dot-button--vault", ".dot-button--music");
+    check(dotOrder()[0] === "vault", "圆点可以拖回原来的位置");
     // Translation is one of the page capsules on the left; the header's old button is gone.
     await click(".dot-button--translation");
     check(!document.querySelector(".island-translate-button")
@@ -259,7 +259,7 @@ if (!automated) {
 
     // The shelf's three files make one row of tiles with an open slot, and the page is only as
     // tall as that row (getShelfExpandedHeight).
-    await act(async () => { document.querySelector<HTMLElement>(".dot-button--shelf")!.click(); });
+    await act(async () => { document.querySelector<HTMLElement>(".dot-button--vault")!.click(); });
     check(document.querySelector<HTMLElement>(".island__content")!.getAnimations().some((animation) =>
       animation.effect?.getTiming().duration === 220), "翻页保留 220ms 面板淡入动画");
     await settle(700);
@@ -284,17 +284,11 @@ if (!automated) {
       && tipTop >= island().getBoundingClientRect().top,
       `键盘聚焦也会放大上浮并显示名称，命中区域不动，名称不会被屏幕顶边裁切（${dock.a}, ${dock.f}, ${tipTop.toFixed(1)}px）`);
     dots[1].blur();
-    const tiles = [...document.querySelectorAll<HTMLElement>(".shelf-item")].map((tile) => tile.getBoundingClientRect());
-    const list = document.querySelector<HTMLElement>(".shelf-list")!;
-    check(tiles.length === 3 && tiles.every((tile) => Math.abs(tile.top - tiles[0].top) < 1) && document.querySelector(".shelf-slot")
-      && panel().offsetHeight === 262 && list.scrollHeight <= list.clientHeight,
-      `文件中转是一排图块，页面高度正好放下这一排（${panel().offsetHeight}px）`);
+    check(document.querySelector(".vault-panel"), "账号页可以打开");
 
     const pages: Array<[string, string]> = [
-      [".dot-button--todo", "待办"],
+      [".dot-button--vault", "账号"],
       [".dot-button--music", "音乐"],
-      [".dot-button--clipboard", "剪贴板"],
-      [".dot-button--shelf", "文件中转"],
       [".island__agent-button", "AI Agent"],
       [".dot-button--messages", "消息"],
       [".dot-button--translation", "翻译"],
@@ -315,7 +309,7 @@ if (!automated) {
       check(tight.length === 0, `${name}页：没有内容挤到岛的边缘${tight.length ? `（${tight[0].className}）` : ""}`);
     }
     // Settings is open last: the island's height follows the settings page shown, within its cap.
-    await click(".settings-sidebar__item[data-category='todos']");
+    await click(".settings-sidebar__item[data-category='vault']");
     // The page panel's own height (it is scaled, the shape around it is not), so the check holds
     // at every expanded size.
     const short = panel().offsetHeight;
@@ -326,11 +320,11 @@ if (!automated) {
     // Appearance → Collapsed island: three items in order, moved with the arrow keys on a handle.
     await click(".settings-sidebar__item[data-category='appearance']");
     const capsule = document.querySelector<HTMLButtonElement>('[aria-label="页面按钮"] button:first-child')!;
-    check(capsule.getAttribute("aria-pressed") === "true" && document.querySelectorAll(".dot-button--capsule").length === 6, "已保存为胶囊的页面按钮保持胶囊（含消息）");
+    check(capsule.getAttribute("aria-pressed") === "true" && document.querySelectorAll(".dot-button--capsule").length === 4, "已保存为胶囊的页面按钮保持胶囊（含消息）");
     await click('[aria-label="页面按钮"] button:last-child');
     const savedStyle = JSON.parse(localStorage.getItem("focusd-island-settings") ?? "{}").pageButtonStyle;
-    check(document.querySelectorAll(".dot-button--icon svg, .island__agent-button svg.lucide-bot").length === 7 &&
-      document.querySelectorAll(".agent-page-preview__dots svg").length === 5 && savedStyle === "icon", "七个入口切换为图标，外观预览和保存同步");
+    check(document.querySelectorAll(".dot-button--icon svg, .island__agent-button svg.lucide-bot").length === 5 &&
+      document.querySelectorAll(".agent-page-preview__dots svg").length === 3 && savedStyle === "icon", "五个入口切换为图标，外观预览和保存同步");
     await click('[aria-label="页面按钮"] button:first-child');
     const priority = () => [...document.querySelectorAll<HTMLElement>(".reorder-list__item")].map((item) => item.dataset.reorderId);
     check(priority().join() === "agent,lyrics,todo", "外观页列出收起时的显示顺序：Agent 任务、歌词、待办");

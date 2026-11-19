@@ -6,7 +6,10 @@ import { getSettingsSnapshotStore } from '../utils/settingsSnapshots.js'
 // the same owner; a replacement owner never reactivates an already released lease.
 const owners = new WeakMap()
 
+const missingApi = {}
+
 function createOwner(api) {
+  if (!api || typeof api !== 'object') api = missingApi
   const settingsSnapshots = getSettingsSnapshotStore(api)
   const weatherEnabled = ref(false),
     almanacEnabled = ref(true),
@@ -154,6 +157,7 @@ function createOwner(api) {
 }
 
 export function acquireDateContextSettings(api) {
+  if (!api || typeof api !== 'object') api = missingApi
   let owner = owners.get(api)
   if (!owner) {
     owner = createOwner(api)

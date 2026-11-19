@@ -3,10 +3,10 @@ import test from "node:test";
 import { DEFAULT_SETTINGS, normalizeSettings } from "../../src/features/appearance/settings.ts";
 import { SCHEME_COLORS, followsScheme, resolveColorScheme, resolveSchemeColors, toneOn } from "../../src/features/appearance/theme.ts";
 
-test("the colour scheme defaults to dark and rejects unknown saved values", () => {
-  assert.equal(DEFAULT_SETTINGS.colorScheme, "dark");
+test("the colour scheme follows Windows by default and rejects unknown saved values", () => {
+  assert.equal(DEFAULT_SETTINGS.colorScheme, "system");
   for (const value of [undefined, null, "", "Dark", "auto", 1, {}]) {
-    assert.equal(normalizeSettings({ colorScheme: value }).colorScheme, "dark");
+    assert.equal(normalizeSettings({ colorScheme: value }).colorScheme, "system");
   }
   assert.equal(normalizeSettings({ colorScheme: "light" }).colorScheme, "light");
   assert.equal(normalizeSettings({ colorScheme: "system" }).colorScheme, "system");

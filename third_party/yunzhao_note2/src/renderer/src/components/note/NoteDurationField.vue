@@ -14,18 +14,18 @@ const props = defineProps({
 const emit = defineEmits(['update:kind', 'update:days'])
 const durationOptions = Object.freeze([
   { label: '仅当天', value: NOTE_DURATION_KINDS.SINGLE_DAY },
-  { label: '指定天数', value: NOTE_DURATION_KINDS.FIXED_DAYS },
-  { label: '持续到完成', value: NOTE_DURATION_KINDS.UNTIL_COMPLETED }
+  { label: '指定天数', value: NOTE_DURATION_KINDS.FIXED_DAYS }
 ])
-const helpText = computed(() => {
-  if (props.kind === NOTE_DURATION_KINDS.FIXED_DAYS) {
-    return '在日历中连续显示指定天数，不改变待办完成状态。'
-  }
-  if (props.kind === NOTE_DURATION_KINDS.UNTIL_COMPLETED) {
-    return '未完成时从生效日持续显示到今天，完成后以完成日期作为结束日。'
-  }
-  return '只在生效当天显示。'
-})
+const selectedKind = computed(() =>
+  props.kind === NOTE_DURATION_KINDS.FIXED_DAYS
+    ? NOTE_DURATION_KINDS.FIXED_DAYS
+    : NOTE_DURATION_KINDS.SINGLE_DAY
+)
+const helpText = computed(() =>
+  selectedKind.value === NOTE_DURATION_KINDS.FIXED_DAYS
+    ? '在日历中连续显示指定天数，不改变待办完成状态。'
+    : '只在生效当天显示。'
+)
 
 function updateKind(kind) {
   emit('update:kind', kind)
@@ -44,14 +44,14 @@ function updateKind(kind) {
         <label class="note-duration-field__label">持续方式<HelpButton :text="helpText" /></label>
         <div class="note-duration-field__control">
           <StyledSelect
-            :model-value="kind"
+            :model-value="selectedKind"
             :options="durationOptions"
             width="max(116rem, 8.5em)"
             size="sm"
             aria-label="持续方式"
             @update:model-value="updateKind"
           />
-          <template v-if="kind === NOTE_DURATION_KINDS.FIXED_DAYS">
+          <template v-if="selectedKind === NOTE_DURATION_KINDS.FIXED_DAYS">
             <div class="note-duration-field__days">
               <NumberStepper
                 :model-value="days"

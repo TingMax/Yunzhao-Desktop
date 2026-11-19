@@ -1,5 +1,7 @@
 //! History service, clipboard reads and writes, and the clipboard listener window.
 
+#![allow(dead_code)]
+
 use arboard::{Clipboard, ImageData};
 use image::RgbaImage;
 use std::{

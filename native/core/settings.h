@@ -42,7 +42,7 @@ struct Settings {
     bool showClock = true;
     bool showTray = true;
     bool showStatus = true;
-    bool showNotifications = true;
+    bool showNotifications = false; // the bell is gone; notices go to the island
     bool showRunning = true;
     std::wstring textColor = L"auto"; // auto | light | dark
     // When the bar steps out of the way: never | fullscreen (a maximized or full-screen app is in
@@ -52,6 +52,8 @@ struct Settings {
     // One Dock, summoned at another display's bottom edge, as on macOS.
     std::wstring dockDisplayMode = L"primary"; // primary (as before several displays were known) | follow | fixed | all
     double dockDisplayDelay = 450;   // milliseconds at another display's bottom edge (100..2000)
+    double barRevealDelay = 1000;    // milliseconds the pointer rests on the bottom edge before the bar appears
+    double barHideDelay = 2000;      // milliseconds after the pointer leaves before the bar hides
     std::wstring dockDisplay;        // fixed display's device-interface ID
     std::wstring desktopDisplay;     // widgets and Stage Manager; empty follows the system primary
     std::wstring taskbarApps = L"all"; // all | primaryAndWindow | window
@@ -83,6 +85,7 @@ struct Settings {
     std::wstring widgetMaterial = L"glass";
     double calendarDateSize = 20;    // week and month date type, DIP
     double timetableDateSize = 24;   // timetable header type, DIP
+    double timetableBadgeScale = 0.7; // timetable date badge, relative to the original circle
     bool calendarEdgeHide = true;    // a calendar sitting on a monitor edge slides fully off that edge
     bool islandOn = false;           // the small top-center island
     double islandTop = 12;           // DIP down from the top of the monitor

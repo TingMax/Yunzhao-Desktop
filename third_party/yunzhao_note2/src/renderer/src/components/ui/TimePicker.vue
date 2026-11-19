@@ -25,6 +25,8 @@ const popover = usePopoverLifecycle(open, wrapperRef, panelRef, updatePanelPosit
 })
 const hour = ref(9)
 const minute = ref(0)
+const typed = ref('')
+const typing = ref(false)
 
 const wrapperStyle = computed(() => ({
   width: typeof props.width === 'number' ? `${props.width}px` : props.width
@@ -36,7 +38,15 @@ function formatTime(hourValue, minuteValue) {
 }
 
 function parseTime(value) {
-  const match = /^(\d{2}):(\d{2})$/.exec(String(value || ''))
+  const text = String(value || '')
+    .trim()
+    .replace(/：/g, ':')
+    .replace(/\./g, ':')
+  let match = /^(\d{1,2}):(\d{1,2})$/.exec(text)
+  if (!match && /^\d{3,4}$/.test(text)) {
+    const digits = text.padStart(4, '0')
+    match = [text, digits.slice(0, 2), digits.slice(2)]
+  }
   if (!match) return null
   const parsedHour = Number(match[1])
   const parsedMinute = Number(match[2])
@@ -59,9 +69,47 @@ function updatePanelPosition() {
   panelStyle.value = popoverStyle(rect, width, natural?.height || 250 * rem)
 }
 
+function applyParsed(parsed, { notify = false } = {}) {
+  hour.value = parsed.hour
+  minute.value = parsed.minute
+  const value = formatTime(parsed.hour, parsed.minute)
+  typed.value = value
+  typing.value = false
+  const changed = value !== props.modelValue
+  if (changed) emit('update:modelValue', value)
+  if (notify || changed) emit('change', value)
+}
+
+function onTypeFocus() {
+  typing.value = true
+  typed.value = displayTime.value
+}
+
+function onTypeInput(event) {
+  typed.value = event.target.value
+  const parsed = parseTime(typed.value)
+  if (!parsed) return
+  hour.value = parsed.hour
+  minute.value = parsed.minute
+}
+
+function commitTyped() {
+  const parsed = parseTime(typed.value)
+  if (!parsed) {
+    typed.value = displayTime.value
+    typing.value = false
+    return
+  }
+  applyParsed(parsed)
+}
+
 async function openPanel() {
   if (props.disabled || open.value) return
-  syncDraft()
+  const parsed = parseTime(typing.value ? typed.value : props.modelValue)
+  if (parsed) {
+    hour.value = parsed.hour
+    minute.value = parsed.minute
+  } else syncDraft()
   updatePanelPosition()
   open.value = true
   await nextTick()
@@ -78,9 +126,7 @@ function togglePanel() {
 }
 
 function commit() {
-  const value = displayTime.value
-  if (value !== props.modelValue) emit('update:modelValue', value)
-  emit('change', value)
+  applyParsed({ hour: hour.value, minute: minute.value }, { notify: true })
   popover.close(true)
 }
 
@@ -111,7 +157,9 @@ watch(
 watch(
   () => props.modelValue,
   () => {
-    if (!open.value) syncDraft()
+    if (open.value || typing.value) return
+    syncDraft()
+    typed.value = displayTime.value
   },
   { immediate: true }
 )
@@ -129,22 +177,37 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="wrapperRef" class="time-picker" :style="wrapperStyle">
-    <button
-      type="button"
-      class="time-picker__trigger"
-      :class="{ 'is-open': open }"
-      :disabled="disabled"
-      :aria-label="ariaLabel"
-      :aria-expanded="open"
-      aria-haspopup="dialog"
-      @click="togglePanel"
-    >
-      <span>{{ modelValue }}</span>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r="5.5" />
-        <path d="M8 4.7V8l2.3 1.4" />
-      </svg>
-    </button>
+    <div class="time-picker__control" :class="{ 'is-open': open, 'is-disabled': disabled }">
+      <input
+        class="time-picker__input"
+        :value="typing ? typed : displayTime"
+        :disabled="disabled"
+        inputmode="numeric"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="HH:mm"
+        :aria-label="ariaLabel"
+        @focus="onTypeFocus"
+        @input="onTypeInput"
+        @blur="commitTyped"
+        @keydown.enter.prevent="commitTyped"
+      />
+      <button
+        type="button"
+        class="time-picker__trigger"
+        :disabled="disabled"
+        aria-label="滚动选择时间"
+        :aria-expanded="open"
+        aria-haspopup="dialog"
+        @pointerdown.prevent
+        @click="togglePanel"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="5.5" />
+          <path d="M8 4.7V8l2.3 1.4" />
+        </svg>
+      </button>
+    </div>
 
     <Teleport to="body">
       <Transition
@@ -209,36 +272,58 @@ onBeforeUnmount(() => {
   position: relative;
   display: inline-block;
 }
-.time-picker__trigger {
+.time-picker__control {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   box-sizing: border-box;
   width: 100%;
   min-height: 32rem;
-  padding: 0 9rem 0 11rem;
+  padding: 0 4rem 0 11rem;
   border: 1px solid var(--ui-border-control);
   border-radius: 7rem;
   background: var(--ui-surface-control);
   color: var(--text-color);
-  font: inherit;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  outline: none;
   transition:
     border-color var(--motion-fast) ease,
-    background-color var(--motion-control) var(--ease-standard),
-    box-shadow var(--motion-control) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
+    background-color var(--motion-control) var(--ease-standard);
 }
-.time-picker__trigger:hover:not(:disabled) {
+.time-picker__control:hover:not(.is-disabled),
+.time-picker__control:focus-within,
+.time-picker__control.is-open {
   border-color: var(--ui-border-hover);
 }
-.time-picker__trigger.is-open {
-  border-color: var(--ui-border-hover);
+.time-picker__control.is-disabled {
+  opacity: 0.4;
+}
+.time-picker__input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.time-picker__input:disabled {
+  cursor: default;
+}
+.time-picker__trigger {
+  display: inline-flex;
+  width: 24rem;
+  height: 24rem;
+  flex: 0 0 24rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 .time-picker__trigger:disabled {
-  opacity: 0.4;
   cursor: default;
 }
 .time-picker__trigger svg {

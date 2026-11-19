@@ -4,14 +4,13 @@ import { DEFAULT_SETTINGS_CATEGORY, type SettingsCategory } from "./categories";
 import { GeneralSettingsPage } from "./GeneralSettingsPage";
 import { AgentSettingsPage } from "./AgentSettingsPage";
 import { AgentConnectSettingsPage } from "./AgentConnectSettingsPage";
-import { ClipboardSettingsPage } from "./ClipboardSettingsPage";
-import { LayoutEditor } from "./LayoutEditor";
+import { VaultPanel } from "../../features/vault/VaultPanel";
 import { MusicSettingsPage } from "./MusicSettingsPage";
 import { MessagesSettingsPage } from "./MessagesSettingsPage";
 import { PluginsSettingsPage } from "./PluginsSettingsPage";
 import { PLUGINS_ENABLED } from "../../features/plugins";
 import { SETTINGS_FOCUS_STORAGE_KEY, takeFocusRequest, requestPanelPreview } from "./storage";
-import { TodosSettingsPage } from "./TodosSettingsPage";
+import { LayoutEditor } from "./LayoutEditor";
 import { TranslationSettingsPage } from "./TranslationSettingsPage";
 import { AboutSettingsPage } from "./AboutSettingsPage";
 import { DEFAULT_SETTINGS, withAppearanceFrom } from "../../features/appearance/settings";
@@ -20,7 +19,7 @@ import { withColorBackup } from "../../features/appearance/storage";
 import type { IslandSettings } from "../../features/appearance/types";
 import type { QQNotificationsController } from "../../features/messages/qq-notifications/QQNotifications";
 import type { WeChatRemindersController } from "../../features/messages/wechat/WeChatReminders";
-import { useSaveDirectorySetting } from "../../features/todos/useSaveDirectorySetting";
+import type { WeComRemindersController } from "../../features/messages/wecom/useWeComReminders";
 import { useLocale } from "../../i18n";
 
 /**
@@ -32,6 +31,7 @@ export function SettingsPanel({
   onSettingsChange,
   qqNotifications,
   wechatReminders,
+  wecomReminders,
   detached,
   onDetachedChange,
   onContentHeight,
@@ -40,6 +40,7 @@ export function SettingsPanel({
   onSettingsChange: (settings: IslandSettings | ((current: IslandSettings) => IslandSettings)) => void;
   qqNotifications: QQNotificationsController;
   wechatReminders: WeChatRemindersController;
+  wecomReminders: WeComRemindersController;
   /** Whether settings open in their own window (General → Separate settings window). */
   detached: boolean;
   onDetachedChange: (detached: boolean) => void;
@@ -48,24 +49,16 @@ export function SettingsPanel({
 }) {
   const { locale, setLocale } = useLocale();
   const setSettings = onSettingsChange;
-  const saveDirectory = useSaveDirectorySetting();
   const [category, setCategory] = useState<SettingsCategory>(DEFAULT_SETTINGS_CATEGORY);
-  const highlightSaveDirectory = saveDirectory.highlight;
 
-  // The island asks for the save path when an export has nowhere to go; it lives on the todos page.
-  const focusSavePath = useCallback(() => {
-    setCategory("todos");
-    highlightSaveDirectory();
-  }, [highlightSaveDirectory]);
-  // A part of the island (or the translation window) asked for one of the pages.
   const focusRequestedSection = useCallback(() => {
     const section = takeFocusRequest();
-    if (section === "savePath") focusSavePath();
     if (section === "translation") setCategory("translation");
     if (section === "music") setCategory("music");
     if (section === "mail") setCategory("messages");
     if (section === "updates") setCategory("about");
-  }, [focusSavePath]);
+    if (section === "vault") setCategory("vault");
+  }, []);
 
   useEffect(() => {
     focusRequestedSection();
@@ -102,18 +95,11 @@ export function SettingsPanel({
       {category === "appearance" && (
         <AppearanceSettingsPage settings={settings} onSettingsChange={setSettings} />
       )}
-      {category === "todos" && (
-        <TodosSettingsPage
-          settings={settings}
-          saveDirectory={saveDirectory}
-          onSettingsChange={setSettings}
-        />
-      )}
+      {category === "vault" && <VaultPanel surface="settings" />}
       {category === "messages" && (
-        <MessagesSettingsPage settings={settings} qqNotifications={qqNotifications} wechatReminders={wechatReminders} onSettingsChange={setSettings} />
+        <MessagesSettingsPage settings={settings} qqNotifications={qqNotifications} wechatReminders={wechatReminders} wecomReminders={wecomReminders} onSettingsChange={setSettings} />
       )}
       {category === "translation" && <TranslationSettingsPage settings={settings} onSettingsChange={setSettings} />}
-      {category === "clipboard" && <ClipboardSettingsPage settings={settings} onSettingsChange={setSettings} />}
       {category === "music" && <MusicSettingsPage settings={settings} onSettingsChange={setSettings} />}
       {category === "agents" && <AgentSettingsPage settings={settings} onSettingsChange={setSettings} onOpenConnect={() => setCategory("agentConnect")} />}
       {category === "agentConnect" && <AgentConnectSettingsPage />}

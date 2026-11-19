@@ -21,7 +21,7 @@ export function CollapsedIslandSection({
   onSettingsChange: (settings: IslandSettings) => void;
 }) {
   const text = useTranslation().settings.appearance.collapsedIsland;
-  const order = settings.collapsedPriority;
+  const order = settings.collapsedPriority.filter((item) => item !== "agent");
   const reorder = useCallback(
     (collapsedPriority: CollapsedItem[]) => onSettingsChange({ ...settings, collapsedPriority }),
     [onSettingsChange, settings],

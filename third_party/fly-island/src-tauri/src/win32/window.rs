@@ -18,8 +18,8 @@ use windows::{
                 FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG, GetClassNameW, GetCursorPos,
                 GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
                 GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SendMessageTimeoutW,
-                SetForegroundWindow, ShowWindow, GWL_EXSTYLE, GW_OWNER, SMTO_ABORTIFHUNG,
-                SMTO_BLOCK, SMTO_ERRORONEXIT, SW_RESTORE, WINDOWPLACEMENT, WM_NULL,
+                SetForegroundWindow, SetWindowPos, ShowWindow, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, SMTO_ABORTIFHUNG,
+                SMTO_BLOCK, SMTO_ERRORONEXIT, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, WINDOWPLACEMENT, WM_NULL,
                 WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
             },
         },
@@ -303,6 +303,15 @@ pub(crate) fn force_foreground(window: HWND) -> bool {
         }
     }
     foreground_window() == window
+}
+
+/// Puts `window` above ordinary windows, including one that was already topmost.
+pub(crate) fn raise_topmost(window: HWND) {
+    // SAFETY: SetWindowPos takes the HWND by value. The flags keep the current
+    // position and size, so no rectangle or pointer is read.
+    unsafe {
+        let _ = SetWindowPos(window, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    }
 }
 
 /// Flashes `window`'s taskbar button until it is activated, when it cannot be brought to the front.

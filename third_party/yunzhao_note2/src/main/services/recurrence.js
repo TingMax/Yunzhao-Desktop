@@ -110,7 +110,7 @@ export function runRecurringTemplates({ now = Date.now() } = {}) {
           reminderChannels: template.reminder_channels,
           tagIds
         })
-        if (template.reminder_channels) enqueueReminder(note.id, scheduledAt, timestamp)
+        if (template.reminder_channels & 7) enqueueReminder(note.id, scheduledAt, timestamp)
         const nextRunAt = calculateNextRunInRange(rule, scheduledAt, template.schedule_anchor_at, {
           startAt: template.start_at ?? template.schedule_anchor_at,
           endAt: template.end_at

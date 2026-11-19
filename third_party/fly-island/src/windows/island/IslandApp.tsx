@@ -1,4 +1,6 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 // First: the message panels it loads bring CSS that must come before the page panels' and the shell's.
 import { useIslandNotices } from "./useIslandNotices";
 // The page panels; before IslandShell so their CSS keeps its place in the cascade.
@@ -7,10 +9,12 @@ import { useTranslation } from "../../i18n";
 import { useSettingsPresentation } from "../settings/useSettingsPresentation";
 import { useSettingsNavigation } from "./useSettingsNavigation";
 import { useIslandSettings } from "../../features/appearance/useIslandSettings";
+import { loadAppearancePresets } from "../../features/appearance/appearancePresets";
+import { loadSettings as loadTranslationSettings } from "../../features/translation/storage";
+import { getUpdateState } from "../../features/updater/updaterController";
+import { readLaunchAtStartup } from "../settings/api";
 import { useDocumentTheme } from "../../features/appearance/useDocumentTheme";
 import { resolveSchemeColors } from "../../features/appearance/theme";
-import { useClipboardHistory } from "../../features/clipboard/useClipboardHistory";
-// Imported after the page panels so its CSS keeps its place in the cascade.
 import { IslandShell } from "./IslandShell";
 import { useMediaState } from "../../features/media/useMediaState";
 import type { TodoItem } from "../../features/todos/types";
@@ -28,9 +32,9 @@ import { AgentArrangeButton } from "../../features/agent-status/AgentArrangeButt
 import { useAgentIndicator } from "./useAgentIndicator";
 import { usageLineCount } from "../../features/agent-status/usage";
 import { useIslandNavigation } from "./useIslandNavigation";
+import { useVaultSession } from "../../features/vault/useVaultSession";
 import { useIslandTodos } from "./useIslandTodos";
 import { useIslandTucking } from "./useIslandTucking";
-import { useIslandShelf } from "./useIslandShelf";
 import { useIslandHover } from "./useIslandHover";
 import { useIdleUpdateInstall } from "../../features/updater/useIdleUpdateInstall";
 import { useIslandTranslation } from "./useIslandTranslation";
@@ -52,8 +56,13 @@ const NO_TODOS: TodoItem[] = [];
 export function IslandApp() {
   const t = useTranslation();
   const navigation = useIslandNavigation();
-  const { mode, isTucked, page, setPage, collapseIsland, tuckIsland, revealIsland, minimizeToEdge, openIslandPage, toggleClipboardHistory } = navigation;
+  const { mode, isTucked, page, setPage, collapseIsland, tuckIsland, revealIsland, minimizeToEdge, openIslandPage } = navigation;
+  useVaultSession();
   const [settings, setSettings] = useIslandSettings();
+  const [launchAtStartup, setLaunchAtStartup] = useState(false);
+  useEffect(() => {
+    void readLaunchAtStartup().then(setLaunchAtStartup).catch(() => {});
+  }, []);
   const detachedSettings = useSettingsPresentation();
   const { openSettings, changePresentation } = useSettingsNavigation(openIslandPage, setPage);
   const { settingsContentHeight, reportSettingsHeight } = useSettingsPageHeight();
@@ -61,28 +70,68 @@ export function IslandApp() {
   const game = useGameMode(settings, { mode, isTucked, collapseIsland, tuckIsland, revealIsland });
   const notices = useIslandNotices(settings, { mode, isTucked, quiet: game.quiet });
   useIdleUpdateInstall(mode === "collapsed", game.quiet);
-  const { qqNotifications, wechatReminders, qqMail, hasMessagePreview } = notices;
+  const { qqNotifications, wechatReminders, wecomReminders, qqMail, hasMessagePreview, hostPreview } = notices;
+  useEffect(() => {
+    const onExtra = (event: Event) => {
+      const patch = (event as CustomEvent<Record<string, unknown>>).detail ?? {};
+      if (typeof patch.qqEnabled === "boolean") void qqNotifications.setEnabled(patch.qqEnabled);
+      if (typeof patch.wechatEnabled === "boolean") void wechatReminders.setEnabled(patch.wechatEnabled);
+      if (typeof patch.wechatPreview === "boolean") void wechatReminders.setPreviewEnabled(patch.wechatPreview);
+      if (typeof patch.wechatHideTaskbar === "boolean") void wechatReminders.setHideMinimizedTaskbar(patch.wechatHideTaskbar);
+      if (typeof patch.wecomEnabled === "boolean") void wecomReminders.setEnabled(patch.wecomEnabled);
+      if (typeof patch.launchAtStartup === "boolean") setLaunchAtStartup(patch.launchAtStartup);
+    };
+    window.addEventListener("yunzhao-host-extra", onExtra);
+    return () => window.removeEventListener("yunzhao-host-extra", onExtra);
+  }, [qqNotifications, wechatReminders, wecomReminders]);
+  useEffect(() => {
+    if (getCurrentWindow().label !== "main") return;
+    const translation = loadTranslationSettings();
+    void invoke("publish_host_island_settings", {
+      settings: {
+        ...settings,
+        launchAtStartup,
+        locale: localStorage.getItem("focusd-island-locale") ?? "zh-CN",
+        detachedSettings: localStorage.getItem("focusd-island-detached-settings") !== "false",
+        appearancePresets: loadAppearancePresets(),
+        translationProvider: translation.provider,
+        translationModel: translation.models[translation.provider] ?? "",
+        translationBaseUrl: translation.customBaseUrl,
+        translationShortcut: translation.shortcut,
+        autoUpdate: getUpdateState().autoUpdate,
+        qqEnabled: qqNotifications.snapshot.enabled,
+        wechatEnabled: wechatReminders.snapshot.enabled,
+        wechatPreview: wechatReminders.snapshot.previewEnabled,
+        wechatHideTaskbar: wechatReminders.snapshot.hideMinimizedTaskbar,
+        wecomEnabled: wecomReminders.snapshot.enabled,
+      },
+    }).catch(() => {});
+  }, [settings, launchAtStartup, qqNotifications.snapshot, wechatReminders.snapshot, wecomReminders.snapshot]);
   // The output level shows only on the collapsed island (its waveform).
   const media = useMediaState(settings.musicEnabled, mode === "collapsed");
   const { agentStatus, agentSessions, listedAgentSessions, activeAgentSessionCount, unseenAgentSessions, agentRemoval, agentSession, agentUsages, alertUsages } =
     useIslandAgents(settings);
-  const quotaAlert = useQuotaAlert(alertUsages, settings.agentStatusEnabled ? settings.agentQuotaAlertPercent : 0, {
+  const quotaAlert = useQuotaAlert(alertUsages, 0, {
     quiet: game.quiet,
     canPopUp: !game.quiet && mode === "collapsed" && !isTucked,
   });
-  const { todos, activeTodoId, activeTodoIds, timer, timers, todoPageMode, todoListHeight, notebookProps } = useIslandTodos({ settings, navigation, quiet: game.quiet });
+  const { todos, activeTodoId, timer, todoPageMode, todoListHeight } = useIslandTodos({
+    settings: { ...settings, todoEnabled: false },
+    navigation,
+    quiet: game.quiet,
+  });
 
   const songPlaying = settings.musicEnabled && media.mediaState.playbackStatus === "playing" && Boolean(media.mediaState.title);
   const cover = settings.collapsedShowCover && songPlaying ? media.mediaState.thumbnail : null;
-  const { collapsedTaskTitle, collapsedTodoCount, collapsedItem, collapsedIslandWidth, todoRotation, collapsedTimer } =
+  const { collapsedTaskTitle, collapsedTodoCount, collapsedItem, collapsedIslandWidth, todoRotation } =
     useCollapsedTodo(
-      settings.todoEnabled ? todos : NO_TODOS,
-      settings.todoEnabled ? activeTodoId : null,
-      settings.todoEnabled ? settings : { ...settings, showIdleTodoCount: false },
+      NO_TODOS,
+      null,
+      { ...settings, todoEnabled: false, showIdleTodoCount: false },
       mode !== "collapsed" || isTucked || !settings.showCollapsedText || hasMessagePreview,
-      agentSession?.title ?? null,
-      { lyricsPlaying: songPlaying, coverWanted: Boolean(cover), timer: settings.todoEnabled ? timer : null,
-        activeIds: settings.todoEnabled ? activeTodoIds : [], timers: settings.todoEnabled ? timers : [] },
+      null,
+      { lyricsPlaying: songPlaying, coverWanted: Boolean(cover), timer: null,
+        activeIds: [], timers: [] },
     );
   // The cover goes with the lyric line: when something ranked above lyrics is shown, it goes too.
   const collapsedCover = collapsedItem === "lyrics" ? cover : null;
@@ -97,14 +146,11 @@ export function IslandApp() {
 
   const { messageSource, setMessageSource, openMessages } = useMessageView(qqMail.closeReader, openIslandPage);
 
-  const clipboard = useClipboardHistory(toggleClipboardHistory);
-  const { clipboardHistory } = clipboard;
-
   const { features, openEnabledPage } = useIslandFeatures({
     settings,
-    clipboardEnabled: clipboardHistory.settings.enabled,
     qqEnabled: qqNotifications.snapshot.enabled,
     wechatEnabled: wechatReminders.snapshot.enabled,
+    wecomEnabled: wecomReminders.snapshot.enabled,
     qqMail,
     page,
     messageSource,
@@ -122,7 +168,6 @@ export function IslandApp() {
     openIslandPage,
     collapseIsland,
   });
-  const { fileShelf, isShelfDropping } = useIslandShelf(settings, navigation);
   const pickerOpen = useIslandPickerOpen();
   const expandedIslandHeight = Math.max(pickerOpen && page === "todo" ? TODO_DATE_PICKER_EXPANDED_ISLAND_HEIGHT : 0, getExpandedIslandHeight({
     page,
@@ -140,7 +185,7 @@ export function IslandApp() {
     agentUsageLines: settings.agentShowUsage ? usageLineCount(agentUsages) : 0,
     agentAlertRowHeight: agentCardHeight,
     settingsContentHeight,
-    shelfItems: fileShelf.items.length,
+    shelfItems: 0,
   }));
   const scheme = useDocumentTheme(settings);
   const colors = useMemo(() => resolveSchemeColors(settings, scheme), [settings, scheme]);
@@ -175,12 +220,7 @@ export function IslandApp() {
     openEnabledPage,
   });
 
-  useIslandKeyboard(
-    clipboardHistory.settings.enabled && clipboardHistory.settings.shortcutEnabled,
-    clipboardHistory.settings.shortcut,
-    toggleClipboardHistory,
-    collapseIsland,
-  );
+  useIslandKeyboard(false, "", () => {}, collapseIsland);
 
   const { openTranslator } = useIslandTranslation(
     settings.translationEnabled,
@@ -197,7 +237,9 @@ export function IslandApp() {
         qqMail={qqMail}
         qqNotifications={qqNotifications}
         wechatReminders={wechatReminders}
+        wecomReminders={wecomReminders}
         onOpenMessages={openMessages}
+        hostPreview={hostPreview}
         mode={mode}
         page={page}
         expandedHeight={expandedIslandHeight}
@@ -212,7 +254,7 @@ export function IslandApp() {
         showCollapsedText={settings.showCollapsedText}
         collapsedTaskTitle={collapsedTaskTitle}
         todoRotation={todoRotation}
-        todoTimer={settings.todoEnabled ? collapsedTimer : null}
+        todoTimer={null}
         collapsedTodoCount={collapsedTodoCount}
         collapsedItem={collapsedItem}
         collapsedLayout={settings.collapsedLayout}
@@ -227,7 +269,7 @@ export function IslandApp() {
         agentVisualState={agentVisualState}
         agentStatusLabel={agentStatusLabel}
         features={features}
-        shelfCount={settings.shelfEnabled && settings.shelfShowCount ? fileShelf.items.length : null}
+        shelfCount={null}
         quotaAlert={quotaAlert}
         onOpenPage={openEnabledPage}
         onWindowDragStart={startIslandDrag}
@@ -256,19 +298,16 @@ export function IslandApp() {
           qqMail={qqMail}
           qqNotifications={qqNotifications}
           wechatReminders={wechatReminders}
+          wecomReminders={wecomReminders}
           messageSource={messageSource}
           openMessages={openMessages}
           media={media}
-          clipboard={clipboard}
           agentSessions={listedAgentSessions}
           unseenAgentSessions={unseenAgentSessions}
           agentRemoval={agentRemoval}
           alertedSession={alertedSession}
           agentApprovals={agentApprovals}
           agentUsages={agentUsages}
-          fileShelf={fileShelf}
-          isShelfDropping={isShelfDropping}
-          notebookProps={notebookProps}
         />
       </IslandShell>
     </main>

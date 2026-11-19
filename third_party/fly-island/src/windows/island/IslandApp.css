@@ -75,8 +75,8 @@
 }
 
 .icon-button.island-reset-button--available {
-  color: color-mix(in srgb, #0071b8 calc(var(--is-light) * 100%), #c8efff);
-  background: rgba(116, 214, 255, 0.14);
+  color: #0a84ff;
+  background: rgba(10, 132, 255, 0.14);
 }
 
 .icon-button:hover {

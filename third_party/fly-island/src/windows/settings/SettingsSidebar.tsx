@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ClipboardList, Info, Languages, ListTodo, MessageCircle, MessagesSquare, Music, Palette, Plug, Puzzle, SlidersHorizontal, type LucideIcon } from "lucide-react";
+import { KeyRound, Info, Languages, MessageCircle, MessagesSquare, Music, Palette, Plug, Puzzle, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import { useCommunityInvite } from "../../features/updater/useCommunityInvite";
 import { useTranslation } from "../../i18n";
 import { SETTINGS_GROUPS, type SettingsCategory } from "./categories";
@@ -9,9 +9,8 @@ const CATEGORY_ICONS: Record<SettingsCategory, LucideIcon> = {
   general: SlidersHorizontal,
   appearance: Palette,
   messages: MessageCircle,
-  todos: ListTodo,
+  vault: KeyRound,
   music: Music,
-  clipboard: ClipboardList,
   translation: Languages,
   agents: MessagesSquare,
   agentConnect: Plug,

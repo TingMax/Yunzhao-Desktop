@@ -41,6 +41,29 @@ const props = defineProps({
 const isWeekView = computed(() => props.viewMode === VIEW_MODES.WEEK)
 const atriumShell = ref(false)
 const atriumLocked = ref(false)
+const peekEdge = ref('')
+const peekBox = ref({ thick: 17, long: 151, radius: 6 })
+const peekStyle = computed(() => {
+  if (!peekEdge.value) return null
+  const thick = `${peekBox.value.thick}px`
+  const radius = `${peekBox.value.radius}px`
+  if (peekEdge.value === 'left') {
+    return { inset: '0 0 0 auto', width: thick, borderRadius: `0 ${radius} ${radius} 0` }
+  }
+  if (peekEdge.value === 'right') {
+    return { inset: '0 auto 0 0', width: thick, borderRadius: `${radius} 0 0 ${radius}` }
+  }
+  if (peekEdge.value === 'bottom') {
+    return { inset: '0 0 auto 0', height: thick, borderRadius: `${radius} ${radius} 0 0` }
+  }
+  return { inset: 'auto 0 0 0', height: thick, borderRadius: `0 0 ${radius} ${radius}` }
+})
+function expandPeek() {
+  void window.api?.atriumCommand?.({ cmd: 'expand' })
+}
+function hoverPeek(on) {
+  void window.api?.atriumCommand?.({ cmd: 'peek-hover', on })
+}
 const daySurface = new URLSearchParams(window.location.search).get('surface') === 'day'
 const dayKey = new URLSearchParams(window.location.search).get('date') || ''
 onMounted(() => {
@@ -56,6 +79,16 @@ onMounted(() => {
   })
   window.api?.onAtriumState?.((state) => {
     atriumLocked.value = state?.lock === true
+  })
+  window.api?.onAtriumPeek?.((payload) => {
+    peekEdge.value = payload?.edge || ''
+    if (payload?.thick) {
+      peekBox.value = {
+        thick: payload.thick,
+        long: payload.long,
+        radius: payload.radius
+      }
+    }
   })
 })
 const viewLabel = computed(() => (isWeekView.value ? '周视图' : '月视图'))
@@ -218,7 +251,7 @@ function releaseSettingsBlur() {
   <div v-if="daySurface" class="month-root app-bg day-surface">
     <MonthWorkspace day-surface :day-key="dayKey" @ready="onCalendarWorkspaceReady" />
   </div>
-  <div v-else class="month-root app-bg" :class="{ 'is-week-view': isWeekView, 'atrium-shell': atriumShell }">
+  <div v-else class="month-root app-bg" :class="{ 'is-week-view': isWeekView, 'atrium-shell': atriumShell, 'is-peek': peekEdge }">
     <Transition name="month-wallpaper" v-bind="wallpaper.transitionHooks()">
       <div v-if="wallpaperVisible && !atriumShell" :key="wallpaperRenderKey" class="month-wallpaper">
         <div
@@ -230,8 +263,22 @@ function releaseSettingsBlur() {
         />
       </div>
     </Transition>
-    <ResizeHandles :locked="atriumShell ? atriumLocked : locked" :mode="presentationMode.displayMode.value" />
+    <button
+      v-if="peekEdge"
+      type="button"
+      class="calendar-peek"
+      :class="`is-${peekEdge}`"
+      :style="peekStyle"
+      title="展开"
+      @click="expandPeek"
+      @pointerenter="hoverPeek(true)"
+      @pointerleave="hoverPeek(false)"
+    >
+      <span />
+    </button>
+    <ResizeHandles v-show="!peekEdge" :locked="atriumShell ? atriumLocked : locked" :mode="presentationMode.displayMode.value" />
     <WindowPresentation
+      v-show="!peekEdge"
       :mode="presentationMode.mode.value"
       :operation="presentationMode.operation.value"
       :locked="locked"
@@ -410,6 +457,42 @@ function releaseSettingsBlur() {
   overflow: hidden;
   background: #f6f6f8;
 }
+.month-root.atrium-shell.is-peek {
+  background: transparent;
+}
+.calendar-peek {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-local-top);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0 0 6px 6px;
+  background: #f6f6f8;
+  cursor: pointer;
+}
+.calendar-peek.is-left {
+  border-radius: 0 6px 6px 0;
+}
+.calendar-peek.is-right {
+  border-radius: 6px 0 0 6px;
+}
+.calendar-peek:hover {
+  background: color-mix(in srgb, #f6f6f8 92%, #1d1d1f 8%);
+}
+.calendar-peek span {
+  width: 14px;
+  height: 2px;
+  border-radius: 999px;
+  background: #1d1d1f;
+  opacity: 0.28;
+}
+.calendar-peek.is-left span,
+.calendar-peek.is-right span {
+  width: 2px;
+  height: 14px;
+}
 
 .month-root {
   position: relative;
@@ -533,6 +616,27 @@ html[data-atrium-dock] .month-root.atrium-shell .month-scene {
 }
 .month-root.atrium-shell .month-grid__weeks {
   grid-template-rows: repeat(var(--calendar-rows), minmax(0, 1fr));
+}
+.month-root.atrium-shell .month-toolbar {
+  min-height: 36rem;
+  grid-template-areas: none;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: auto;
+  row-gap: 0;
+}
+.month-root.atrium-shell .month-toolbar__leading,
+.month-root.atrium-shell .month-toolbar__navigation,
+.month-root.atrium-shell .month-toolbar__trailing {
+  grid-area: auto;
+}
+.month-root.atrium-shell .month-week__events {
+  top: 30rem;
+  bottom: 16rem;
+}
+.month-root.atrium-shell .month-event-bar {
+  height: 16rem;
+  font-size: calc(var(--fs-month-event) * 0.85);
+  transform: translateY(calc(var(--event-lane) * 17rem));
 }
 .month-root.atrium-shell .month-day-cell,
 .month-root.atrium-shell .month-week {

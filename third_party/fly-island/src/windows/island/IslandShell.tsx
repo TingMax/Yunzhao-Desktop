@@ -6,10 +6,11 @@ import type { QuotaAlert } from "../../features/agent-status/quotaAlerts";
 import type { AgentVisualState } from "../../features/agent-status/status";
 import type { CollapsedItem, CollapsedSlot, Material, PageButtonStyle, PageDot, TuckStyle } from "../../features/appearance/types";
 import type { MediaState } from "../../features/media/api";
-import { latestMessagePreview, type MessageSource } from "../../features/messages/messagePreview";
+import { latestMessagePreview, type MessagePreview, type MessageSource } from "../../features/messages/messagePreview";
 import type { MailController } from "../../features/messages/mail/MailPanel";
 import type { QQNotificationsController } from "../../features/messages/qq-notifications/QQNotifications";
 import type { WeChatRemindersController } from "../../features/messages/wechat/WeChatReminders";
+import type { WeComRemindersController } from "../../features/messages/wecom/useWeComReminders";
 import { useTranslation } from "../../i18n";
 import type { IslandFeatures } from "./features";
 import { IslandCollapsedBar } from "./IslandCollapsedBar";
@@ -32,7 +33,9 @@ type IslandShellProps = {
   qqMail: MailController;
   qqNotifications: QQNotificationsController;
   wechatReminders: WeChatRemindersController;
+  wecomReminders: WeComRemindersController;
   onOpenMessages: (source: MessageSource) => void;
+  hostPreview?: MessagePreview | null;
   mode: IslandMode;
   page: IslandPage;
   /** The open page's height (unscaled); a change resizes the shape around the panel. */
@@ -97,7 +100,9 @@ export function IslandShell({
   qqMail,
   qqNotifications,
   wechatReminders,
+  wecomReminders,
   onOpenMessages,
+  hostPreview = null,
   mode,
   page,
   expandedHeight,
@@ -155,12 +160,15 @@ export function IslandShell({
   const qqPreview = qqNotifications.preview;
   const qqNotificationCount = qqNotifications.snapshot.items.length;
   const wechatPending = wechatReminders.snapshot.pending;
+  const wecomPending = wecomReminders.snapshot.pending;
   const [latestPreviewAt, setLatestPreviewAt] = useState(0);
   const pluginPreview = usePluginPreview(mode === "collapsed");
   const preview = latestMessagePreview([
     qqPreview ? { ...qqPreview, source: "qq", receivedAt: qqNotifications.previewReceivedAt ?? 0 } : null,
     wechatReminders.preview,
+    wecomReminders.preview,
     pluginPreview,
+    hostPreview,
     qqMail.preview ? { source: "qqMail", title: qqMail.preview.sender, body: qqMail.preview.subject, otpCode: qqMail.preview.otpCode, receivedAt: qqMail.previewReceivedAt ?? 0 } : null,
   ], latestPreviewAt);
   if (preview && preview.receivedAt > latestPreviewAt) setLatestPreviewAt(preview.receivedAt);
@@ -220,6 +228,7 @@ export function IslandShell({
           qqMail={qqMail}
           qqNotifications={qqNotifications}
           wechatReminders={wechatReminders}
+          wecomReminders={wecomReminders}
           preview={preview}
           page={page}
           isExpanded={isExpanded}
@@ -269,6 +278,7 @@ export function IslandShell({
             agentStatusLabel={agentStatusLabel}
             qqNotificationCount={qqNotificationCount}
             wechatPending={wechatPending}
+            wecomPending={wecomPending}
             onPageChange={onPageChange}
             onCollapse={onCollapse}
             onOpenSettings={onOpenSettings}

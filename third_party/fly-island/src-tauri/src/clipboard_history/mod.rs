@@ -1,5 +1,7 @@
 //! Clipboard history: commands, item types and the background capture service.
 
+#![allow(dead_code)]
+
 mod hotkey;
 mod image_access;
 mod selection;

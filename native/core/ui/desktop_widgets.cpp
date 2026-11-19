@@ -495,8 +495,23 @@ void DesktopWidgets::SetCalendarType(float datePx, float tablePx)
     world_.dateSize = datePx;
     world_.tableSize = tablePx;
     for (auto& w : widgets_)
-        if (w->kind == WidgetKind::Calendar && w->surface)
+        if (w->kind == WidgetKind::Calendar && w->surface) {
             w->surface->Invalidate();
+            PublishYunzhaoState(*w);
+        }
+}
+
+void DesktopWidgets::SetTimetableBadge(float scale)
+{
+    scale = std::clamp(scale, 0.4f, 1.6f);
+    if (scale == world_.badgeScale)
+        return;
+    world_.badgeScale = scale;
+    for (auto& w : widgets_)
+        if (w->kind == WidgetKind::Calendar && w->surface) {
+            w->surface->Invalidate();
+            PublishYunzhaoState(*w);
+        }
 }
 
 void DesktopWidgets::SetMaterial(WidgetMaterial material)
@@ -773,11 +788,10 @@ RECT DesktopWidgets::ClampVirtual(RECT rect) const
     if (span.left >= span.right || span.top >= span.bottom)
         return rect;
     RECT hit{};
-    // A display that is off is missing from this span. Leave the widget on its
-    // saved coordinates so it returns with that screen, instead of parking it
-    // on whichever display is still on.
+    // A disconnected display drops out of this span. Bring the widget onto the
+    // nearest display that is still connected instead of leaving it off-screen.
     if (!IntersectRect(&hit, &rect, &span))
-        return rect;
+        return ClampMonitor(rect, false);
     return ClampToWork(rect, span, false);
 }
 
@@ -797,7 +811,7 @@ RECT DesktopWidgets::SnapToMonitor(RECT rect, bool allowShrink) const
         }
     }
     if (!best)
-        return rect;
+        return ClampMonitor(rect, allowShrink);
     return ClampToWork(rect, best->work, allowShrink);
 }
 
@@ -1554,7 +1568,63 @@ void StartHostedCalendar()
     ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
 }
 
+void StopHostedCalendar()
+{
+    wchar_t base[MAX_PATH]{};
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH))
+        return;
+    std::wstring path = std::wstring(base) + L"\\Yunzhao\\yunzhao-hwnd.txt";
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    unsigned long long value = 0;
+    if (file != INVALID_HANDLE_VALUE) {
+        char buf[64]{};
+        DWORD got = 0;
+        ReadFile(file, buf, sizeof(buf) - 1, &got, nullptr);
+        CloseHandle(file);
+        value = _strtoui64(buf, nullptr, 10);
+    }
+    HWND note = reinterpret_cast<HWND>(static_cast<uintptr_t>(value));
+    DWORD pid = 0;
+    if (value && IsWindow(note))
+        GetWindowThreadProcessId(note, &pid);
+    if (pid && pid != GetCurrentProcessId()) {
+        HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+        if (process) {
+            TerminateProcess(process, 0);
+            WaitForSingleObject(process, 2000);
+            CloseHandle(process);
+        }
+    }
+    DeleteFileW(path.c_str());
+}
+
 } // namespace
+
+bool DesktopWidgets::CalendarOpen() const
+{
+    return HostedCalendarAlive();
+}
+
+void DesktopWidgets::SetCalendarOpen(bool open)
+{
+    if (!open) {
+        StopHostedCalendar();
+        std::vector<Widget*> calendars;
+        for (auto& w : widgets_)
+            if (w->kind == WidgetKind::Calendar)
+                calendars.push_back(w.get());
+        for (Widget* calendar : calendars)
+            RemoveNow(*calendar);
+        return;
+    }
+    bool has = false;
+    for (const auto& w : widgets_)
+        if (w->kind == WidgetKind::Calendar)
+            has = true;
+    if (!has)
+        Add(WidgetKind::Calendar, WidgetSize::Medium);
+    StartHostedCalendar();
+}
 
 int DesktopWidgets::Toggle(WidgetKind kind, WidgetSize size)
 {
@@ -2422,8 +2492,9 @@ void DesktopWidgets::PublishYunzhaoState(const Widget& w) const
     CalendarFocus(w.content, now, y, m, d);
     const char* layer = w.content.windowLayer == 2 ? "top" : w.content.windowLayer == 0 ? "bottom" : w.content.windowLayer == 1 ? "normal" : "";
     char buf[192];
-    sprintf_s(buf, "{\"board\":%d,\"lock\":%s,\"layer\":\"%s\",\"ask\":%d,\"date\":\"%04d-%02d-%02d\"}",
-        w.content.calBoard == 2 ? 2 : 0, w.content.calLock ? "true" : "false", layer, w.noteAsk, y, m, d);
+    sprintf_s(buf, "{\"board\":%d,\"lock\":%s,\"layer\":\"%s\",\"ask\":%d,\"date\":\"%04d-%02d-%02d\",\"dateSize\":%.1f,\"tableSize\":%.1f,\"badgeScale\":%.3f}",
+        w.content.calBoard == 2 ? 2 : 0, w.content.calLock ? "true" : "false", layer, w.noteAsk, y, m, d,
+        world_.dateSize, world_.tableSize, world_.badgeScale);
     static std::string last;
     if (last != buf) {
         last = buf;
@@ -4228,6 +4299,12 @@ void DesktopWidgets::PaintShadow(Canvas& c, D2D1_RECT_F face)
 
 void DesktopWidgets::Paint(Widget& w, Canvas& c)
 {
+    // The hosted page is the only calendar and the only timetable. One monitor
+    // or two, one desktop or two, this widget must not draw a second copy.
+    if (w.kind == WidgetKind::Calendar) {
+        w.hits.clear();
+        return;
+    }
     RECT rect = w.surface->Rect();
     const float width = float(rect.right - rect.left) / c.scale, height = float(rect.bottom - rect.top) / c.scale;
     const auto bounds = D2D1::RectF(0, 0, width, height);

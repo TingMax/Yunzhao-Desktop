@@ -29,7 +29,7 @@
   --island-expanded-scale: var(--island-expanded-scale-target, 1);
   --glass-pointer-x: 50%;
   --glass-pointer-y: 18%;
-  --glass-page-accent: 116, 214, 255;
+  --glass-page-accent: 10, 132, 255;
   /*
    * Island corner radii, all scaled from the expanded bottom radius in the appearance
    * settings (stageStyle.ts) with the ratios of the 30 / 12 / 14 px design (collapsed 12, 2026-11-11).

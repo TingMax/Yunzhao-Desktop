@@ -6,6 +6,7 @@ import {
 } from '../../../shared/settings-receipt.js'
 
 const stores = new WeakMap()
+const fallbackApi = {}
 const definitions = new Map(SETTING_DEFINITIONS.map((definition) => [definition.id, definition]))
 const unsafeKeys = new Set(['__proto__', 'constructor', 'prototype'])
 // Form arrays/objects can be Vue proxies; the bridge payload itself is plain data.
@@ -494,10 +495,11 @@ export function createSettingsSnapshotStore(api) {
 
 /** The bridge API is stable for one preload/document; replacement documents get a new owner. */
 export function getSettingsSnapshotStore(api = window.api) {
-  let store = stores.get(api)
+  const key = api && typeof api === 'object' ? api : fallbackApi
+  let store = stores.get(key)
   if (!store) {
-    store = createSettingsSnapshotStore(api)
-    stores.set(api, store)
+    store = createSettingsSnapshotStore(key)
+    stores.set(key, store)
   }
   return store
 }

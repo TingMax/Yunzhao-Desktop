@@ -171,11 +171,14 @@ export function createSettingsApplicationStateStore(api) {
   })
 }
 
+const fallbackApplicationApi = {}
+
 export function getSettingsApplicationStateStore(api = window.api) {
-  let store = stores.get(api)
+  const key = api && typeof api === 'object' ? api : fallbackApplicationApi
+  let store = stores.get(key)
   if (!store) {
-    store = createSettingsApplicationStateStore(api)
-    stores.set(api, store)
+    store = createSettingsApplicationStateStore(key)
+    stores.set(key, store)
   }
   return store
 }

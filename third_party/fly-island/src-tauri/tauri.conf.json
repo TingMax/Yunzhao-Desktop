@@ -67,7 +67,22 @@
         "minHeight": 420,
         "center": true,
         "resizable": true,
-        "backgroundColor": "#17191d"
+        "backgroundColor": "#1c1c1e"
+      },
+      {
+        "label": "vault-editor",
+        "create": false,
+        "title": "Yunzhao",
+        "url": "index.html?window=vault-editor",
+        "width": 420,
+        "height": 500,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": true,
+        "backgroundColor": "#1c1c1e"
       }
     ],
     "security": {

@@ -66,7 +66,7 @@ test("labels for the session rows", () => {
 test("the Agent page follows the AI Agent switch", () => {
   const features = { todo: true, music: true, clipboard: true, shelf: true, qq: true, wechat: true, qqMail: true, agents: true };
   assert.equal(resolveIslandPage("agents", features), "agents");
-  assert.equal(resolveIslandPage("agents", { ...features, agents: false }), "todo");
+  assert.equal(resolveIslandPage("agents", { ...features, agents: false }), "music");
   const onlyAgents = { todo: false, music: false, clipboard: false, shelf: false, qq: false, wechat: false, qqMail: false, agents: true };
   assert.equal(resolveIslandPage("todo", onlyAgents), "agents");
 });

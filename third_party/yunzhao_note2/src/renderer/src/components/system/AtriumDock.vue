@@ -104,6 +104,11 @@ onBeforeUnmount(() => {
         课表
       </button>
     </div>
+    <button type="button" class="atrium-dock__fold" title="收起" @click="send({ cmd: 'collapse' })">
+      <svg class="atrium-dock__fold-mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M3.2 10.2 8 5.4l4.8 4.8" />
+      </svg>
+    </button>
     <slot name="tools" />
   </div>
 </template>
@@ -136,13 +141,26 @@ onBeforeUnmount(() => {
   opacity: 0.4;
   cursor: default;
 }
-.atrium-dock__lock {
+.atrium-dock__lock,
+.atrium-dock__fold {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   color: #6e6e73;
+}
+.atrium-dock__fold:hover {
+  background: var(--ui-fill-hover);
+}
+.atrium-dock__fold-mark {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .atrium-dock__mdl {
   font-family: "Segoe MDL2 Assets", sans-serif;

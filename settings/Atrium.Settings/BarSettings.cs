@@ -45,13 +45,15 @@ internal sealed class BarSettings
     public bool StartStatus { get; set; } = true;      // its network, volume and battery buttons
     public string StartSize { get; set; } = "";        // small | medium | large; empty: not known yet (the core fills it in)
     public bool ShowStatus { get; set; } = true;
-    public bool ShowNotifications { get; set; } = true;
+    public bool ShowNotifications { get; set; } = false;
     public bool ShowRunning { get; set; } = true;
     public string TextColor { get; set; } = "auto"; // auto | light | dark
     public string AutoHide { get; set; } = "fullscreen"; // never | fullscreen (a maximized or full-screen app in front) | always
     public string StatusStyle { get; set; } = "ring"; // ring | icons (network, volume, battery as on the Windows taskbar)
     public string DockDisplayMode { get; set; } = "primary"; // primary | follow | fixed | all
     public double DockDisplayDelay { get; set; } = 450; // milliseconds at another display's bottom edge
+    public double BarRevealDelay { get; set; } = 1000; // milliseconds at the bottom edge before the bar appears
+    public double BarHideDelay { get; set; } = 2000; // milliseconds after the pointer leaves before the bar hides
     public string DockDisplay { get; set; } = "";
     public string DesktopDisplay { get; set; } = ""; // empty follows the system primary
     public string TaskbarApps { get; set; } = "all"; // all | primaryAndWindow | window
@@ -76,7 +78,9 @@ internal sealed class BarSettings
     public string WidgetMaterial { get; set; } = "glass"; // glass (the bar's) | dusk (dimmed glass, white ink) | color (their own faces)
     public double CalendarDateSize { get; set; } = 20;    // week and month dates, DIP
     public double TimetableDateSize { get; set; } = 24;   // timetable header, DIP
-    public bool CalendarEdgeHide { get; set; } = true;    // tuck the calendar fully off any monitor edge
+    public double TimetableBadgeScale { get; set; } = 0.7; // timetable date badge, relative to the original circle
+    public bool CalendarEdgeHide { get; set; } = true;    // the titlebar icon can tuck the calendar; it does not tuck by itself
+    public double CalendarDockMs { get; set; } = 380;     // collapse and expand duration, milliseconds
     public bool IslandOn { get; set; }
     public double IslandTop { get; set; } = 12;
     public double IslandWidth { get; set; } = 180;
@@ -152,6 +156,8 @@ internal sealed class BarSettings
             ["statusStyle"] = StatusStyle,
             ["dockDisplayMode"] = DockDisplayMode,
             ["dockDisplayDelay"] = DockDisplayDelay,
+            ["barRevealDelay"] = BarRevealDelay,
+            ["barHideDelay"] = BarHideDelay,
             ["dockDisplay"] = DockDisplay,
             ["desktopDisplay"] = DesktopDisplay,
             ["taskbarApps"] = TaskbarApps,
@@ -174,7 +180,9 @@ internal sealed class BarSettings
             ["widgetMaterial"] = WidgetMaterial,
             ["calendarDateSize"] = CalendarDateSize,
             ["timetableDateSize"] = TimetableDateSize,
+            ["timetableBadgeScale"] = TimetableBadgeScale,
             ["calendarEdgeHide"] = CalendarEdgeHide,
+            ["calendarDockMs"] = CalendarDockMs,
             ["islandOn"] = IslandOn,
             ["islandTop"] = IslandTop,
             ["islandWidth"] = IslandWidth,
@@ -258,7 +266,9 @@ internal sealed class BarSettings
             ? wms : f.WidgetMaterial;
         s.CalendarDateSize = Math.Clamp(Num("calendarDateSize", f.CalendarDateSize), 12, 36);
         s.TimetableDateSize = Math.Clamp(Num("timetableDateSize", f.TimetableDateSize), 16, 48);
+        s.TimetableBadgeScale = Math.Clamp(Num("timetableBadgeScale", f.TimetableBadgeScale), 0.4, 1.6);
         s.CalendarEdgeHide = Flag("calendarEdgeHide", f.CalendarEdgeHide);
+        s.CalendarDockMs = Math.Clamp(Num("calendarDockMs", f.CalendarDockMs), 80, 1200);
         s.IslandOn = false;
         s.IslandTop = Math.Clamp(Num("islandTop", f.IslandTop), 0, 240);
         s.IslandWidth = Math.Clamp(Num("islandWidth", f.IslandWidth), 80, 560);
@@ -274,6 +284,9 @@ internal sealed class BarSettings
         string mode = Display("dockDisplayMode", f.DockDisplayMode);
         s.DockDisplayMode = mode is "follow" or "fixed" or "all" ? mode : "primary";
         s.DockDisplayDelay = Math.Clamp(Num("dockDisplayDelay", f.DockDisplayDelay), 100, 2000);
+        s.BarRevealDelay = Math.Clamp(Num("barRevealDelay", f.BarRevealDelay), 200, 5000);
+        s.BarHideDelay = Math.Clamp(Num("barHideDelay", f.BarHideDelay), 200, 5000);
+        s.ShowNotifications = false;
         s.DockDisplay = Display("dockDisplay", f.DockDisplay);
         s.DesktopDisplay = Display("desktopDisplay", f.DesktopDisplay);
         string apps = Display("taskbarApps", f.TaskbarApps);
@@ -316,11 +329,12 @@ internal sealed class BarSettings
         WidgetsOnRight == o.WidgetsOnRight && WidgetBackdrop == o.WidgetBackdrop && StageManager == o.StageManager && StageOnRight == o.StageOnRight &&
         StageAutoHide == o.StageAutoHide && StageMinimize == o.StageMinimize && WidgetMaterial == o.WidgetMaterial &&
         CalendarDateSize == o.CalendarDateSize && TimetableDateSize == o.TimetableDateSize &&
-        CalendarEdgeHide == o.CalendarEdgeHide && IslandOn == o.IslandOn && IslandTop == o.IslandTop &&
+        TimetableBadgeScale == o.TimetableBadgeScale &&
+        CalendarEdgeHide == o.CalendarEdgeHide && CalendarDockMs == o.CalendarDockMs && IslandOn == o.IslandOn && IslandTop == o.IslandTop &&
         IslandWidth == o.IslandWidth && IslandHeight == o.IslandHeight && IslandText == o.IslandText &&
         HideTaskbar == o.HideTaskbar && HideBanners == o.HideBanners && WinKeyStart == o.WinKeyStart && WinNumbers == o.WinNumbers &&
         StartOnLogin == o.StartOnLogin &&
-        DockDisplayMode == o.DockDisplayMode && DockDisplayDelay == o.DockDisplayDelay && DockDisplay == o.DockDisplay && DesktopDisplay == o.DesktopDisplay &&
+        DockDisplayMode == o.DockDisplayMode && DockDisplayDelay == o.DockDisplayDelay && BarRevealDelay == o.BarRevealDelay && BarHideDelay == o.BarHideDelay && DockDisplay == o.DockDisplay && DesktopDisplay == o.DesktopDisplay &&
         TaskbarApps == o.TaskbarApps && TaskbarRightPrimaryOnly == o.TaskbarRightPrimaryOnly &&
         WindowsContextMenu == o.WindowsContextMenu &&
         NotifyPlacement == o.NotifyPlacement &&

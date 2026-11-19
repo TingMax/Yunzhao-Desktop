@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Local island, translation, clipboard and settings windows",
-  "windows": ["main", "translation", "settings", "clipboard"],
+  "windows": ["main", "translation", "settings", "clipboard", "vault-editor"],
   "permissions": [
     "core:default",
     "core:window:allow-set-title",

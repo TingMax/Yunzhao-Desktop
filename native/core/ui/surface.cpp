@@ -993,12 +993,36 @@ void Surface::ApplyPlacement()
         }
         // The host has no full-screen bitmap. Its region admits only the
         // widget and shadow; include the previous frame while it is in flight.
+        // An empty clip means this window keeps no pixels. SetWindowRgn(NULL)
+        // would do the opposite and show the whole monitor, so the hidden
+        // state is a real empty region, not a missing one.
         RECT region = window_;
-        if (clipOn_)
-            IntersectRect(&region, &region, &clip_);
-        else if (!IsRectEmpty(&presentedWindow_))
+        bool hideAll = false;
+        if (clipOn_) {
+            RECT hit{};
+            if (!IntersectRect(&hit, &window_, &clip_) || IsRectEmpty(&hit))
+                hideAll = true;
+            else
+                region = hit;
+        } else if (!IsRectEmpty(&presentedWindow_))
             UnionRect(&region, &region, &presentedWindow_);
         OffsetRect(&region, -nativeWindow_.left, -nativeWindow_.top);
+        const RECT hidden{-1, -1, -1, -1};
+        if (hideAll) {
+            if (EqualRect(&inputRegion_, &hidden))
+                return;
+            HRGN shape = CreateRectRgn(0, 0, 1, 1);
+            HRGN other = CreateRectRgn(0, 0, 1, 1);
+            if (shape && other)
+                CombineRgn(shape, shape, other, RGN_XOR);
+            if (other)
+                DeleteObject(other);
+            if (shape && SetWindowRgn(hwnd_, shape, FALSE))
+                inputRegion_ = hidden; // Windows owns the region after success
+            else if (shape)
+                DeleteObject(shape);
+            return;
+        }
         if (!EqualRect(&region, &inputRegion_)) {
             HRGN shape = CreateRectRgn(region.left, region.top, region.right, region.bottom);
             if (SetWindowRgn(hwnd_, shape, FALSE))

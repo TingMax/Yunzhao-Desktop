@@ -21,6 +21,7 @@ pub(crate) mod process_memory;
 pub(crate) mod process_times;
 pub(crate) mod process_tree;
 pub(crate) mod registry;
+pub(crate) mod session_lock;
 pub(crate) mod shell_hook;
 pub(crate) mod shell_open;
 pub(crate) mod task_switcher;

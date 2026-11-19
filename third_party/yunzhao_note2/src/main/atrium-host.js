@@ -1,7 +1,10 @@
+import { createRequire } from 'node:module'
 import { app, BrowserWindow, Notification, screen, ipcMain } from 'electron'
 import { existsSync, readFileSync, unlinkSync, watch, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { spawn } from 'node:child_process'
+import { calendarHome, containInArea, fitOntoArea, intersectsAny, lerpBounds, nearestOpenEdge, peekRim, peekTab } from './atrium-display.js'
 import { scheduleCloudSync } from './cloud-sync.js'
 import { getDb } from './db/db.js'
 import { addCompanionWindow, removeCompanionWindow } from './ipc/companion-windows.js'
@@ -22,6 +25,65 @@ function signedInDir() {
     // Signed-out desktop still shares the Atrium folder.
   }
   return root
+}
+
+const require = createRequire(import.meta.url)
+
+// The desktop shell can still paint its own timetable until it is rebuilt.
+// That face is a second calendar. Keep its window region empty so one page
+// remains, on one monitor or two and on either desktop.
+let nativeCalendarClip
+function ensureClipApi() {
+  if (nativeCalendarClip) return nativeCalendarClip
+  const koffi = require('koffi')
+  const user32 = koffi.load('user32.dll')
+  const gdi32 = koffi.load('gdi32.dll')
+  const rectType = koffi.struct('AtriumClipRect', {
+    left: 'int32',
+    top: 'int32',
+    right: 'int32',
+    bottom: 'int32'
+  })
+  nativeCalendarClip = {
+    find: user32.func('uintptr_t FindWindowExW(uintptr_t, uintptr_t, str16, str16)'),
+    visible: user32.func('int IsWindowVisible(uintptr_t)'),
+    region: user32.func('int GetWindowRgn(uintptr_t, void *)'),
+    setRegion: user32.func('int SetWindowRgn(uintptr_t, void *, int)'),
+    create: gdi32.func('void * CreateRectRgn(int, int, int, int)'),
+    round: gdi32.func('void * CreateRoundRectRgn(int, int, int, int, int, int)'),
+    offset: gdi32.func('int OffsetRgn(void *, int, int)'),
+    combine: gdi32.func('int CombineRgn(void *, void *, void *, int)'),
+    drop: gdi32.func('int DeleteObject(void *)'),
+    box: gdi32.func('GetRgnBox', 'int', ['void *', koffi.out(koffi.pointer(rectType))])
+  }
+  return nativeCalendarClip
+}
+function hideNativeCalendarFace() {
+  try {
+    const api = ensureClipApi()
+    let after = 0n
+    for (let i = 0; i < 32; i += 1) {
+      const hwnd = api.find(0n, after, 'AtriumSurface', 'Yunzhao Widget')
+      if (!hwnd) break
+      after = hwnd
+      if (!api.visible(hwnd)) continue
+      const probe = api.create(0, 0, 1, 1)
+      const kind = api.region(hwnd, probe)
+      const box = {}
+      api.box(probe, box)
+      api.drop(probe)
+      const width = Number(box.right) - Number(box.left)
+      const height = Number(box.bottom) - Number(box.top)
+      if ((kind !== 2 && kind !== 3) || width < 640 || height < 400) continue
+      const empty = api.create(0, 0, 1, 1)
+      const other = api.create(0, 0, 1, 1)
+      api.combine(empty, empty, other, 3)
+      api.drop(other)
+      if (!api.setRegion(hwnd, empty, 1)) api.drop(empty)
+    }
+  } catch {
+    // The hosted page is still the only calendar this app opens.
+  }
 }
 
 const placeDir = atriumRoot()
@@ -45,22 +107,112 @@ function readDailyPlan() {
   }
 }
 
-function todayTodoText() {
+function escapeHtml(value) {
+  return String(value).replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch])
+}
+
+function incompleteTodosThroughToday() {
   try {
     const db = getDb()
-    if (!db) return '今日待办'
+    if (!db) return []
     const start = new Date()
     start.setHours(0, 0, 0, 0)
+    const startMs = start.getTime()
     const rows = db
       .prepare(
-        'SELECT content FROM notes WHERE is_deleted = 0 AND effective_at >= ? AND effective_at < ? ORDER BY effective_at'
+        `SELECT content, effective_at FROM notes
+         WHERE is_deleted = 0 AND status != 'completed' AND effective_at IS NOT NULL AND effective_at < ?
+         ORDER BY effective_at ASC, id ASC`
       )
-      .all(start.getTime(), start.getTime() + 86400000)
-    const lines = rows.map((row) => String(row.content || '').replace(/<[^>]+>/g, '').trim()).filter(Boolean)
-    return lines.length ? lines.join('\n') : '今天没有待办'
+      .all(startMs + 86400000)
+    return rows.map((row) => {
+      const when = new Date(Number(row.effective_at))
+      const text = String(row.content || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() || '未命名待办'
+      return {
+        past: Number(row.effective_at) < startMs,
+        label: `${when.getMonth() + 1}月${when.getDate()}日`,
+        text
+      }
+    })
   } catch {
-    return '今日待办'
+    return []
   }
+}
+
+function openBlockingTodoPopup(items) {
+  const displays = screen.getAllDisplays()
+  let left = Infinity
+  let top = Infinity
+  let right = -Infinity
+  let bottom = -Infinity
+  for (const display of displays) {
+    const bounds = display.bounds
+    left = Math.min(left, bounds.x)
+    top = Math.min(top, bounds.y)
+    right = Math.max(right, bounds.x + bounds.width)
+    bottom = Math.max(bottom, bounds.y + bounds.height)
+  }
+  const popup = new BrowserWindow({
+    x: left,
+    y: top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    skipTaskbar: true,
+    focusable: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: '#00000000',
+    title: '未完成待办',
+    webPreferences: { sandbox: true }
+  })
+  popup.setAlwaysOnTop(true, 'screen-saver')
+  let allowClose = false
+  popup.on('close', (event) => {
+    if (!allowClose) event.preventDefault()
+  })
+  const blocked = BrowserWindow.getAllWindows().filter(
+    (win) => win !== popup && !win.isDestroyed() && win.isEnabled()
+  )
+  for (const win of blocked) win.setEnabled(false)
+  const timer = setInterval(() => {
+    if (popup.isDestroyed()) return
+    popup.setAlwaysOnTop(true, 'screen-saver')
+    popup.moveTop()
+    if (popup.webContents.getTitle() !== 'yunzhao-confirmed') return
+    allowClose = true
+    popup.close()
+  }, 400)
+  const release = () => {
+    clearInterval(timer)
+    for (const win of blocked) {
+      if (!win.isDestroyed()) win.setEnabled(true)
+    }
+  }
+  popup.on('closed', release)
+  popup.webContents.on('page-title-updated', (_event, title) => {
+    if (title !== 'yunzhao-confirmed' || popup.isDestroyed()) return
+    allowClose = true
+    popup.close()
+  })
+  const rows = items
+    .map((item) => {
+      const color = item.past ? '#ff453a' : '#1d1d1f'
+      const dateColor = item.past ? '#ff453a' : '#6e6e73'
+      return `<div style="display:flex;gap:12px;padding:8px 0;border-top:1px solid #ececf1"><span style="flex:0 0 64px;color:${dateColor}">${escapeHtml(item.label)}</span><span style="min-width:0;color:${color}">${escapeHtml(item.text)}</span></div>`
+    })
+    .join('')
+  const html = `<!doctype html><meta charset="utf-8"><title>未完成待办</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.28);font-family:Segoe UI,Microsoft YaHei,sans-serif"><section style="width:min(460px,calc(100vw - 48px));max-height:min(560px,calc(100vh - 48px));display:flex;flex-direction:column;background:#fff;color:#1d1d1f;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28)"><div style="padding:22px 24px 8px;font-size:18px;font-weight:650">未完成待办</div><div style="padding:0 24px;flex:1;overflow:auto;font-size:15px;line-height:1.5">${rows}</div><button type="button" onclick="document.title='yunzhao-confirmed'" style="margin:12px 24px 22px;height:36px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font-size:14px">确认</button></section></body>`
+  popup.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+  popup.show()
+  popup.focus()
+  return popup
 }
 
 export function readAtriumState() {
@@ -72,10 +224,13 @@ export function readAtriumState() {
       lock: data.lock === true,
       layer,
       ask: Number(data.ask) || 0,
-      date: typeof data.date === 'string' ? data.date : ''
+      date: typeof data.date === 'string' ? data.date : '',
+      badgeScale: Number.isFinite(Number(data.badgeScale)) ? Number(data.badgeScale) : readBadgeScale(),
+      dateSize: Number(data.dateSize) || 0,
+      tableSize: Number(data.tableSize) || 0
     }
   } catch {
-    return { board: 0, lock: false }
+    return { board: 0, lock: false, badgeScale: readBadgeScale() }
   }
 }
 export function readAtriumTable() {
@@ -138,10 +293,14 @@ export function atriumWindowStaysVisible() {
   return atriumHosted()
 }
 
+export function atriumPeeking() {
+  return peek != null
+}
+
 export function atriumInitialBounds() {
   const place = readPlace()
   if (!place || place.left == null) return null
-  return dipBounds(place)
+  return fitVisibleDisplay(dipBounds(place))
 }
 
 function rememberHwnd(win) {
@@ -173,6 +332,336 @@ let dockOpen = true
 let dockArmed = false
 let dockHideAt = 0
 let dockStyle = ''
+let peek = null
+let motion = null
+
+// Half of the island's collapsed bar. The bar is 340 by 38 at scale 0.89, and
+// the tucked edge keeps 10px. Both stages are half of that. Windows will not
+// make the window itself that short, so the extra pixels are clipped away.
+const PEEK_THICK = Math.round(38 * 0.89 / 2)
+const PEEK_LONG = Math.round(340 * 0.89 / 2)
+const PEEK_RIM = 5
+const PEEK_RADIUS = 6
+
+function readDockDuration() {
+  try {
+    const data = JSON.parse(readFileSync(join(atriumRoot(), 'settings.json'), 'utf8'))
+    const ms = Number(data.calendarDockMs)
+    if (Number.isFinite(ms)) return Math.min(1200, Math.max(80, ms))
+  } catch {
+    // A missing file keeps the middle speed.
+  }
+  return 380
+}
+
+export function clampAtriumBounds(bounds) {
+  if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.width)) return bounds
+  let display = screen.getDisplayMatching(bounds)
+  if (!intersectsAny(bounds, [display.bounds])) {
+    display = screen.getDisplayNearestPoint({
+      x: Math.round(bounds.x + bounds.width / 2),
+      y: Math.round(bounds.y + bounds.height / 2)
+    })
+  }
+  return containInArea(bounds, display.bounds)
+}
+
+function tellPeek(win, edge) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+  win.webContents.send('atrium:peek', edge
+    ? { edge, thick: PEEK_THICK, long: PEEK_LONG, radius: PEEK_RADIUS }
+    : { edge: '' })
+}
+
+function windowHwnd(win) {
+  const handle = win.getNativeWindowHandle()
+  return handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0))
+}
+
+let peekShapeKey = ''
+
+function clearPeekShape(win) {
+  peekShapeKey = ''
+  if (!win || win.isDestroyed()) return
+  try {
+    ensureClipApi().setRegion(windowHwnd(win), null, 1)
+  } catch {
+    // The expanded window stays rectangular.
+  }
+}
+
+function shapePeek(win) {
+  if (!peek || !win || win.isDestroyed()) return
+  const actual = win.getBounds()
+  const across = peek.edge === 'top' || peek.edge === 'bottom'
+  const width = Math.max(1, Math.min(across ? PEEK_LONG : PEEK_THICK, actual.width))
+  const height = Math.max(1, Math.min(across ? PEEK_THICK : PEEK_LONG, actual.height))
+  let ox = 0
+  let oy = 0
+  if (peek.edge === 'top') oy = Math.max(0, actual.height - height)
+  if (peek.edge === 'left') ox = Math.max(0, actual.width - width)
+  const key = `${peek.edge}:${ox}:${oy}:${width}:${height}`
+  if (key === peekShapeKey) return
+  try {
+    const api = ensureClipApi()
+    const hwnd = windowHwnd(win)
+    const radius = Math.min(PEEK_RADIUS, Math.floor(Math.min(width, height) / 2))
+    const region = api.round(0, 0, width + 1, height + 1, radius * 2, radius * 2)
+    if (radius > 0) {
+      const cap = peek.edge === 'top'
+        ? api.create(0, 0, width, radius)
+        : peek.edge === 'left'
+          ? api.create(0, 0, radius, height)
+          : peek.edge === 'right'
+            ? api.create(width - radius, 0, width, height)
+            : api.create(0, height - radius, width, height)
+      api.combine(region, region, cap, 2)
+      api.drop(cap)
+    }
+    if (ox || oy) api.offset(region, ox, oy)
+    if (!api.setRegion(hwnd, region, 1)) {
+      api.drop(region)
+      return
+    }
+    peekShapeKey = key
+  } catch {
+    peekShapeKey = ''
+  }
+}
+
+function animateBounds(win, to, duration, done, kind) {
+  motion = { from: win.getBounds(), to, start: Date.now(), duration: Math.max(80, duration), done, kind }
+  win.setMinimumSize(1, 1)
+}
+
+function tickMotion(win) {
+  if (!motion || !win || win.isDestroyed()) return false
+  const t = Math.min(1, (Date.now() - motion.start) / motion.duration)
+  win.setBounds(lerpBounds(motion.from, motion.to, t))
+  if (t < 1) return true
+  win.setBounds(motion.to)
+  const done = motion.done
+  motion = null
+  done?.()
+  return true
+}
+
+let peekHot = false
+let rimTimer = 0
+let peekQuietUntil = 0
+
+function peekArea() {
+  return screen.getDisplayMatching(peek.home).bounds
+}
+
+function barBounds() {
+  return peekTab(peek.home, peekArea(), peek.edge, PEEK_THICK, PEEK_LONG)
+}
+
+function rimBounds() {
+  return peekRim(peek.home, peekArea(), peek.edge, PEEK_THICK, PEEK_LONG, PEEK_RIM)
+}
+
+function peekHostBounds(win, visual) {
+  const actual = win && !win.isDestroyed() ? win.getBounds() : visual
+  const across = peek.edge === 'top' || peek.edge === 'bottom'
+  let width = actual.width
+  let height = actual.height
+  if (across) {
+    if (Math.abs(width - visual.width) > 8) width = visual.width
+    if (height > visual.height + 30) height = visual.height
+  } else {
+    if (Math.abs(height - visual.height) > 8) height = visual.height
+    if (width > visual.width + 30) width = visual.width
+  }
+  let x = visual.x
+  let y = visual.y
+  if (peek.edge === 'top') y = visual.y + visual.height - height
+  if (peek.edge === 'left') x = visual.x + visual.width - width
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(width),
+    height: Math.round(height)
+  }
+}
+
+function cursorOnPill() {
+  if (!peek) return false
+  const cursor = screen.getCursorScreenPoint()
+  const visual = peek.placed === 'bar' ? barBounds() : rimBounds()
+  const pad = 8
+  let x = visual.x
+  let y = visual.y
+  let width = visual.width
+  let height = visual.height
+  if (peek.placed !== 'bar') {
+    if (peek.edge === 'top') {
+      y = visual.y + visual.height - PEEK_RIM
+      height = PEEK_RIM
+    } else if (peek.edge === 'left') {
+      x = visual.x + visual.width - PEEK_RIM
+      width = PEEK_RIM
+    } else if (peek.edge === 'right') {
+      width = PEEK_RIM
+    } else {
+      height = PEEK_RIM
+    }
+  }
+  return cursor.x >= x - pad && cursor.x < x + width + pad && cursor.y >= y - pad && cursor.y < y + height + pad
+}
+
+function scheduleTuck(win) {
+  clearTimeout(rimTimer)
+  rimTimer = setTimeout(() => {
+    rimTimer = 0
+    if (!peek || !win || win.isDestroyed()) return
+    if (motion) {
+      scheduleTuck(win)
+      return
+    }
+    if (peekHot || cursorOnPill()) return
+    if (peek.placed === 'rim') return
+    peek.placed = 'rim'
+    animateBounds(win, peekHostBounds(win, rimBounds()), Math.min(readDockDuration(), 320), () => alignPeek(win), 'tuck')
+  }, 180)
+}
+
+function revealPeek(win) {
+  if (!peek || !win || win.isDestroyed() || !peekHot) return
+  if (motion?.kind === 'hover' || (peek.placed === 'bar' && !motion)) return
+  if (motion || Date.now() < peekQuietUntil) {
+    clearTimeout(rimTimer)
+    rimTimer = setTimeout(() => {
+      rimTimer = 0
+      if (peekHot) revealPeek(win)
+    }, 40)
+    return
+  }
+  peek.placed = 'bar'
+  animateBounds(win, peekHostBounds(win, barBounds()), Math.min(readDockDuration(), 320), () => alignPeek(win), 'hover')
+}
+
+let peekResizeGuard = null
+let parkingPeek = false
+
+function holdPeekSize(win) {
+  if (!win || win.isDestroyed()) return
+  if (win.isResizable()) win.setResizable(false)
+  if (peekResizeGuard === win) return
+  peekResizeGuard = win
+  win.on('will-resize', (event) => {
+    if (peek) event.preventDefault()
+  })
+  win.on('resize', () => {
+    if (!peek || motion || parkingPeek) return
+    const visual = peek.placed === 'bar' ? barBounds() : rimBounds()
+    const parked = peekHostBounds(win, visual)
+    const actual = win.getBounds()
+    if (
+      Math.abs(parked.x - actual.x) > 2 ||
+      Math.abs(parked.y - actual.y) > 2 ||
+      Math.abs(parked.width - actual.width) > 2 ||
+      Math.abs(parked.height - actual.height) > 2
+    ) {
+      parkingPeek = true
+      peekShapeKey = ''
+      win.setBounds(parked)
+      parkingPeek = false
+    }
+    shapePeek(win)
+  })
+}
+
+function alignPeek(win) {
+  if (!peek || !win || win.isDestroyed()) return
+  const visual = peek.placed === 'bar' ? barBounds() : rimBounds()
+  const next = peekHostBounds(win, visual)
+  const actual = win.getBounds()
+  peekQuietUntil = Date.now() + 280
+  if (
+    Math.abs(next.x - actual.x) > 2 ||
+    Math.abs(next.y - actual.y) > 2 ||
+    Math.abs(next.width - actual.width) > 2 ||
+    Math.abs(next.height - actual.height) > 2
+  ) {
+    peekShapeKey = ''
+    win.setBounds(next)
+  }
+  const parked = peekHostBounds(win, visual)
+  const settled = win.getBounds()
+  if (Math.abs(parked.x - settled.x) > 2 || Math.abs(parked.y - settled.y) > 2) {
+    peekShapeKey = ''
+    win.setBounds(parked)
+  }
+  const finalBounds = win.getBounds()
+  const across = peek.edge === 'top' || peek.edge === 'bottom'
+  const lockW = across ? PEEK_LONG : finalBounds.width
+  const lockH = across ? finalBounds.height : PEEK_LONG
+  win.setMinimumSize(lockW, lockH)
+  win.setMaximumSize(lockW, lockH)
+  holdPeekSize(win)
+  shapePeek(win)
+  setTimeout(() => {
+    if (!peek || motion || !win || win.isDestroyed()) return
+    peekShapeKey = ''
+    shapePeek(win)
+  }, 60)
+  if (peekHot) revealPeek(win)
+  else if (peek.placed !== 'rim') scheduleTuck(win)
+}
+
+function collapseCalendar(win) {
+  if (!win || win.isDestroyed() || peek || !edgeHideEnabled()) return
+  if (motion?.kind === 'collapse') return
+  motion = null
+  peekHot = false
+  clearTimeout(rimTimer)
+  const home = clampAtriumBounds(win.getBounds())
+  const area = screen.getDisplayMatching(home).bounds
+  const edge = nearestOpenEdge(home, area)
+  peek = { edge, home, placed: 'rim' }
+  dockShown = 1
+  holdPeekSize(win)
+  win.setOpacity(1)
+  win.setIgnoreMouseEvents(false)
+  win.webContents.executeJavaScript("document.documentElement.style.transform='none'").catch(() => {})
+  tellPeek(win, edge)
+  animateBounds(win, peekHostBounds(win, rimBounds()), readDockDuration(), () => alignPeek(win), 'collapse')
+}
+
+function expandCalendar(win) {
+  if (!win || win.isDestroyed() || !peek) return
+  motion = null
+  peekHot = false
+  clearTimeout(rimTimer)
+  clearPeekShape(win)
+  win.setMaximumSize(16384, 16384)
+  win.setMinimumSize(1, 1)
+  const home = clampAtriumBounds(peek.home)
+  win.setOpacity(1)
+  win.setIgnoreMouseEvents(false)
+  animateBounds(win, home, readDockDuration(), () => {
+    peek = null
+    minSized = true
+    if (!win.isDestroyed()) {
+      win.setMinimumSize(240, 180)
+      tellPeek(win, '')
+    }
+  }, 'expand')
+}
+
+function hoverPeek(win, on) {
+  if (!win || win.isDestroyed() || !peek) return
+  peekHot = on
+  if (on) {
+    clearTimeout(rimTimer)
+    rimTimer = 0
+    revealPeek(win)
+    return
+  }
+  scheduleTuck(win)
+}
 
 const DOCK_SLACK = 8
 const DOCK_STRIP = 39
@@ -181,6 +670,26 @@ const DOCK_LEAVE_MS = 180
 export function setAtriumSizing(active) {
   userSizing = active === true
   if (!active) holdPlaceUntil = Date.now() + 1200
+}
+
+function displayAreas() {
+  return screen.getAllDisplays().map((display) => display.bounds)
+}
+
+function intersectsDisplay(bounds) {
+  return intersectsAny(bounds, displayAreas())
+}
+
+function nearestArea(bounds) {
+  return screen.getDisplayNearestPoint({
+    x: Math.round(bounds.x + bounds.width / 2),
+    y: Math.round(bounds.y + bounds.height / 2)
+  }).workArea
+}
+
+function fitVisibleDisplay(bounds) {
+  if (intersectsDisplay(bounds)) return bounds
+  return fitOntoArea(bounds, nearestArea(bounds))
 }
 
 function clampDisplay(bounds) {
@@ -274,13 +783,28 @@ function containsPoint(bounds, point, pad = 0) {
   )
 }
 
-function currentHome(place) {
+function currentHome(place, live) {
   const saved = place && place.left != null ? dipBounds(place) : null
-  if (restHome) {
-    if (saved && nearBounds(saved, restHome)) restHome = null
-    else if (userSizing || Date.now() < holdPlaceUntil) return restHome
+  const holding = userSizing || Date.now() < holdPlaceUntil
+  if (restHome && saved && nearBounds(saved, restHome) && !holding) restHome = null
+  return calendarHome({
+    live,
+    saved,
+    areas: displayAreas(),
+    rest: restHome,
+    holding: Boolean(restHome) && holding
+  })
+}
+
+function readBadgeScale() {
+  try {
+    const data = JSON.parse(readFileSync(join(atriumRoot(), 'settings.json'), 'utf8'))
+    const scale = Number(data.timetableBadgeScale)
+    if (Number.isFinite(scale)) return Math.min(1.6, Math.max(0.4, scale))
+  } catch {
+    // Missing settings keep the timetable badge at seven tenths.
   }
-  return saved
+  return 0.7
 }
 
 function edgeHideEnabled() {
@@ -364,6 +888,10 @@ function writeDockStyle(win, visual) {
 }
 
 function placeVisual(win, visual) {
+  if (peek || motion) {
+    rememberHwnd(win)
+    return
+  }
   if (!minSized) {
     minSized = true
     const size = win.getBounds()
@@ -413,44 +941,17 @@ function placeVisual(win, visual) {
   }
 }
 
-function visualFor(place) {
-  const home = currentHome(place)
+function visualFor(place, live) {
+  const home = currentHome(place, live)
   if (!home) return null
   dockHome = home
-  if (userSizing || Date.now() < holdPlaceUntil) {
-    dockOpen = true
-    return { home, open: true, edge: '' }
-  }
-  const spec = dockSpec(home)
-  if (!spec.edge) {
-    dockEdge = ''
-    dockOpen = true
-    dockArmed = false
-    dockHideAt = 0
-    return { home, open: true, edge: '' }
-  }
-  if (spec.edge !== dockEdge) {
-    dockEdge = spec.edge
-    dockOpen = false
-    dockArmed = false
-    dockHideAt = 0
-  }
-  const onEdge = pointerOpens(home, spec.edge, dockOpen)
-  if (!onEdge) dockArmed = true
-  if (dockOpen) {
-    if (!onEdge) {
-      if (!dockHideAt) dockHideAt = Date.now()
-      if (Date.now() - dockHideAt >= DOCK_LEAVE_MS) dockOpen = false
-    } else dockHideAt = 0
-  } else if (dockArmed && onEdge) {
-    dockOpen = true
-    dockHideAt = 0
-  }
-  return { home, open: dockOpen, edge: spec.edge }
+  dockEdge = ''
+  dockOpen = true
+  return { home, open: true, edge: '' }
 }
 
 export function expandAtriumForDrag(win) {
-  if (!win || win.isDestroyed() || !dockHome) return
+  if (!win || win.isDestroyed() || !dockHome || peek || motion) return
   dockOpen = true
   dockEdge = ''
   dockArmed = false
@@ -503,6 +1004,7 @@ function placeBeside(host, width, height) {
 
 let dayWin = null
 let daySizeTimer = null
+let dayHeld = false
 
 function dayBoundsPath() {
   return join(app.getPath('userData'), 'day-window-bounds.json')
@@ -592,7 +1094,10 @@ function openDayWindow(getWindow, payload) {
     created.on('close', rememberDaySize)
     created.on('closed', () => {
       removeCompanionWindow(created)
-      if (dayWin === created) dayWin = null
+      if (dayWin === created) {
+        dayWin = null
+        dayHeld = false
+      }
     })
     dayWin.on('page-title-updated', (event) => {
       event.preventDefault()
@@ -629,10 +1134,14 @@ function openHandoutWindow(getWindow, payload) {
   if (!handoutWin || handoutWin.isDestroyed()) {
     handoutWin = new BrowserWindow({
       ...box,
-      frame: true,
-      autoHideMenuBar: true,
+      frame: false,
+      thickFrame: true,
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
       title: '课堂讲义',
       backgroundColor: '#FFFFFF',
+      roundedCorners: true,
       webPreferences: {
         preload: surfacePreload(),
         contextIsolation: true,
@@ -688,8 +1197,102 @@ function saveHandoutPiece(key, html) {
   return true
 }
 
-export function startAtriumHost({ getWindow, getMode, switchView, suspendDock }) {
+const TEACHER_PAGES = {
+  '/teacher/exams': '试卷管理',
+  '/teacher/homework': '作业管理',
+  '/teacher/ai-grading': 'AI批改',
+  '/teacher/recitations': '背书情况',
+  '/advisor/students': '学生档案',
+  '/advisor/scores': '成绩分析',
+  '/advisor/leaves': '请假管理',
+  '/advisor/evaluations': '期末评价',
+  '/advisor/communications': '家校沟通',
+  '/advisor/seats': '座位表'
+}
+const teacherWindows = new Map()
+
+function teacherServerFile() {
+  const starts = [dirname(fileURLToPath(import.meta.url)), process.cwd()]
+  for (const start of starts) {
+    let dir = start
+    for (let i = 0; i < 8; i += 1) {
+      const candidate = join(dir, 'third_party', 'teacher_works', 'backend', 'server.js')
+      if (existsSync(candidate)) return candidate
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  return ''
+}
+
+async function ensureTeacherServer() {
+  const health = 'http://127.0.0.1:3090/api/v1/health'
+  try {
+    if ((await fetch(health)).ok) return true
+  } catch {
+    // The desk is started on the first page that needs it.
+  }
+  const server = teacherServerFile()
+  if (!server) return false
+  const child = spawn('node', ['server.js'], {
+    cwd: dirname(server),
+    env: { ...process.env, PORT: '3090' },
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  })
+  child.unref()
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    try {
+      if ((await fetch(health)).ok) return true
+    } catch {
+      // Keep waiting while node starts.
+    }
+  }
+  return false
+}
+
+async function openTeacherPage(host, pagePath) {
+  const title = TEACHER_PAGES[pagePath]
+  if (!title) return false
+  const existing = teacherWindows.get(pagePath)
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore()
+    existing.show()
+    existing.focus()
+    return true
+  }
+  if (!(await ensureTeacherServer())) return false
+  const area = host && !host.isDestroyed()
+    ? screen.getDisplayMatching(host.getBounds()).workArea
+    : screen.getPrimaryDisplay().workArea
+  const width = Math.min(1100, area.width)
+  const height = Math.min(760, area.height)
+  const win = new BrowserWindow({
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
+    minWidth: Math.min(800, area.width),
+    minHeight: Math.min(560, area.height),
+    title,
+    autoHideMenuBar: true,
+    backgroundColor: '#f5f5f7',
+    webPreferences: { sandbox: true }
+  })
+  teacherWindows.set(pagePath, win)
+  win.on('closed', () => {
+    if (teacherWindows.get(pagePath) === win) teacherWindows.delete(pagePath)
+  })
+  await win.loadURL(`http://127.0.0.1:3090${pagePath}?solo=1`)
+  return true
+}
+
+export function startAtriumHost({ getWindow, getMode, switchView, suspendDock, applyUiSetting, getSettings }) {
   ipcMain.on('atrium:sizing', (_event, active) => {
+    if (peek && active === true) return
     if (active === true) expandAtriumForDrag(getWindow())
     setAtriumSizing(active === true)
     if (active === true) {
@@ -702,6 +1305,22 @@ export function startAtriumHost({ getWindow, getMode, switchView, suspendDock })
   ipcMain.handle('atrium:state', () => readAtriumState())
   ipcMain.handle('atrium:command', (_event, payload) => {
     const cmd = payload && typeof payload.cmd === 'string' ? payload.cmd : ''
+    const win = getWindow()
+    if (cmd === 'collapse') {
+      collapseCalendar(win)
+      return true
+    }
+    if (cmd === 'expand') {
+      expandCalendar(win)
+      return true
+    }
+    if (cmd === 'peek-hover') {
+      hoverPeek(win, payload?.on === true)
+      return true
+    }
+    if (cmd === 'teacher-page') {
+      return openTeacherPage(win, payload?.path)
+    }
     const body = { cmd }
     if (cmd === 'board') body.board = Number(payload?.board) === 2 ? 2 : 0
     if (cmd === 'layer' && typeof payload?.layer === 'string') body.layer = payload.layer
@@ -750,6 +1369,27 @@ export function startAtriumHost({ getWindow, getMode, switchView, suspendDock })
   ipcMain.handle('atrium:open-handout', (_event, payload) => openHandoutWindow(getWindow, payload))
   ipcMain.handle('atrium:handout-full', (event) => toggleHandoutFull(event))
   ipcMain.handle('atrium:handout-piece', (_event, key, html) => saveHandoutPiece(key, html))
+  const holdDayWindow = () => {
+    if (!dayWin || dayWin.isDestroyed() || !dayWin.isVisible()) return false
+    dayHeld = true
+    dayWin.hide()
+    const host = getWindow()
+    if (host && !host.isDestroyed()) host.focus()
+    return true
+  }
+  const revealDayWindow = () => {
+    if (!dayHeld) return false
+    dayHeld = false
+    if (!dayWin || dayWin.isDestroyed()) return false
+    try {
+      dayWin.showInactive()
+    } catch {
+      dayWin.show()
+    }
+    return true
+  }
+  ipcMain.handle('atrium:day-hold', () => holdDayWindow())
+  ipcMain.handle('atrium:day-reveal', () => revealDayWindow())
   ipcMain.on('atrium:day-create', (event, dateKey) => {
     const host = getWindow()
     if (host && !host.isDestroyed() && event.sender !== host.webContents)
@@ -821,10 +1461,16 @@ export function startAtriumHost({ getWindow, getMode, switchView, suspendDock })
     pushTable()
   }, 600)
   try {
+    watch(join(atriumRoot(), 'settings.json'), () => pushState())
+  } catch {
+    // The state push still reads the badge size when the timetable asks.
+  }
+  try {
     watch(dataDir, (_event, filename) => {
       if (filename === 'todos.json') pushTodos()
       if (filename === 'yunzhao-state.json') pushState()
       if (filename === 'yunzhao-table.json') pushTable()
+      if (filename === 'settings.json') pushState()
       if (filename === 'sign-out.request') {
         try {
           unlinkSync(join(dataDir, 'sign-out.request'))
@@ -860,14 +1506,39 @@ export function startAtriumHost({ getWindow, getMode, switchView, suspendDock })
     }
     const win = getWindow()
     if (!win || win.isDestroyed()) return
-    if (userSizing) {
-      restHome = win.getBounds()
+    if (tickMotion(win)) {
+      rememberHwnd(win)
       return
+    }
+    if (userSizing) {
+      if (!peek) restHome = win.getBounds()
+      return
+    }
+    if (!peek) {
+      const contained = clampAtriumBounds(win.getBounds())
+      if (!nearBounds(win.getBounds(), contained)) {
+        const small = contained.width < 240 || contained.height < 180
+        win.setMinimumSize(small ? 1 : 240, small ? 1 : 180)
+        win.setBounds(contained)
+        restHome = contained
+        holdPlaceUntil = Date.now() + 400
+      }
     }
     if (switching) return
     const place = readPlace()
     if (!place) return
-    const visual = visualFor(place)
+    const live = win.getBounds()
+    if (!userSizing && !peek && !motion && !intersectsDisplay(live)) {
+      const fitted = fitVisibleDisplay(live)
+      if (!nearBounds(live, fitted)) {
+        win.setMinimumSize(240, 180)
+        win.setBounds(fitted)
+        restHome = fitted
+        holdPlaceUntil = Date.now() + 1600
+        if (!win.isVisible()) win.showInactive()
+      }
+    }
+    const visual = visualFor(place, win.getBounds())
     if (!visual) return
     const changed = raw !== last
     last = raw
@@ -905,6 +1576,193 @@ export function startAtriumHost({ getWindow, getMode, switchView, suspendDock })
     // The interval still applies the latest place file.
   }
   startIsland(getWindow)
+  watchHostedUiSettings(applyUiSetting, getSettings, getWindow)
+}
+
+const HOSTED_UI_KEYS = {
+  'appearance.titlebarIconScale': 'titlebarIconScale',
+  'appearance.iconColor': 'iconColor',
+  'appearance.uiScale': 'uiScale',
+  'css.bgColor': 'bgColor',
+  'css.textColor': 'textColor',
+  'css.windowBorder': 'windowBorder',
+  'css.fontSizeBase': 'fontSizeBase',
+  'css.noteRemarkFontSize': 'noteRemarkFontSize',
+  'window.compactFontSize': 'compactFontSize',
+  'blur.enabled': 'blurEnabled',
+  'blur.radius': 'blurRadius',
+  'blur.saturation': 'blurSaturation',
+  'blur.cornerRadius': 'cornerRadius',
+  'css.popupOpacity': 'popupOpacity',
+  'css.bgBlur': 'bgBlur',
+  'css.windowOpacity': 'windowOpacity',
+  'notes.tagColorEnabled': 'tagColorEnabled',
+  'interaction.doubleClickQuickEdit': 'doubleClickQuickEdit',
+  'interaction.hideMainViewDuringScreenshot': 'hideMainViewDuringScreenshot',
+  'listAppearance.minimalMode': 'minimalMode',
+  'dock.revealHandleMode': 'revealHandleMode',
+  'dock.enabledEdges': 'enabledEdges',
+  'shortcuts.viewVisibility': 'viewVisibility',
+  'shortcuts.newNote': 'newNote',
+  'shortcuts.screenshot': 'screenshot',
+  'shortcuts.screenshotCopy': 'screenshotCopy',
+  'weather.enabled': 'weatherEnabled',
+  'remote.receiveNotices': 'receiveNotices',
+  'remote.uploadDeviceInfo': 'uploadDeviceInfo',
+  'window.zOrderMode': 'zOrderMode'
+}
+
+function watchHostedUiSettings(applyUiSetting, getSettings, getWindow) {
+  const dir = atriumRoot()
+  const commandPath = join(dir, 'calendar-ui.json')
+  const statePath = join(dir, 'calendar-ui-state.json')
+  const state = {
+    titlebarIconScale: 100,
+    iconColor: 'black',
+    uiScale: 1,
+    bgColor: '255 255 255',
+    textColor: '#1d1d1f',
+    windowBorder: false,
+    fontSizeBase: 20,
+    noteRemarkFontSize: 19,
+    compactFontSize: 17,
+    blurEnabled: true,
+    blurRadius: 12,
+    blurSaturation: 1.8,
+    cornerRadius: 12,
+    popupOpacity: 0.2,
+    bgBlur: 10,
+    windowOpacity: 0.3,
+    tagColorEnabled: true,
+    doubleClickQuickEdit: true,
+    hideMainViewDuringScreenshot: false,
+    minimalMode: false,
+    revealHandleMode: 'direct',
+    enabledEdges: [],
+    viewVisibility: '',
+    newNote: 'F3',
+    screenshot: 'F1',
+    screenshotCopy: 'Control+F1',
+    weatherEnabled: false,
+    receiveNotices: true,
+    uploadDeviceInfo: true,
+    zOrderMode: 'top'
+  }
+  const publish = () => {
+    try {
+      writeFileSync(statePath, JSON.stringify(state))
+    } catch {
+      // The settings page keeps its own defaults until the calendar can be read.
+    }
+  }
+  try {
+    const values = typeof getSettings === 'function' ? getSettings() || {} : {}
+    Object.assign(state, {
+      titlebarIconScale: values.appearance?.titlebarIconScale ?? state.titlebarIconScale,
+      iconColor: values.appearance?.iconColor ?? state.iconColor,
+      uiScale: values.appearance?.uiScale ?? state.uiScale,
+      bgColor: values.css?.bgColor ?? state.bgColor,
+      textColor: values.css?.textColor ?? state.textColor,
+      windowBorder: values.css?.windowBorder === true,
+      fontSizeBase: values.css?.fontSizeBase ?? state.fontSizeBase,
+      noteRemarkFontSize: values.css?.noteRemarkFontSize ?? state.noteRemarkFontSize,
+      compactFontSize: values.window?.compactFontSize ?? state.compactFontSize,
+      blurEnabled: values.blur?.enabled !== false,
+      blurRadius: values.blur?.radius ?? state.blurRadius,
+      blurSaturation: values.blur?.saturation ?? state.blurSaturation,
+      cornerRadius: values.blur?.cornerRadius ?? state.cornerRadius,
+      popupOpacity: values.css?.popupOpacity ?? state.popupOpacity,
+      bgBlur: values.css?.bgBlur ?? state.bgBlur,
+      windowOpacity: values.css?.windowOpacity ?? state.windowOpacity,
+      tagColorEnabled: values.notes?.tagColorEnabled !== false,
+      doubleClickQuickEdit: values.interaction?.doubleClickQuickEdit ?? true,
+      hideMainViewDuringScreenshot: values.interaction?.hideMainViewDuringScreenshot === true,
+      minimalMode: values.listAppearance?.minimalMode === true,
+      revealHandleMode: values.dock?.revealHandleMode ?? state.revealHandleMode,
+      enabledEdges: Array.isArray(values.dock?.enabledEdges) ? values.dock.enabledEdges : state.enabledEdges,
+      viewVisibility: values.shortcuts?.viewVisibility ?? state.viewVisibility,
+      newNote: values.shortcuts?.newNote ?? state.newNote,
+      screenshot: values.shortcuts?.screenshot ?? state.screenshot,
+      screenshotCopy: values.shortcuts?.screenshotCopy ?? state.screenshotCopy,
+      weatherEnabled: values.weather?.enabled === true,
+      receiveNotices: values.remote?.receiveNotices !== false,
+      uploadDeviceInfo: values.remote?.uploadDeviceInfo !== false,
+      zOrderMode: values.window?.zOrderMode ?? state.zOrderMode
+    })
+  } catch {
+    // Defaults stay until the calendar process can read its own settings.
+  }
+  publish()
+  let last = 0
+  const read = () => {
+    try {
+      const data = JSON.parse(readFileSync(commandPath, 'utf8'))
+      if (!data || data.at === last || typeof data.id !== 'string') return
+      last = data.at
+      const key = HOSTED_UI_KEYS[data.id]
+      if (key) state[key] = data.value
+      publish()
+      try {
+        const pending = applyUiSetting?.(data.id, data.value)
+        if (pending && typeof pending.catch === 'function') {
+          pending.catch((error) => console.warn('[Yunzhao] 日历设置没有写上:', error))
+        }
+      } catch (error) {
+        console.warn('[Yunzhao] 日历设置没有写上:', error)
+      }
+      const win = typeof getWindow === 'function' ? getWindow() : null
+      if (win && !win.isDestroyed()) win.webContents.send('atrium:ui-setting', { id: data.id, value: data.value })
+    } catch {
+      // A partial write is ignored until the file is complete.
+    }
+  }
+  setInterval(read, 200)
+}
+
+function calendarSettingsUrl() {
+  const dev = process.env.ELECTRON_RENDERER_URL
+  if (dev) return `${dev.replace(/\/$/, '')}/calendar-settings.html`
+  return pathToFileURL(join(process.cwd(), 'out', 'renderer', 'calendar-settings.html')).href
+}
+
+function publishCalendarSettingsHwnd(win) {
+  if (!win || win.isDestroyed()) return
+  const handle = win.getNativeWindowHandle()
+  const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : handle.readUInt32LE(0)
+  writeFileSync(join(atriumRoot(), 'yunzhao-calendar-settings-hwnd.txt'), String(hwnd))
+}
+
+function openCalendarSettingsWindow() {
+  const win = new BrowserWindow({
+    width: 880,
+    height: 720,
+    show: false,
+    frame: false,
+    skipTaskbar: true,
+    resizable: false,
+    title: 'Yunzhao 日历设置',
+    backgroundColor: '#F6F6F8',
+    webPreferences: {
+      preload: surfacePreload(),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      backgroundThrottling: false
+    }
+  })
+  addCompanionWindow(win)
+  win.on('closed', () => removeCompanionWindow(win))
+  const logPath = join(atriumRoot(), 'calendar-settings-log.txt')
+  win.webContents.on('console-message', (_event, _level, message) => {
+    try { writeFileSync(logPath, message + '\n', { flag: 'a' }) } catch { /* the page can still open */ }
+  })
+  win.webContents.on('did-fail-load', (_event, code, description, url) => {
+    try { writeFileSync(logPath, `load failed ${code} ${description} ${url}\n`, { flag: 'a' }) } catch { /* same */ }
+  })
+  const publish = () => publishCalendarSettingsHwnd(win)
+  win.once('ready-to-show', publish)
+  win.webContents.on('did-finish-load', publish)
+  win.loadURL(calendarSettingsUrl()).catch(() => {})
 }
 
 function readIsland() {
@@ -977,6 +1835,25 @@ function startIsland(getWindow) {
     }
     if (!island.isVisible()) island.showInactive()
   }
+  const bringBack = () => {
+    const win = getWindow()
+    if (!win || win.isDestroyed() || userSizing || peek || motion) return
+    const current = win.getBounds()
+    if (intersectsDisplay(current)) return
+    const fitted = fitVisibleDisplay(current)
+    if (nearBounds(current, fitted)) return
+    win.setMinimumSize(1, 1)
+    win.setBounds(fitted)
+    restHome = fitted
+    holdPlaceUntil = Date.now() + 1600
+    if (!win.isVisible()) win.showInactive()
+  }
+  bringBack()
+  hideNativeCalendarFace()
+  setInterval(hideNativeCalendarFace, 1000)
+  for (const eventName of ['display-added', 'display-removed', 'display-metrics-changed']) {
+    screen.on(eventName, () => setTimeout(bringBack, 400))
+  }
   setInterval(place, 250)
   setInterval(() => {
     const plan = readDailyPlan()
@@ -986,35 +1863,13 @@ function startIsland(getWindow) {
     const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`
     if (stamp !== plan.time || plan.fired === day) return
     writeFileSync(dailyPlanPath, JSON.stringify({ ...plan, fired: day }))
-    const text = todayTodoText()
+    const items = incompleteTodosThroughToday()
+    if (!items.length) return
+    const text = items.map((item) => `${item.past ? '逾期 ' : ''}${item.label} ${item.text}`).join('\n')
     if (plan.channels & 1 && Notification.isSupported()) {
-      new Notification({ title: '今日待办', body: text.slice(0, 180) }).show()
+      new Notification({ title: '未完成待办', body: text.slice(0, 180) }).show()
     }
-    if (plan.channels & 8 || plan.channels & 2) {
-      const host = getWindow()
-      const area = host && !host.isDestroyed()
-        ? screen.getDisplayMatching(host.getBounds()).bounds
-        : screen.getPrimaryDisplay().bounds
-      const box = { width: 460, height: 260 }
-      const popup = new BrowserWindow({
-        width: box.width,
-        height: box.height,
-        x: Math.round(area.x + (area.width - box.width) / 2),
-        y: Math.round(area.y + (area.height - box.height) / 2),
-        frame: false,
-        alwaysOnTop: Boolean(plan.channels & 8),
-        resizable: false,
-        title: 'Yunzhao 待办',
-        webPreferences: { sandbox: true }
-      })
-      const safe = text.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch])
-      popup.loadURL(
-        'data:text/html;charset=utf-8,' +
-          encodeURIComponent(
-            `<!doctype html><meta charset="utf-8"><body style="margin:0;font-family:Segoe UI,Microsoft YaHei,sans-serif;background:#fff;color:#1d1d1f;display:flex;flex-direction:column;height:100vh"><div style="padding:22px 24px 8px;font-size:18px;font-weight:650">今日待办</div><div style="padding:8px 24px;flex:1;font-size:15px;line-height:1.6;white-space:pre-wrap;overflow:auto">${safe}</div><button onclick="window.close()" style="margin:12px 24px 22px;height:36px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font-size:14px">知道了</button></body>`
-          )
-      )
-    }
+    if (plan.channels & 8 || plan.channels & 2) openBlockingTodoPopup(items)
     const host = getWindow()
     if (plan.channels & 4 && host && !host.isDestroyed()) host.flashFrame(true)
   }, 20000)

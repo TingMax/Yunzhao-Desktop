@@ -75,7 +75,7 @@ export function listActiveReminders() {
   return getDb()
     .prepare(
       `${REMINDER_SELECT} WHERE r.state = 'active'
-    AND n.is_deleted = 0 AND n.status = 'in_progress' AND n.reminder_channels != 0
+    AND n.is_deleted = 0 AND n.status = 'in_progress' AND (n.reminder_channels & 7) != 0
     ORDER BY r.due_at, r.created_at, r.id`
     )
     .all()
@@ -86,7 +86,7 @@ export function getNextReminderTime() {
     .prepare(
       `SELECT MIN(r.due_at) AS due_at FROM note_reminders r
     JOIN notes n ON n.id = r.note_id WHERE r.state = 'scheduled'
-    AND n.status = 'in_progress' AND n.is_deleted = 0 AND n.reminder_channels != 0`
+    AND n.status = 'in_progress' AND n.is_deleted = 0 AND (n.reminder_channels & 7) != 0`
     )
     .get().due_at
 }
@@ -96,7 +96,7 @@ export function activateDueReminders(timestamp = Date.now()) {
   db.prepare(
     `UPDATE note_reminders SET state = 'active', updated_at = ?
     WHERE state = 'scheduled' AND due_at <= ? AND note_id IN (
-      SELECT id FROM notes WHERE status = 'in_progress' AND is_deleted = 0 AND reminder_channels != 0
+      SELECT id FROM notes WHERE status = 'in_progress' AND is_deleted = 0 AND (reminder_channels & 7) != 0
     )`
   ).run(timestamp, timestamp)
   return listActiveReminders()

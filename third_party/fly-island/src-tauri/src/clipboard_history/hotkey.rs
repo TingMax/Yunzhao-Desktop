@@ -1,5 +1,7 @@
 //! Global shortcut that opens the clipboard page: parsing and registration.
 
+#![allow(dead_code)]
+
 use std::sync::{Mutex, OnceLock};
 use tauri::Emitter;
 use windows::Win32::{

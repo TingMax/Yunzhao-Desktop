@@ -14,6 +14,8 @@ import * as todo from "../sections/todo.ts";
 import * as clipboard from "../sections/clipboard.ts";
 import * as fileShelf from "../sections/fileShelf.ts";
 import * as settings from "../sections/settings/index.ts";
+import * as vault from "../sections/vault.ts";
+import * as wecom from "../sections/wecom.ts";
 
 const en: Translations = {
   localeLabel: "English",
@@ -43,6 +45,8 @@ const en: Translations = {
   fileShelf: fileShelf.en,
 
   settings: settings.en,
+  vault: vault.en,
+  wecom: wecom.en,
 };
 
 export default en;

@@ -12,6 +12,7 @@ export type SettingsCategoriesText = {
   messages: string;
   /** Mail's group on the Messages page. */
   mail: string;
+  vault: string;
   todos: string;
   music: string;
   clipboard: string;
@@ -37,6 +38,7 @@ export const zhCN: SettingsCategoriesText = {
   shortcuts: "快捷键",
   messages: "消息",
   mail: "邮箱",
+  vault: "账号",
   todos: "待办",
   music: "音乐",
   clipboard: "剪贴板与文件",
@@ -60,6 +62,7 @@ export const en: SettingsCategoriesText = {
   shortcuts: "Shortcuts",
   messages: "Messages",
   mail: "Mail",
+  vault: "Accounts",
   todos: "Todos",
   music: "Music",
   clipboard: "Clipboard & files",

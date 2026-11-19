@@ -1,6 +1,8 @@
 //! File shelf: files dropped on the island, kept as path references (never copied)
 //! so they can be dragged out, copied, opened or shown in Explorer later.
 
+#![allow(dead_code)]
+
 mod availability;
 mod icon;
 mod store;

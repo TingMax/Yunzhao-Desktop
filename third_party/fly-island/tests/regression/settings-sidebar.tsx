@@ -55,7 +55,7 @@ try {
   check(groups().join("|") === "基础|功能|AI Agent" && !host.querySelector(".settings-sidebar__heading"),
     "Pages sit in three named groups (Plugins and About after them), set apart by space rather than visible headings");
   check(!host.querySelector("input, button[aria-expanded]"), "No search box and nothing to fold");
-  check(listed().join() === `general,appearance,todos,music,translation,clipboard,messages,agents,agentConnect,${PLUGINS_ENABLED ? "plugins," : ""}about`,
+  check(listed().join() === `general,appearance,music,translation,vault,messages,agents,agentConnect,${PLUGINS_ENABLED ? "plugins," : ""}about`,
     "Every page is listed once, in sidebar order");
   const listGroups = [...host.querySelectorAll<HTMLElement>(".settings-sidebar__list .settings-sidebar__group")];
   const lastGroup = listGroups[listGroups.length - 1];
@@ -66,9 +66,9 @@ try {
     "Plugins then About share the final untitled group below Connection, not pinned to a footer");
   check(PLUGINS_ENABLED || settingsCategoryFor("plugins") === null, "Unavailable plugin routes cannot be opened");
   check(element(".settings-sidebar__item--active").dataset.category === "general", "The open page is marked");
-  await act(async () => { element<HTMLButtonElement>("[data-category='clipboard']").click(); });
-  check(opened[opened.length - 1] === "clipboard" && element(".settings-sidebar__item--active").dataset.category === "clipboard"
-    && element("[data-category='clipboard']").getAttribute("aria-current") === "page", "Clicking a page opens and marks it");
+  await act(async () => { element<HTMLButtonElement>("[data-category='vault']").click(); });
+  check(opened[opened.length - 1] === "vault" && element(".settings-sidebar__item--active").dataset.category === "vault"
+    && element("[data-category='vault']").getAttribute("aria-current") === "page", "Clicking a page opens and marks it");
 
   document.documentElement.dataset.testResult = "passed";
 } catch (error) {

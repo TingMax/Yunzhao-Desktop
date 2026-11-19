@@ -1,5 +1,7 @@
 //! On-disk history: JSON file, PNG images and thumbnails, item ids and previews.
 
+#![allow(dead_code)]
+
 use image::{imageops::FilterType, DynamicImage, ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

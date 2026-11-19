@@ -255,21 +255,12 @@ const pendingTasks = ref([])
 // 所有可选页面（教师工作）
 const teacherPages = [
   { path: '/teacher/resources', name: '资源管理', color: 'primary' },
-  { path: '/teacher/exams', name: '试卷管理', color: 'primary' },
-  { path: '/teacher/recitations', name: '背书情况', color: 'success' },
-  { path: '/teacher/homework', name: '作业管理', color: 'success' },
   { path: '/teacher/schedule', name: '我的课程表', color: 'warning' },
   { path: '/teacher/tasks', name: '临时工作区', color: 'info' }
 ]
 // 所有可选页面（班主任工作）
 const advisorPages = [
-  { path: '/advisor/students', name: '学生档案', color: 'success' },
-  { path: '/advisor/scores', name: '成绩分析', color: 'primary' },
-  { path: '/advisor/points', name: '积分管理', color: 'warning' },
-  { path: '/advisor/leaves', name: '请假管理', color: 'warning' },
-  { path: '/advisor/evaluations', name: '期末评价', color: 'info' },
-  { path: '/advisor/communications', name: '家校沟通', color: 'info' },
-  { path: '/advisor/seats', name: '座位表', color: 'info' }
+  { path: '/advisor/points', name: '积分管理', color: 'warning' }
 ]
 const allPages = [...teacherPages, ...advisorPages]
 
@@ -278,9 +269,9 @@ const QUICK_STORAGE_KEY = 'dashboard_quick_entries'
 // 默认快捷入口（首次使用时）
 const DEFAULT_QUICK_PATHS = [
   '/teacher/resources',
-  '/advisor/students',
-  '/advisor/leaves',
-  '/advisor/communications'
+  '/teacher/schedule',
+  '/teacher/tasks',
+  '/advisor/points'
 ]
 
 // 当前显示的快捷入口（已排序、带名称和颜色）

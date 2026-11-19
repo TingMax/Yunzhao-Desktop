@@ -124,7 +124,7 @@
 
 .dot-button--todo {
   --dot-color: var(--color-accent);
-  --dot-glow: rgba(116, 214, 255, 0.48);
+  --dot-glow: rgba(10, 132, 255, 0.48);
 }
 
 .dot-button--music {

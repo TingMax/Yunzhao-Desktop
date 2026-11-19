@@ -731,7 +731,7 @@ void PaintWeekBoard(Canvas& c, const WidgetContent& content, const WidgetWorld& 
         const float gap = 4.f;
         D2D1_RECT_F cell = D2D1::RectF(x0 + gap * 0.5f, gridTop + gap * 0.5f, x0 + cellW - gap * 0.5f, gridTop + cellH - gap * 0.5f);
         c.Fill(cell, 9, D2D1::ColorF(1, 1, 1, 0.98f));
-        if (today)
+            if (today)
             c.Stroke(cell, 9, Rgba(0xFF453A, 0.98f), 1.6f);
         else
             c.Stroke(cell, 9, picked ? pick : Rgba(0x000000, 0.08f), picked ? 1.6f : 1.f);
@@ -867,12 +867,28 @@ void PaintTimetable(Canvas& c, const WidgetContent& content, const WidgetWorld& 
         swprintf_s(date, L"%d/%d", cm, cd);
         c.Text(date, D2D1::RectF(x0, head.top + dayFs + 2, x0 + colW, head.top + dayFs + dateFs + 8), dateFs, picked ? pick : today ? p.blue : p.text,
                DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
-        int n = 0;
-        for (int i = 0; i < int(content.items.size()); ++i)
-            if (CoversDay(content.items[size_t(i)], cy, cm, cd))
-                ++n;
-        if (n > 0)
-            c.Circle(x0 + colW - 10, head.top + 14, 4.5f, Rgba(0xFF3B30, 1.f));
+        int n = 0, open = 0;
+        for (int i = 0; i < int(content.items.size()); ++i) {
+            if (!CoversDay(content.items[size_t(i)], cy, cm, cd))
+                continue;
+            ++n;
+            if (!content.items[size_t(i)].done)
+                ++open;
+        }
+        if (n > 0) {
+            const float scale = std::clamp(world.badgeScale, 0.4f, 1.6f);
+            const float radius = 8.f * scale;
+            const float cx = x0 + colW - 6.f - radius;
+            const float cy0 = head.top + 4.f + radius;
+            const D2D1_RECT_F badge = D2D1::RectF(cx - radius, cy0 - radius, cx + radius, cy0 + radius);
+            if (open == 0) {
+                c.Circle(cx, cy0, radius, Rgba(0x30D158, 1.f));
+                c.Text(L"\u2713", badge, 11.f * scale, Rgba(0xFFFFFF, 1.f), DWRITE_FONT_WEIGHT_BOLD, 1);
+            } else {
+                c.Circle(cx, cy0, radius, Rgba(0xFF3B30, 1.f));
+                c.Text(std::to_wstring(open), badge, (open > 9 ? 9.f : 10.f) * scale, Rgba(0xFFFFFF, 1.f), DWRITE_FONT_WEIGHT_BOLD, 1);
+            }
+        }
         wchar_t id[40];
         swprintf_s(id, L"head:%04d-%02d-%02d", cy, cm, cd);
         hits.push_back({head, id});
@@ -1173,8 +1189,8 @@ void PaintCalendar(Canvas& c, WidgetSize, const WidgetContent& content, WidgetWo
             c.Text(layerName[i], row, 14, on ? accent : Rgba(0xFFFFFF, 0.96f), DWRITE_FONT_WEIGHT_SEMI_BOLD);
             hits.push_back({row, layerId[i]});
         }
-    }
-    return;
+        }
+        return;
     }
 
     const D2D1_RECT_F lockR = D2D1::RectF(pad, pad + 2, pad + 26, pad + headerH - 4);

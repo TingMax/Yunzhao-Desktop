@@ -15,7 +15,7 @@
   align-content: start;
   min-height: 0;
   overflow-y: auto;
-  scrollbar-color: rgba(116, 214, 255, 0.38) transparent;
+  scrollbar-color: rgba(10, 132, 255, 0.38) transparent;
   scrollbar-width: thin;
 }
 
@@ -88,7 +88,7 @@
 .settings-sidebar__item--active,
 .settings-sidebar__item--active:hover {
   color: var(--color-fg-strong);
-  background: rgba(116, 214, 255, 0.14);
+  background: rgba(10, 132, 255, 0.14);
   font-weight: 600;
 }
 

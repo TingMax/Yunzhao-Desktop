@@ -23,6 +23,12 @@ import {
   trapModalTab
 } from '../../utils/modalFocus.js'
 import { createDefaultSettings, VIEW_MODES } from '../../../../shared/settings-schema.js'
+import {
+  applyGlassBaseSettings,
+  applyIconColor,
+  applyTitlebarIconScale,
+  applyUiScale
+} from '../../utils/applySettingsSnapshot.js'
 import { notesCoveringDate } from '../../../../shared/calendar/calendar-event-layout.js'
 import {
   createRefreshCauses,
@@ -35,6 +41,7 @@ const { showMessage } = useMessage()
 let stopNewNoteShortcut = null
 const atriumHosted = ref(false)
 const atriumBoard = ref(0)
+const badgeScale = ref(0.7)
 useWeatherRecovery()
 const props = defineProps({
   viewMode: {
@@ -345,6 +352,70 @@ async function onHistoricalNotesMoved() {
   }
 }
 
+function applyAtriumState(state) {
+  atriumBoard.value = Number(state?.board) === 2 ? 2 : 0
+  const scale = Number(state?.badgeScale)
+  badgeScale.value = Number.isFinite(scale) ? Math.min(1.6, Math.max(0.4, scale)) : 0.7
+}
+
+let hostedBlur = 10
+let hostedFrost = 0.2
+
+function applyHostedCalendarUi(change) {
+  const id = change?.id
+  const value = change?.value
+  const root = document.documentElement
+  if (!id || !root) return
+  switch (id) {
+    case 'appearance.uiScale':
+      applyUiScale(value, root)
+      break
+    case 'appearance.titlebarIconScale':
+      applyTitlebarIconScale(value, root)
+      break
+    case 'appearance.iconColor':
+      applyIconColor(value, root)
+      break
+    case 'css.fontSizeBase':
+      root.style.setProperty('--font-size-base', `${Number(value)}rem`)
+      break
+    case 'css.noteRemarkFontSize':
+      root.style.setProperty('--note-remark-font-size', `${Number(value)}rem`)
+      break
+    case 'window.compactFontSize':
+      root.style.setProperty('--compact-content-font-size', `${Number(value)}px`)
+      break
+    case 'css.textColor':
+      root.style.setProperty('--text-color', String(value))
+      break
+    case 'css.bgColor':
+      root.style.setProperty('--bg-color', String(value))
+      break
+    case 'css.windowOpacity':
+      root.style.setProperty('--window-opacity', String(value))
+      break
+    case 'css.windowBorder':
+      root.style.setProperty('--window-border-width', value ? '1px' : '0px')
+      break
+    case 'css.bgBlur':
+      hostedBlur = Number(value) || hostedBlur
+      applyGlassBaseSettings({ blur: hostedBlur, opacity: hostedFrost }, root)
+      break
+    case 'css.popupOpacity':
+      hostedFrost = Number(value)
+      applyGlassBaseSettings({ blur: hostedBlur, opacity: hostedFrost }, root)
+      break
+    case 'blur.cornerRadius':
+      root.style.setProperty('--window-radius', `${Number(value)}px`)
+      break
+    case 'blur.enabled':
+      root.classList.toggle('is-system-glass-active', Boolean(value))
+      break
+    default:
+      break
+  }
+}
+
 function onCardStatusAction(note) {
   if (note.status === 'initialized') {
     earlyStartNote.value = note
@@ -495,8 +566,34 @@ function openCreator(dayOrKey) {
   creatorDate.value = dateKey
 }
 
+function onCreateRequest() {
+  const key = selectedKey.value
+  if (!key) return
+  // The day list is its own window beside the date. Its form has to open on the calendar.
+  if (props.daySurface) {
+    window.api.atriumDayCreate?.(key)
+    return
+  }
+  openCreator(key)
+}
+
+function onEditRequest(note) {
+  const id = note?.id
+  if (!id) return
+  if (props.daySurface) {
+    window.api.atriumDayEdit?.(id)
+    return
+  }
+  void openEditor(note)
+}
+
+function onTimetableFocus(dateKey) {
+  if (typeof dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) selectedKey.value = dateKey
+}
+
 let atriumAsk = 0
 let stopAtriumCreator = null
+let stopAtriumUi = null
 
 onMounted(() => {
   window.addEventListener('atrium-new-note', onAtriumNewNote)
@@ -504,8 +601,9 @@ onMounted(() => {
   window.api.onAtriumDayEdit?.((id) => {
     if (id) void openEditor({ id })
   })
+  stopAtriumUi = window.api.onAtriumUiSetting?.((change) => applyHostedCalendarUi(change))
   stopAtriumCreator = window.api.onAtriumState?.((state) => {
-    atriumBoard.value = Number(state?.board) === 2 ? 2 : 0
+    applyAtriumState(state)
     const ask = Number(state?.ask || 0)
     if (ask > atriumAsk) {
       atriumAsk = ask
@@ -517,9 +615,7 @@ onMounted(() => {
   void window.api.atriumHosted?.().then((hosted) => {
     atriumHosted.value = Boolean(hosted)
     if (!hosted) return
-    void window.api.atriumState?.().then((state) => {
-      atriumBoard.value = Number(state?.board) === 2 ? 2 : 0
-    })
+    void window.api.atriumState?.().then((state) => applyAtriumState(state))
   })
   stopNewNoteShortcut = window.api.onNewNoteRequested?.(() => {
     if (atriumHosted.value) return
@@ -722,6 +818,11 @@ onMounted(async () => {
 })
 
 watch(modalOpen, (open) => emit('modal-state-change', open), { immediate: true })
+watch([creatorDisplayed, editorDisplayed], ([creator, editor]) => {
+  if (props.daySurface || !atriumHosted.value) return
+  if (creator || editor) void window.api.atriumDayHold?.()
+  else void window.api.atriumDayReveal?.()
+})
 watch(todayKey, (next, previous) => {
   if (next !== previous) queueNotesRefresh()
 })
@@ -743,6 +844,7 @@ watch(
 onBeforeUnmount(() => {
   window.removeEventListener('atrium-new-note', onAtriumNewNote)
   stopAtriumCreator?.()
+  stopAtriumUi?.()
   stopNewNoteShortcut?.()
   statusActions.dispose()
   calendarModel.dispose()
@@ -785,8 +887,8 @@ onBeforeUnmount(() => {
           :windowed="daySurface"
           :status-transitions="statusTransitions"
           @close="onDayPanelClose"
-          @create="openCreator(selectedKey)"
-          @edit="openEditor"
+          @create="onCreateRequest"
+          @edit="onEditRequest"
           @status-action="onCardStatusAction"
           @resize-start="startPanelResize"
         />
@@ -797,7 +899,14 @@ onBeforeUnmount(() => {
       </div>
 
       <section v-if="!daySurface" class="month-workspace__calendar">
-        <HostedTimetable v-if="atriumHosted && atriumBoard === 2" />
+        <HostedTimetable
+          v-if="atriumHosted && atriumBoard === 2"
+          :status-transitions="statusTransitions"
+          :badge-scale="badgeScale"
+          @create="openCreator"
+          @focus="onTimetableFocus"
+          @status-action="onCardStatusAction"
+        />
         <template v-else>
         <MonthCalendarToolbar
           :view-mode="viewMode"
@@ -867,6 +976,7 @@ onBeforeUnmount(() => {
           @keydown="onBusinessModalKeydown($event, 'creator')"
         >
           <MonthNoteCreator
+            :key="creatorDate"
             ref="creatorRef"
             :date-key="creatorDate"
             :view-label="calendarViewLabel"

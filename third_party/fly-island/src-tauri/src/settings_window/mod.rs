@@ -71,6 +71,19 @@ pub fn open(app: &AppHandle) -> Result<(), String> {
         let _ = window.set_decorations(false);
         let _ = window.set_skip_taskbar(true);
         let _ = window.set_always_on_top(false);
+        // Yunzhao's settings page owns this window. If that owner is gone, a frameless
+        // window would sit on the desktop with no close button, so hide it.
+        let watch = window.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(400));
+                let Ok(hwnd) = watch.hwnd() else { break };
+                let visible = watch.is_visible().unwrap_or(false);
+                if visible && !crate::win32::window::has_owner(hwnd) {
+                    let _ = watch.hide();
+                }
+            }
+        });
     }
     match (saved, saved_screen, screen.as_ref()) {
         (Some(saved), Some(_), _) => {
@@ -184,6 +197,48 @@ pub fn dock_settings_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// A notice Yunzhao wrote for the island to show. Absent when there is nothing new.
+#[derive(serde::Serialize)]
+pub struct HostNotice {
+    pub app: String,
+    pub title: String,
+    pub body: String,
+    pub at: i64,
+}
+
+fn yunzhao_dir() -> Option<std::path::PathBuf> {
+    let dir = std::env::var("LOCALAPPDATA").ok()?;
+    Some(std::path::PathBuf::from(dir).join("Yunzhao"))
+}
+
+/// Settings written by the Yunzhao settings page. The island merges this into its own settings.
+#[tauri::command]
+pub fn read_host_island_settings() -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(yunzhao_dir()?.join("island-ui.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// The island's current settings, so the Yunzhao page can show the same values.
+#[tauri::command]
+pub fn publish_host_island_settings(settings: serde_json::Value) -> Result<(), String> {
+    let dir = yunzhao_dir().ok_or_else(|| "LOCALAPPDATA is not set.".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let text = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
+    std::fs::write(dir.join("island-ui-state.json"), text).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn read_host_notice() -> Option<HostNotice> {
+    let text = std::fs::read_to_string(yunzhao_dir()?.join("island-notice.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(HostNotice {
+        app: value.get("app").and_then(|item| item.as_str()).unwrap_or("").to_string(),
+        title: value.get("title").and_then(|item| item.as_str()).unwrap_or("").to_string(),
+        body: value.get("body").and_then(|item| item.as_str()).unwrap_or("").to_string(),
+        at: value.get("at").and_then(|item| item.as_i64()).unwrap_or(0),
+    })
+}
+
 /// Called by the settings page once it has painted, to show its hidden new window.
 #[tauri::command]
 pub async fn show_settings_window(app: AppHandle) -> Result<(), String> {
@@ -216,6 +271,9 @@ macro_rules! tauri_commands {
     ($next:ident [$($done:tt)*] $($rest:tt)*) => {
         $next!([$($done)*
             crate::settings_window::open_settings_window,
+            crate::settings_window::read_host_notice,
+            crate::settings_window::read_host_island_settings,
+            crate::settings_window::publish_host_island_settings,
             crate::settings_window::show_settings_window,
             crate::settings_window::dock_settings_window,
             crate::settings_window::quit_island,

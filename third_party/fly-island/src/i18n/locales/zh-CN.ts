@@ -14,6 +14,8 @@ import * as todo from "../sections/todo.ts";
 import * as clipboard from "../sections/clipboard.ts";
 import * as fileShelf from "../sections/fileShelf.ts";
 import * as settings from "../sections/settings/index.ts";
+import * as vault from "../sections/vault.ts";
+import * as wecom from "../sections/wecom.ts";
 
 const zhCN: Translations = {
   localeLabel: "简体中文",
@@ -46,6 +48,8 @@ const zhCN: Translations = {
   fileShelf: fileShelf.zhCN,
 
   settings: settings.zhCN,
+  vault: vault.zhCN,
+  wecom: wecom.zhCN,
 };
 
 export default zhCN;

@@ -10,7 +10,7 @@ namespace Atrium.Settings;
 public sealed partial class SliderTile : UserControl
 {
     private string _unit = "";
-    private double _min, _max;
+    private double _min, _max, _step = 1;
     private bool _flat;
 
     public event Action<double>? UserValueChanged;
@@ -25,7 +25,7 @@ public sealed partial class SliderTile : UserControl
 
     public void Configure(string title, double min, double max, double step, string unit)
     {
-        _unit = unit; _min = min; _max = max;
+        _unit = unit; _min = min; _max = max; _step = step;
         TitleText.Text = title;
         Track.Minimum = min; Track.Maximum = max; Track.StepFrequency = step;
         AutomationProperties.SetName(Track, title);
@@ -52,7 +52,8 @@ public sealed partial class SliderTile : UserControl
 
     private void Refresh(double v)
     {
-        ValueRun.Text = Math.Round(v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var format = _step < 0.1 ? "0.00" : _step < 1 ? "0.0" : "0";
+        ValueRun.Text = (_step < 1 ? v : Math.Round(v)).ToString(format, System.Globalization.CultureInfo.InvariantCulture);
         UnitRun.Text = _unit is "" or "%" ? _unit : " " + _unit;
     }
 

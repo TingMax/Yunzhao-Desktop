@@ -1,5 +1,7 @@
 //! Clipboard change notifications (`WM_CLIPBOARDUPDATE`).
 
+#![allow(dead_code)]
+
 use windows::{
     core::Result,
     Win32::{

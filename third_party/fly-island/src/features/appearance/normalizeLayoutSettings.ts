@@ -35,7 +35,7 @@ export function normalizeLayoutSettings(settings: LegacyIslandSettings | null | 
     islandFontPercent: normalizeSize(settings?.islandFontPercent, ISLAND_FONT_PERCENT),
     pageButtonStyle: settings?.pageButtonStyle === "capsule" ? "capsule" : DEFAULT_SETTINGS.pageButtonStyle,
     material: normalizeMaterial(settings),
-    colorScheme: settings?.colorScheme === "light" || settings?.colorScheme === "system" ? settings.colorScheme : DEFAULT_SETTINGS.colorScheme,
+    colorScheme: settings?.colorScheme === "light" || settings?.colorScheme === "dark" || settings?.colorScheme === "system" ? settings.colorScheme : DEFAULT_SETTINGS.colorScheme,
     glassIntensity: clamp(
       Number(settings?.glassIntensity ?? DEFAULT_SETTINGS.glassIntensity),
       25,

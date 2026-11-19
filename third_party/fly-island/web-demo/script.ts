@@ -16,6 +16,7 @@ export const PAGE_BUTTONS: Record<IslandPage, string> = {
   translation: ".dot-button--translation, .island-translate-button",
   agents: ".island__agent-button",
   settings: ".island-settings-button",
+  vault: ".dot-button--vault",
 };
 
 export type Segment = { page: IslandPage; run: (actor: Actor, data: DemoContent) => Promise<void> };

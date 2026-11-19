@@ -7,6 +7,7 @@ import { IslandApp } from "./windows/island/IslandApp";
 import { TranslationWindow } from "./windows/translation/TranslationWindow";
 import { SettingsWindow } from "./windows/settings/SettingsWindow";
 import { ClipboardWindow } from "./windows/clipboard/ClipboardWindow";
+import { VaultEditor } from "./features/vault/VaultEditor";
 import { I18nProvider } from "./i18n";
 import { trackIslandTopEdge } from "./windows/island/topEdge";
 import { installSameWindowStorageEvents } from "./lib/sameWindowStorageEvents";
@@ -57,6 +58,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         <SettingsWindow />
       ) : windowKind === "clipboard" ? (
         <ClipboardWindow />
+      ) : windowKind === "vault-editor" ? (
+        <VaultEditor />
       ) : (
         <IslandApp />
       )}

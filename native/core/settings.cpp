@@ -43,12 +43,15 @@ void Settings::Clamp()
     c(notifyTimeout, 3, 30, d.notifyTimeout);
     c(calendarDateSize, 12, 36, d.calendarDateSize);
     c(timetableDateSize, 16, 48, d.timetableDateSize);
+    c(timetableBadgeScale, 0.4, 1.6, d.timetableBadgeScale);
     c(islandTop, 0, 240, d.islandTop);
     c(islandWidth, 80, 560, d.islandWidth);
     c(islandHeight, 28, 140, d.islandHeight);
     if (islandText.size() > 80)
         islandText.resize(80);
     c(dockDisplayDelay, 100, 2000, d.dockDisplayDelay);
+    c(barRevealDelay, 200, 5000, d.barRevealDelay);
+    c(barHideDelay, 200, 5000, d.barHideDelay);
     tint &= 0xFFFFFF;
     if (textColor != L"light" && textColor != L"dark")
         textColor = L"auto";
@@ -108,6 +111,8 @@ std::wstring Settings::ToJson() const
     o.SetNamedValue(L"statusStyle", json::JsonValue::CreateStringValue(statusStyle));
     o.SetNamedValue(L"dockDisplayMode", json::JsonValue::CreateStringValue(dockDisplayMode));
     num(L"dockDisplayDelay", dockDisplayDelay);
+    num(L"barRevealDelay", barRevealDelay);
+    num(L"barHideDelay", barHideDelay);
     o.SetNamedValue(L"dockDisplay", json::JsonValue::CreateStringValue(dockDisplay));
     o.SetNamedValue(L"desktopDisplay", json::JsonValue::CreateStringValue(desktopDisplay));
     o.SetNamedValue(L"taskbarApps", json::JsonValue::CreateStringValue(taskbarApps));
@@ -126,6 +131,7 @@ std::wstring Settings::ToJson() const
     o.SetNamedValue(L"widgetMaterial", json::JsonValue::CreateStringValue(widgetMaterial));
     num(L"calendarDateSize", calendarDateSize);
     num(L"timetableDateSize", timetableDateSize);
+    num(L"timetableBadgeScale", timetableBadgeScale);
     o.SetNamedValue(L"calendarEdgeHide", json::JsonValue::CreateBooleanValue(calendarEdgeHide));
     o.SetNamedValue(L"islandOn", json::JsonValue::CreateBooleanValue(islandOn));
     num(L"islandTop", islandTop);
@@ -201,6 +207,7 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
     flag(L"showTray", s.showTray);
     flag(L"showStatus", s.showStatus);
     flag(L"showNotifications", s.showNotifications);
+    s.showNotifications = false;
     flag(L"autoWidth", s.autoWidth);
     flag(L"showRunning", s.showRunning);
     num(L"notifyTimeout", s.notifyTimeout);
@@ -232,6 +239,7 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
     }
     num(L"calendarDateSize", s.calendarDateSize);
     num(L"timetableDateSize", s.timetableDateSize);
+    num(L"timetableBadgeScale", s.timetableBadgeScale);
     flag(L"calendarEdgeHide", s.calendarEdgeHide);
     flag(L"islandOn", s.islandOn);
     num(L"islandTop", s.islandTop);
@@ -251,6 +259,8 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
     };
     display(L"dockDisplayMode", s.dockDisplayMode);
     num(L"dockDisplayDelay", s.dockDisplayDelay);
+    num(L"barRevealDelay", s.barRevealDelay);
+    num(L"barHideDelay", s.barHideDelay);
     display(L"dockDisplay", s.dockDisplay);
     display(L"desktopDisplay", s.desktopDisplay);
     display(L"taskbarApps", s.taskbarApps);

@@ -82,6 +82,11 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  /** Fills the Yunzhao settings page. The same process, so changes reach the desktop calendar at once. */
+  hosted: {
+    type: Boolean,
+    default: false
+  },
   viewMode: {
     type: String,
     default: VIEW_MODES.LIST,
@@ -181,7 +186,11 @@ const closeButtonRef = ref(null)
 const settingsPreviousFocus = captureFocusedElement()
 const panelSize = ref(viewDefaults.value.ui.settingsPanelSize)
 const panelStyle = computed(() =>
-  isCalendarView.value ? { width: panelSize.value + '%' } : { height: panelSize.value + '%' }
+  props.hosted
+    ? { width: '100%', height: '100%' }
+    : isCalendarView.value
+      ? { width: panelSize.value + '%' }
+      : { height: panelSize.value + '%' }
 )
 const logQueue = useModalRequest()
 const showLogViewer = logQueue.requested
@@ -980,6 +989,10 @@ function assignSettingsSnapshot(snapshot) {
 
 // 每次父组件打开设置时都会重新挂载本组件，因此这里必定重新查询完整快照。
 onMounted(async () => {
+  if (props.hosted) {
+    rendered.value = true
+    panelActive.value = true
+  }
   // 视图切换为整页导航，pagehide 时仍可读取滚动容器。
   window.addEventListener('pagehide', freezeScrollPosition)
   // Remote/holiday owners subscribe before their initial local reads.
@@ -1084,9 +1097,10 @@ watch(
         ref="panelRef"
         class="settings-panel"
         :class="{
-          active: panelActive,
+          active: panelActive || hosted,
           'is-resetting': isResetting,
-          'settings-panel--month': isCalendarView
+          'settings-panel--month': isCalendarView && !hosted,
+          'settings-panel--page': hosted
         }"
         :style="panelStyle"
         :inert="isLeaving"
@@ -1099,6 +1113,7 @@ watch(
       >
         <!-- 顶部拖拽指示条（拖拽调整面板高度） -->
         <div
+          v-if="!hosted"
           class="drag-indicator"
           :class="{ 'is-disabled': isResetting }"
           @pointerdown="onDragStart"
@@ -1111,7 +1126,7 @@ watch(
         </div>
 
         <!-- 面板头部 -->
-        <div class="panel-header">
+        <div v-if="!hosted" class="panel-header">
           <h2 class="panel-title">设置</h2>
           <span v-if="isResetting" class="panel-reset-status" role="status" aria-live="polite">
             正在恢复默认设置…
@@ -2468,6 +2483,22 @@ watch(
 
 .settings-panel--month.active {
   transform: translateX(0);
+}
+
+.settings-panel--page {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
+}
+.settings-panel--page .panel-body {
+  mask-image: none;
+  -webkit-mask-image: none;
 }
 
 /* ---- 拖拽指示条（可拖拽调整面板高度） ---- */

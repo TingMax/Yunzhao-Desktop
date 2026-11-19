@@ -38,7 +38,8 @@ const props = defineProps({
   minimal: { type: Boolean, default: false },
   muted: { type: Boolean, default: false },
   allowCreateTag: { type: Boolean, default: false },
-  statusTransition: { type: Object, default: null }
+  statusTransition: { type: Object, default: null },
+  externalEdit: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['status-action', 'edit', 'create-tag'])
@@ -215,6 +216,12 @@ function clearAllTextColors() {
 }
 
 function openQuickEditor(event, force = false) {
+  if (props.externalEdit) {
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    emit('edit', props.note)
+    return
+  }
   if ((!force && !doubleClickQuickEditEnabled.value) || quickEditorVisible.value) return
   if (!force && contentWasDragged) return
   if (

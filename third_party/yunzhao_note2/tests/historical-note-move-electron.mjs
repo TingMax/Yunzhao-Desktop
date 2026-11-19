@@ -371,116 +371,16 @@ async function assertQuickNotesUnchanged(notes, label) {
 }
 
 async function verifyQuickCreateUntilCompleted() {
-  await expectQuickSetting(false, 'new global quick-duration preference defaults off')
-  await click('#historical-move-auto-toggle')
-  await until(
-    () =>
-      js('window.api.getSettingsSnapshot().then(s => s.values.notes.autoMoveToToday === false)'),
-    'automatic movement can be disabled independently before quick-create scenarios'
-  )
-  await expectQuickSetting(
-    false,
-    'automatic movement does not enable the quick-duration preference'
-  )
-  await close()
-  const baseline = await createQuickNote(0, 'single_day', '默认单日')
   await open()
-  await setQuickSetting(true)
-  await close()
-  const extended = []
-  for (const offset of [0, -1, 1]) {
-    extended.push(await createQuickNote(offset, 'until_completed', '默认持续到完成'))
-  }
   assert.equal(
-    (await getNote(baseline.id)).duration_kind,
-    'single_day',
-    'enabling the preference cannot rewrite an existing note'
-  )
-  await switchView('week')
-  await open()
-  await expectQuickSetting(true, 'month enabling is synchronized to the newly loaded week view')
-  assertQuickSettingOnDisk(true)
-  assert.equal(
-    await js('window.api.getSettingsSnapshot().then(s => s.values.notes.autoMoveToToday)'),
-    false
+    await js('document.querySelector("[data-quick-create-until-completed]")'),
+    null,
+    'quick create no longer offers until completed'
   )
   await close()
-  for (const offset of [0, -1, 1]) {
-    extended.push(await createQuickNote(offset, 'until_completed', '共享持续到完成'))
-  }
-
-  const movable = await create('双开关下仅当天便签可移动')
-  await open()
-  const historicalExtended = extended.filter(
-    (note) => localDateKey(note.effective_at) === yesterday
-  )
-  for (const note of historicalExtended) {
-    await until(
-      () => js(`Boolean(document.querySelector('li[data-note-id="${note.id}"] input:disabled'))`),
-      'quick-created historical until-completed note remains visible and unavailable for moving'
-    )
-    assert.ok(
-      await js(
-        `document.querySelector('li[data-note-id="${note.id}"] [data-move-disabled-reason]')?.textContent.trim().length > 0`
-      )
-    )
-  }
-  await click('[data-move-select-all]')
-  const selected = await js(
-    "Array.from(document.querySelectorAll('li[data-note-id] input:checked')).map(input => Number(input.closest('[data-note-id]').dataset.noteId))"
-  )
-  assert.deepEqual(
-    selected,
-    [movable.id],
-    'with quick extension enabled only historical single-day notes can be selected for movement'
-  )
-  await click('#historical-move-auto-toggle')
-  await until(
-    () => js('window.api.getSettingsSnapshot().then(s => s.values.notes.autoMoveToToday === true)'),
-    'automatic movement and quick extension can both remain enabled'
-  )
-  await until(
-    async () => localDateKey((await getNote(movable.id)).effective_at) === today,
-    'enabling automatic movement still moves the independent single-day note'
-  )
-  await expectQuickSetting(true, 'automatic movement must leave the quick-extension preference on')
-  await assertQuickNotesUnchanged(
-    extended,
-    'both switches enabled preserve existing until-completed notes'
-  )
-  await setQuickSetting(false)
-  await close()
-  const subsequentWeek = await createQuickNote(0, 'single_day', '关闭后恢复单日')
-  await switchView('month')
-  await open()
-  await expectQuickSetting(false, 'week disabling is synchronized to the newly loaded month view')
-  assertQuickSettingOnDisk(false)
-  assert.equal(
-    await js("document.querySelector('#historical-move-auto-toggle').getAttribute('aria-checked')"),
-    'true'
-  )
-  assert.equal(
-    await js('window.api.getSettingsSnapshot().then(s => s.values.notes.autoMoveToToday)'),
-    true
-  )
-  await close()
-  const subsequentMonth = await createQuickNote(1, 'single_day', '关闭后未来单日')
-  await assertQuickNotesUnchanged(
-    extended,
-    'disabling the preference changes only subsequent quick creation'
-  )
-  assert.equal((await getNote(baseline.id)).duration_kind, 'single_day')
-  quickCreateEvidence.push({
-    baseline,
-    extended,
-    movedSingleDay: await getNote(movable.id),
-    subsequentWeek,
-    subsequentMonth
-  })
-  await open()
-  scenarios.push(
-    'default-off quick duration persists globally; real month/week creation preserves today/history/future effective times and status; both switches keep until-completed history immovable; disabling affects only later quick notes'
-  )
+  const note = await createQuickNote(0, 'single_day', '快捷新建只在当天')
+  assert.equal(note.duration_kind, 'single_day')
+  scenarios.push('quick create stays on the selected day and no longer offers until completed')
 }
 
 const resultState = () =>
@@ -968,7 +868,7 @@ async function run() {
     assert.equal(bounds.scroll, true)
     assert.ok(bounds.action && bounds.close)
     const quickBounds = await js(`(() => {
-      const toggle = document.querySelector('[data-quick-create-until-completed]')
+      const toggle = document.querySelector('#historical-move-auto-toggle')
       toggle.scrollIntoView({ block: 'nearest' })
       const rect = toggle.getBoundingClientRect()
       const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
@@ -983,9 +883,9 @@ async function run() {
         quickBounds.rect.bottom <= quickBounds.height + 1 &&
         quickBounds.enabled &&
         quickBounds.hit,
-      'the independent quick-duration switch remains reachable at 150% in a narrow window'
+      'the automatic move switch remains reachable at 150% in a narrow window'
     )
-    assert.equal(quickBounds.label, '快捷新建默认持续到完成')
+    assert.equal(quickBounds.label, '每天自动移至今天')
     quickCreateEvidence.push({ narrow150: quickBounds })
     writeFileSync(
       join(process.env.YUNZHAO_TEST_EVIDENCE_DIR || root, 'historical-move-narrow.png'),

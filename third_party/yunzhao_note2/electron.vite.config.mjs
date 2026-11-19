@@ -84,6 +84,7 @@ export default defineConfig({
         input: {
           index: resolve('src/renderer/index.html'),
           month: resolve('src/renderer/month.html'),
+          'calendar-settings': resolve('src/renderer/calendar-settings.html'),
           week: resolve('src/renderer/week.html'),
           sticky: resolve('src/renderer/sticky.html'),
           reminder: resolve('src/renderer/reminder.html')

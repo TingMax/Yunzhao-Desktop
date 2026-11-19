@@ -223,6 +223,7 @@ private:
     // windows are hidden (`slidOut_`).
     bool covered_ = false, revealed_ = false, tucked_ = false, slidOut_ = false;
     ULONGLONG leftAt_ = 0; // when the pointer left a revealed bar
+    ULONGLONG revealAt_ = 0; // when the pointer arrived at the bottom edge
     std::map<HWND, std::pair<int, ULONGLONG>> raises_; // windows we were raised over: count, first time
     HWND lastCover_ = nullptr;
     ULONGLONG yieldUntil_ = 0; // a game is taking the screen; do not raise or reveal until then

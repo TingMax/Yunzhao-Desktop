@@ -14,6 +14,7 @@ import { loadMailAccounts } from "../../features/messages/mail/storage";
 import { useMailAccounts } from "../../features/messages/mail/useMailAccounts";
 import type { QQNotificationsController } from "../../features/messages/qq-notifications/QQNotifications";
 import type { WeChatRemindersController } from "../../features/messages/wechat/WeChatReminders";
+import type { WeComRemindersController } from "../../features/messages/wecom/useWeComReminders";
 import { useTranslation } from "../../i18n";
 import "./MessagesSettingsPage.css";
 
@@ -25,11 +26,13 @@ export function MessagesSettingsPage({
   settings,
   qqNotifications,
   wechatReminders,
+  wecomReminders,
   onSettingsChange,
 }: {
   settings: IslandSettings;
   qqNotifications: QQNotificationsController;
   wechatReminders: WeChatRemindersController;
+  wecomReminders: WeComRemindersController;
   onSettingsChange: (settings: IslandSettings) => void;
 }) {
   const t = useTranslation();
@@ -73,6 +76,13 @@ export function MessagesSettingsPage({
             onChange={(hidden) => void setHideMinimizedTaskbar(hidden)}
           />
         )}
+      </SettingsGroup>
+      <SettingsGroup title={labels.wecomTitle} footer={<Problem error={wecomReminders.actionError || wecomReminders.snapshot.error} hint={labels.wecomHint} />}>
+        <SettingsToggleRow
+          title={t.wecom.receive}
+          checked={wecomReminders.snapshot.enabled}
+          onChange={(enabled) => void wecomReminders.setEnabled(enabled)}
+        />
       </SettingsGroup>
       <MailGroups settings={settings} onSettingsChange={onSettingsChange} />
     </>

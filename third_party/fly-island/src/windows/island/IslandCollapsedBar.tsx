@@ -18,6 +18,7 @@ import type { MailController } from "../../features/messages/mail/MailPanel";
 import { MailOtpCode } from "../../features/messages/mail/MailOtpCode";
 import type { QQNotificationsController } from "../../features/messages/qq-notifications/QQNotifications";
 import type { WeChatRemindersController } from "../../features/messages/wechat/WeChatReminders";
+import type { WeComRemindersController } from "../../features/messages/wecom/useWeComReminders";
 import { useTranslation } from "../../i18n";
 import { TodoCountdown } from "../../features/todos/TodoCountdown";
 import { useUpdatePending } from "../../features/updater/useUpdatePending";
@@ -31,6 +32,7 @@ type IslandCollapsedBarProps = {
   qqMail: MailController;
   qqNotifications: QQNotificationsController;
   wechatReminders: WeChatRemindersController;
+  wecomReminders: WeComRemindersController;
   preview: MessagePreview | null;
   page: IslandPage;
   isExpanded: boolean;
@@ -76,6 +78,7 @@ export function IslandCollapsedBar({
   qqMail,
   qqNotifications,
   wechatReminders,
+  wecomReminders,
   preview,
   page,
   isExpanded,
@@ -110,10 +113,7 @@ export function IslandCollapsedBar({
   const { didDragRef, prepareWindowDrag, handleWindowDragMove, cancelWindowDrag } =
     useWindowDragGesture(isTucked || positionLocked, onWindowDragStart);
   const isMusicPlaying = mediaState.playbackStatus === "playing";
-  const pulseClassName = [
-    "island__pulse",
-    `island__pulse--agent-${agentVisualState}`,
-  ].join(" ");
+  void agentVisualState;
   const shownAgent = collapsedItem === "agent" ? agentSession : null;
 
   // The text and the status icons, placed in the order Settings → Appearance arranged.
@@ -135,6 +135,7 @@ export function IslandCollapsedBar({
           onClick={(event) => {
             if (event.detail === 0 || !didDragRef.current) {
               if (preview) {
+                if (preview.host) return;
                 const source = preview.source;
                 if (source === "qqMail" && qqMail.preview) {
                   onOpenMessages("qqMail");
@@ -143,7 +144,11 @@ export function IslandCollapsedBar({
                 }
                 const opening = source === "qq"
                   ? qqNotifications.openQQ(preview.title)
-                  : wechatReminders.openWeChat(preview.wechatMessageId);
+                  : source === "wecom"
+                    ? wecomReminders.openWeCom()
+                    : source === "wechat"
+                      ? wechatReminders.openWeChat(preview.wechatMessageId)
+                      : Promise.resolve(false);
                 void opening.then((opened) => {
                   if (opened === false) onOpenMessages(source);
                 });
@@ -153,17 +158,6 @@ export function IslandCollapsedBar({
             }
           }}
         >
-          {/* The agent light opens the Agent page; the text beside it reopens the last page. */}
-          <span
-            className="island__agent-light"
-            onClick={(event) => {
-              if (preview || (event.detail !== 0 && didDragRef.current)) return;
-              event.stopPropagation();
-              onOpenPage("agents");
-            }}
-          >
-            <span className={pulseClassName} />
-          </span>
           {updatePending && <span className="island-update-dot island-update-dot--inline" aria-hidden="true" />}
           {collapsedCover && <img className="collapsed-cover" src={collapsedCover} alt="" draggable={false} />}
           <CollapsedMessageContent preview={preview} enabled={!isExpanded && !isTucked}>

@@ -120,6 +120,51 @@ export function noteCountsByDate(days, notes, referenceDate = Date.now()) {
   )
 }
 
+// A week lane stays put so a long note does not jump rows on the days it shares.
+// A date that only carries the tail of that note would otherwise draw it in an
+// empty row and then clip it. Each date packs the notes it actually has.
+export function calendarDayChips(segments) {
+  const byDay = new Map()
+  for (const segment of segments || []) {
+    for (let offset = 0; offset < segment.columnSpan; offset += 1) {
+      const column = segment.columnStart + offset
+      const key = `${segment.weekIndex}:${column}`
+      if (!byDay.has(key)) byDay.set(key, [])
+      byDay.get(key).push({ segment, offset })
+    }
+  }
+  const chips = []
+  for (const [key, items] of byDay) {
+    const [weekIndex, column] = key.split(':').map(Number)
+    items.sort(
+      (left, right) =>
+        left.segment.lane - right.segment.lane ||
+        String(left.segment.noteId).localeCompare(String(right.segment.noteId), 'zh-CN', { numeric: true })
+    )
+    items.forEach(({ segment, offset }, lane) => {
+      const first = offset === 0 && !segment.continuesBefore
+      chips.push({
+        noteId: segment.noteId,
+        weekIndex,
+        columnStart: column,
+        columnSpan: 1,
+        startKey: segment.startKey,
+        endKey: segment.endKey,
+        continuesBefore: !first,
+        continuesAfter: offset === segment.columnSpan - 1 && segment.continuesAfter,
+        lane
+      })
+    })
+  }
+  return chips.sort(
+    (left, right) =>
+      left.weekIndex - right.weekIndex ||
+      left.columnStart - right.columnStart ||
+      left.lane - right.lane ||
+      String(left.noteId).localeCompare(String(right.noteId), 'zh-CN', { numeric: true })
+  )
+}
+
 export function hasHiddenCalendarNotes(totalCount, visibleCount) {
   const total = Math.max(0, Math.trunc(Number(totalCount) || 0))
   const visible = Math.max(0, Math.trunc(Number(visibleCount) || 0))

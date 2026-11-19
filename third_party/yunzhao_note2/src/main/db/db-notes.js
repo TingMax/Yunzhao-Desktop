@@ -470,7 +470,7 @@ export function activateNotes() {
     if (due.length === 0) return { count: 0, notified: [] }
 
     for (const note of due) {
-      if (note.reminder_channels) enqueueReminder(note.id, note.effective_at, ts)
+      if (note.reminder_channels & 7) enqueueReminder(note.id, note.effective_at, ts)
     }
 
     const result = db

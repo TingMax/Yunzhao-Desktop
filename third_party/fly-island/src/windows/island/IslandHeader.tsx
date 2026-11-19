@@ -27,6 +27,7 @@ type IslandHeaderProps = {
   agentStatusLabel: string;
   qqNotificationCount: number;
   wechatPending: boolean;
+  wecomPending: boolean;
   onPageChange: (page: IslandPage) => void;
   onCollapse: () => void;
   onOpenSettings: () => void;
@@ -57,6 +58,7 @@ export function IslandHeader({
   agentStatusLabel,
   qqNotificationCount,
   wechatPending,
+  wecomPending,
   onPageChange,
   onCollapse,
   onOpenSettings,
@@ -76,11 +78,9 @@ export function IslandHeader({
   // The page dots, in the order the user dragged them into; a dot can be dragged sideways.
   // Translation has one while it is on, also when it opens in its own window.
   const dots = pageOrder.filter((dot) => (dot === "translation" ? onOpenTranslator !== null : features[dot]));
-  const dotLabels = {
-    todo: t.island.todoList,
+  const dotLabels: Record<PageDot, string> = {
     music: t.island.music,
-    clipboard: t.island.clipboardHistory,
-    shelf: t.island.shelf,
+    vault: t.island.pageNames.vault,
     translation: t.translator.title,
   };
   const reorderDots = useCallback(
@@ -149,7 +149,7 @@ export function IslandHeader({
                 draggingDot === dot ? "dot-button--dragging" : "",
               ].filter(Boolean).join(" ")}
               type="button"
-              aria-label={dot === "todo" && updatePending ? t.island.todoListWithUpdate : dotLabels[dot]}
+              aria-label={dotLabels[dot]}
               aria-current={page === dot ? "page" : undefined}
               data-tip={t.island.pageNames[dot]}
               {...dotProps(dot)}
@@ -162,7 +162,6 @@ export function IslandHeader({
               }}
             >
               {showIcons && <Icon size={16} strokeWidth={1.5} absoluteStrokeWidth aria-hidden="true" />}
-              {dot === "todo" && updatePending && <span className="island-update-dot" aria-hidden="true" />}
             </button>
           );
         })}
@@ -181,11 +180,11 @@ export function IslandHeader({
             data-tip={t.messages.title}
             onClick={(event) => {
               event.stopPropagation();
-              onOpenMessages(wechatPending ? "wechat" : "qq");
+              onOpenMessages(wecomPending ? "wecom" : wechatPending ? "wechat" : "qq");
             }}
           >
             {showIcons && <Bell size={16} strokeWidth={1.5} absoluteStrokeWidth aria-hidden="true" />}
-            {(qqNotificationCount > 0 || wechatPending) && <span className="island-message-button__dot" aria-hidden="true" />}
+            {(qqNotificationCount > 0 || wechatPending || wecomPending) && <span className="island-message-button__dot" aria-hidden="true" />}
           </button>
         )}
       </div>
@@ -203,7 +202,7 @@ export function IslandHeader({
         <button
           className={`icon-button island-settings-button${page === "settings" ? " island-settings-button--active" : ""}`}
           type="button"
-          aria-label={communityPending ? t.island.settingsWithNews : t.settings.title}
+          aria-label={updatePending ? t.island.todoListWithUpdate : communityPending ? t.island.settingsWithNews : t.settings.title}
           aria-pressed={page === "settings"}
           onClick={(event) => {
             event.stopPropagation();
@@ -211,7 +210,8 @@ export function IslandHeader({
           }}
         >
           <Settings size={16} strokeWidth={1.5} absoluteStrokeWidth aria-hidden="true" />
-          {communityPending && <span className="island-settings-button__dot" aria-hidden="true" />}
+          {updatePending && <span className="island-update-dot" aria-hidden="true" />}
+          {!updatePending && communityPending && <span className="island-settings-button__dot" aria-hidden="true" />}
         </button>
         {/* Only once the island has been moved: at its default place the button would do nothing. */}
         {isDetached && (

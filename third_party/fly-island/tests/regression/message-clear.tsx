@@ -74,8 +74,8 @@ function Fixture() {
   mail = useMail(false);
   const qqController = useQQNotifications(false);
   const wechatController = useWeChatReminders(false);
-  return <MessagesPanel source={source} enabledSources={{ qq: true, wechat: true, qqMail: true }}
-    onSourceChange={changeSource} qqMail={mail} qqNotifications={qqController} wechatReminders={wechatController} />;
+  return <MessagesPanel source={source} enabledSources={{ qq: true, wechat: true, wecom: false, qqMail: true }}
+    onSourceChange={changeSource} qqMail={mail} qqNotifications={qqController} wechatReminders={wechatController} wecomReminders={{ snapshot: { revision: 0, enabled: false, status: "disabled", pending: false, lastAttentionAt: null, error: null }, busy: false, actionError: null, clear: async () => false, setEnabled: async () => false, openWeCom: async () => false, preview: null }} />;
 }
 const root = createRoot(document.getElementById("fixture")!);
 const results = document.getElementById("results")!;

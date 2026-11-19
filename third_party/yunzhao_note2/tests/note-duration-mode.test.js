@@ -4,13 +4,14 @@ import { describe, expect, it } from 'vitest'
 const readSource = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
 
 describe('note duration modes', () => {
-  it('offers three shared modes and keeps single-day as the default', () => {
+  it('offers single-day and fixed-day modes and keeps single-day as the default', () => {
     const field = readSource('src/renderer/src/components/note/NoteDurationField.vue')
     const listCreator = readSource('src/renderer/src/components/list/NewNotePanel.vue')
     const calendarCreator = readSource('src/renderer/src/components/month/MonthNoteCreator.vue')
     const editor = readSource('src/renderer/src/components/note/NoteEditor.vue')
 
-    for (const label of ['仅当天', '指定天数', '持续到完成']) expect(field).toContain(label)
+    for (const label of ['仅当天', '指定天数']) expect(field).toContain(label)
+    expect(field).not.toContain('持续到完成')
     expect(field).toContain(':min="2"')
     for (const source of [listCreator, calendarCreator]) {
       expect(source).toContain('useNewNotePreferences()')

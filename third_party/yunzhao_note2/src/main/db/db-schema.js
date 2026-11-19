@@ -5,11 +5,13 @@
  * V17 增加多方式提醒和独立提醒任务，版本号仅由迁移事务提交。
  * V18 增加附件清空提交日志，避免文件标记失败时恢复已提交的旧附件。
  * V19 扩大独立便利贴字号范围，保留已有待办与外观设置。
+ * V20 重建待办表时必须保持子表外键仍指向 notes，不能跟着临时表名走。
+ * V21 修复已经写成 notes_v19 的外键，否则更新待办会报“没有这张表”。
  */
 import { createReminderSchema } from './db-reminders.js'
 import { createAttachmentResetJournalSchema } from './attachment-reset-journal.js'
 
-export const DATABASE_SCHEMA_VERSION = 20
+export const DATABASE_SCHEMA_VERSION = 21
 
 function migrateToVersion19(db) {
   const definition = db
@@ -44,25 +46,111 @@ function migrateToVersion20(db) {
     const list = cols.map((name) => `"${name}"`).join(', ')
     db.prepare(`INSERT INTO ${to} (${list}) SELECT ${list} FROM ${from}`).run()
   }
+  // 默认的 RENAME 会把其他表里的 notes 外键改写成 notes_v19。
+  // 临时表删掉之后，保存待办就会去更新一张已经不存在的表。
+  const legacyAlter = Number(db.pragma('legacy_alter_table', { simple: true }) || 0)
+  db.pragma('legacy_alter_table = ON')
   db.pragma('foreign_keys = OFF')
-  db.exec(`
-    DROP TRIGGER IF EXISTS cancel_note_reminders;
-    DROP INDEX IF EXISTS idx_notes_status;
-    DROP INDEX IF EXISTS idx_notes_effective_at;
-    DROP INDEX IF EXISTS idx_notes_is_pinned;
-    DROP INDEX IF EXISTS idx_notes_status_pinned_sort;
-    DROP INDEX IF EXISTS idx_notes_is_deleted;
-    DROP INDEX IF EXISTS idx_templates_due;
-    DROP INDEX IF EXISTS idx_templates_last_note;
-    ALTER TABLE notes RENAME TO notes_v19;
-    ALTER TABLE note_templates RENAME TO note_templates_v19;
-  `)
-  createNotesSchema(db)
-  copy('notes_v19', 'notes')
-  copy('note_templates_v19', 'note_templates')
-  db.exec('DROP TABLE notes_v19; DROP TABLE note_templates_v19;')
-  createReminderSchema(db)
-  db.pragma('foreign_keys = ON')
+  try {
+    db.exec(`
+      DROP TRIGGER IF EXISTS cancel_note_reminders;
+      DROP INDEX IF EXISTS idx_notes_status;
+      DROP INDEX IF EXISTS idx_notes_effective_at;
+      DROP INDEX IF EXISTS idx_notes_is_pinned;
+      DROP INDEX IF EXISTS idx_notes_status_pinned_sort;
+      DROP INDEX IF EXISTS idx_notes_is_deleted;
+      DROP INDEX IF EXISTS idx_templates_due;
+      DROP INDEX IF EXISTS idx_templates_last_note;
+      ALTER TABLE notes RENAME TO notes_v19;
+      ALTER TABLE note_templates RENAME TO note_templates_v19;
+    `)
+    createNotesSchema(db)
+    copy('notes_v19', 'notes')
+    copy('note_templates_v19', 'note_templates')
+    db.exec('DROP TABLE notes_v19; DROP TABLE note_templates_v19;')
+    createReminderSchema(db)
+  } finally {
+    db.pragma(`legacy_alter_table = ${legacyAlter ? 'ON' : 'OFF'}`)
+    db.pragma('foreign_keys = ON')
+  }
+}
+
+function quoteIdent(name) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(`无法修复的表名: ${name}`)
+  }
+  return `"${name}"`
+}
+
+function rewriteRetiredNoteNames(sql) {
+  return sql
+    .replaceAll('"notes_v19"', 'notes')
+    .replaceAll('"note_templates_v19"', 'note_templates')
+    .replaceAll('notes_v19', 'notes')
+    .replaceAll('note_templates_v19', 'note_templates')
+}
+
+/** 已升级到 V20 的库里，子表外键可能仍写着已删除的 notes_v19。按原数据重建这些表。 */
+export function repairRenamedNoteForeignKeys(db) {
+  const tables = db
+    .prepare(
+      `SELECT name, sql FROM sqlite_master
+       WHERE type = 'table' AND sql IS NOT NULL
+         AND (sql LIKE '%notes_v19%' OR sql LIKE '%note_templates_v19%')
+       ORDER BY name`
+    )
+    .all()
+  if (!tables.length) return
+  const indexes = db
+    .prepare(`SELECT tbl_name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL`)
+    .all()
+  const triggers = db
+    .prepare(
+      `SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL`
+    )
+    .all()
+  const retired = new Set(tables.map((table) => table.name))
+  const affectedTriggers = triggers.filter(
+    (trigger) =>
+      retired.has(trigger.tbl_name) || tables.some((table) => trigger.sql.includes(table.name))
+  )
+  const foreignKeys = Number(db.pragma('foreign_keys', { simple: true }) || 0)
+  db.pragma('foreign_keys = OFF')
+  try {
+    db.transaction(() => {
+      for (const trigger of affectedTriggers) {
+        db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(trigger.name)}`)
+      }
+      for (const table of tables) {
+        const repairName = `${table.name}__fk_repair`
+        const createSql = rewriteRetiredNoteNames(table.sql).replace(
+          /^CREATE TABLE\s+(?:"[^"]+"|[^\s(]+)/i,
+          `CREATE TABLE ${quoteIdent(repairName)}`
+        )
+        db.exec(createSql)
+        const columns = db
+          .prepare(`PRAGMA table_info(${quoteIdent(table.name)})`)
+          .all()
+          .map((column) => quoteIdent(column.name))
+          .join(', ')
+        db.prepare(
+          `INSERT INTO ${quoteIdent(repairName)} (${columns}) SELECT ${columns} FROM ${quoteIdent(table.name)}`
+        ).run()
+        db.exec(`DROP TABLE ${quoteIdent(table.name)}`)
+        db.exec(`ALTER TABLE ${quoteIdent(repairName)} RENAME TO ${quoteIdent(table.name)}`)
+        for (const index of indexes) {
+          if (index.tbl_name === table.name && index.sql) {
+            db.exec(rewriteRetiredNoteNames(index.sql))
+          }
+        }
+      }
+      for (const trigger of affectedTriggers) {
+        if (trigger.sql) db.exec(rewriteRetiredNoteNames(trigger.sql))
+      }
+    })()
+  } finally {
+    db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`)
+  }
 }
 
 function migrateToVersion17(db) {
@@ -483,7 +571,15 @@ export function createDatabaseSchema(db) {
 
   createNotesSchema(db)
   createRemoteServiceSchema(db)
-  migrateDatabaseSchema(db, existingVersion)
+  // 外键开关在事务里不会生效，必须在迁移事务开始前关掉。
+  const foreignKeys = Number(db.pragma('foreign_keys', { simple: true }) || 0)
+  db.pragma('foreign_keys = OFF')
+  try {
+    migrateDatabaseSchema(db, existingVersion)
+    repairRenamedNoteForeignKeys(db)
+  } finally {
+    db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`)
+  }
   ensureTagRelationIndexes(db)
   ensureCalendarNoteIndexes(db)
   if (existingVersion < DATABASE_SCHEMA_VERSION) {

@@ -1,5 +1,6 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NOTE_DURATION_KINDS } from '../../../shared/calendar/calendar-date-rules.js'
+import { REMINDER_CHANNELS } from '../../../shared/reminder-rules.js'
 import { MAX_ASSIGNED_TAGS } from '../../../shared/tag-rules.js'
 
 const prefix = 'yunzhao:new-note-preferences:v1:'
@@ -9,7 +10,7 @@ const defaults = () => ({
   durationKind: NOTE_DURATION_KINDS.SINGLE_DAY,
   durationDays: 1,
   statusChoice: 'in_progress',
-  reminderChannels: 0,
+  reminderChannels: REMINDER_CHANNELS.force,
   isPinned: false,
   tagIds: []
 })
@@ -21,12 +22,16 @@ try {
   const saved = JSON.parse(localStorage.getItem(storageKey) || 'null')
   if (saved) {
     preferences = {
-      durationKind: Object.values(NOTE_DURATION_KINDS).includes(saved.durationKind)
-        ? saved.durationKind
-        : NOTE_DURATION_KINDS.SINGLE_DAY,
+      durationKind:
+        saved.durationKind === NOTE_DURATION_KINDS.FIXED_DAYS
+          ? NOTE_DURATION_KINDS.FIXED_DAYS
+          : NOTE_DURATION_KINDS.SINGLE_DAY,
       durationDays: Math.min(365, Math.max(1, Math.trunc(Number(saved.durationDays)) || 1)),
       statusChoice: saved.statusChoice === 'completed' ? 'completed' : 'in_progress',
-      reminderChannels: (Number(saved.reminderChannels) || 0) & 15,
+      reminderChannels:
+        saved.reminderChannels == null
+          ? REMINDER_CHANNELS.force
+          : (Number(saved.reminderChannels) || 0) & 15,
       isPinned: saved.isPinned === true,
       tagIds: Array.isArray(saved.tagIds)
         ? [...new Set(saved.tagIds.filter((id) => Number.isInteger(id) && id > 0))].slice(

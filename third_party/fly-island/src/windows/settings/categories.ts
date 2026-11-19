@@ -4,10 +4,9 @@ import { PLUGINS_ENABLED } from "../../features/releaseFlags.ts";
 const ALL_SETTINGS_CATEGORIES = [
   "general",
   "appearance",
-  "todos",
   "music",
   "translation",
-  "clipboard",
+  "vault",
   "messages",
   "agents",
   "agentConnect",
@@ -27,8 +26,7 @@ export type SettingsGroup = "basics" | "features" | "agents";
  */
 export const SETTINGS_GROUPS: readonly { label: SettingsGroup | null; categories: readonly SettingsCategory[] }[] = [
   { label: "basics", categories: ["general", "appearance"] },
-  { label: "features", categories: ["todos", "music", "translation", "clipboard", "messages"] },
-  { label: "agents", categories: ["agents", "agentConnect"] },
+  { label: "features", categories: ["music", "translation", "vault", "messages"] },
   { label: null, categories: PLUGINS_ENABLED ? ["plugins", "about"] : ["about"] },
 ];
 
@@ -40,14 +38,19 @@ const MERGED_CATEGORIES: Readonly<Record<string, SettingsCategory>> = {
   wechat: "messages",
   mail: "messages",
   updates: "about",
-  shelf: "clipboard",
-  agentAlerts: "agents",
-  sounds: "agents",
-  agentApprovals: "agents",
+  shelf: "general",
+  todos: "general",
+  clipboard: "general",
+  agentAlerts: "general",
+  sounds: "general",
+  agentApprovals: "general",
+  agents: "general",
+  agentConnect: "general",
 };
 
 /** The page a category name opens, old names included; null when there is no such page. */
 export function settingsCategoryFor(name: string): SettingsCategory | null {
+  if (name === "agents" || name === "agentConnect" || name === "agentAlerts" || name === "sounds" || name === "agentApprovals") return "general";
   if ((SETTINGS_CATEGORIES as readonly string[]).includes(name)) return name as SettingsCategory;
   return MERGED_CATEGORIES[name] ?? null;
 }

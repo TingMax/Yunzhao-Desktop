@@ -1,5 +1,7 @@
 //! The shelf list on disk (`file-shelf.json`) and the rules that keep it tidy.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 

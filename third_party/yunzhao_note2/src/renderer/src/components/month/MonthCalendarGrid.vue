@@ -11,6 +11,7 @@ import NoteImagePreview from '../note/NoteImagePreview.vue'
 import { animateCalendarPreview, calendarPreviewPosition } from './calendar-day-preview.js'
 import {
   buildCalendarEventSegments,
+  calendarDayChips,
   hasHiddenCalendarNotes,
   noteCountsByDate,
   notesCoveringDate
@@ -139,14 +140,13 @@ const contextMenuNote = computed(() => {
   if (contextMenuTarget.value?.type !== 'note') return null
   return noteById.value.get(String(contextMenuTarget.value.noteId)) || null
 })
+const dayChips = computed(() => calendarDayChips(segments.value))
 const visibleNoteCounts = computed(() => {
   const counts = new Map()
-  for (const segment of segments.value) {
-    if (!segmentIsVisible(segment)) continue
-    for (let offset = 0; offset < segment.columnSpan; offset += 1) {
-      const day = props.days[segment.weekIndex * 7 + segment.columnStart - 1 + offset]
-      if (isActiveDay(day)) counts.set(day.key, (counts.get(day.key) || 0) + 1)
-    }
+  for (const chip of dayChips.value) {
+    if (!segmentIsVisible(chip)) continue
+    const day = props.days[chip.weekIndex * 7 + chip.columnStart - 1]
+    if (isActiveDay(day)) counts.set(day.key, (counts.get(day.key) || 0) + 1)
   }
   return counts
 })
@@ -199,16 +199,15 @@ function segmentIsVisible(segment) {
 }
 
 function visibleEventLayoutSignature(notes) {
-  return buildCalendarEventSegments(props.days, notes, {
-    activeStartKey: activeDays.value[0]?.key,
-    activeEndKey: activeDays.value.at(-1)?.key,
-    referenceDate: props.todayKey
-  })
+  return calendarDayChips(
+    buildCalendarEventSegments(props.days, notes, {
+      activeStartKey: activeDays.value[0]?.key,
+      activeEndKey: activeDays.value.at(-1)?.key,
+      referenceDate: props.todayKey
+    })
+  )
     .filter(segmentIsVisible)
-    .map(
-      (segment) =>
-        `${segment.noteId}:${segment.weekIndex}:${segment.lane}:${segment.columnStart}:${segment.columnSpan}`
-    )
+    .map((chip) => `${chip.noteId}:${chip.weekIndex}:${chip.lane}:${chip.columnStart}`)
     .join('|')
 }
 
@@ -225,11 +224,11 @@ function dayCountLabel(day) {
   const previewSuffix = previewCount ? `，其中 ${previewCount} 条循环待办预览` : ''
   return dayHasHiddenNotes(day)
     ? `${day.key} 共 ${total} 条待办${previewSuffix}，已显示 ${visibleNoteCounts.value.get(day.key) || 0} 条，点击预览全部`
-    : `${day.key} 共 ${total} 条待办${previewSuffix}`
+    : `${day.key} 共 ${total} 条待办${previewSuffix}，点击查看全部`
 }
 
 function toggleCountPreview(day, event) {
-  if (!dayHasHiddenNotes(day) || activeQuickCreateKey.value === day.key) return
+  if (!noteCounts.value.get(day.key) || activeQuickCreateKey.value === day.key) return
   if (dayPreviewVisible.value && dayPreviewKey.value === day.key) {
     closeDayPreview()
     event.currentTarget.focus()
@@ -243,13 +242,15 @@ function toggleCountPreview(day, event) {
 function calculateCapacity() {
   return measureRendererLayout('layout.calendar-capacity', () => {
     const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 1
-    const headerHeight = 35 * rem
-    const footerHeight = 18 * rem
+    const atrium = Boolean(document.documentElement.dataset.atriumDock)
+    // 课表所在的日历格子较矮。横条间距和上下留白要与 atrium 样式一致，否则第三条待办会被藏起来。
+    const headerHeight = (atrium ? 30 : 35) * rem
+    const footerHeight = (atrium ? 16 : 18) * rem
     const base =
       Number.parseFloat(
         getComputedStyle(document.documentElement).getPropertyValue('--font-size-base')
       ) || 20
-    const pitch = Math.max(22, base * 0.72 + 9) * rem
+    const pitch = (atrium ? 17 : Math.max(22, base * 0.72 + 9)) * rem
     const next = weekRefs.value.map((element) => {
       const height = element?.getBoundingClientRect().height || 0
       return Math.max(0, Math.floor((height - headerHeight - footerHeight) / pitch))
@@ -596,7 +597,7 @@ async function submitQuickNote(day) {
   const options = {
     content,
     durationDays: 1,
-    durationKind: props.quickCreateUntilCompleted ? 'until_completed' : 'single_day'
+    durationKind: 'single_day'
   }
   if (day.key !== props.todayKey) {
     const time = defaultMonthNoteEffectiveTime(day.key, props.todayKey, new Date())
@@ -634,7 +635,7 @@ async function submitQuickNote(day) {
 function onDocumentPointerDown(event) {
   if (contextMenuVisible.value && !contextMenuRef.value?.contains(event.target)) closeContextMenu()
   // 数量按钮由 click 切换预览，不能在捕获阶段先关闭再被 click 重新打开。
-  const countTrigger = event.target.closest?.('.month-day-cell__count.is-overflow')
+  const countTrigger = event.target.closest?.('.month-day-cell__count')
   if (
     dayPreviewVisible.value &&
     !dayPreviewRef.value?.contains(event.target) &&
@@ -1006,44 +1007,33 @@ const protectedDraft = useDraftProtection({
                 <span class="month-day-cell__quick-spinner" aria-hidden="true" />
               </button>
             </form>
-            <component
-              :is="dayHasHiddenNotes(day) ? 'button' : 'span'"
+            <button
               v-if="isActiveDay(day) && noteCounts.get(day.key)"
+              type="button"
               class="month-day-cell__count"
               :class="{
                 'is-hidden': activeQuickCreateKey === day.key,
                 'is-overflow': dayHasHiddenNotes(day)
               }"
-              :type="dayHasHiddenNotes(day) ? 'button' : undefined"
-              :tabindex="
-                dayHasHiddenNotes(day)
-                  ? day.key === tabStopKey && activeQuickCreateKey !== day.key
-                    ? 0
-                    : -1
-                  : undefined
-              "
-              :disabled="
-                dayHasHiddenNotes(day) && activeQuickCreateKey === day.key ? true : undefined
-              "
+              :tabindex="day.key === tabStopKey && activeQuickCreateKey !== day.key ? 0 : -1"
+              :disabled="activeQuickCreateKey === day.key"
               :title="dayCountLabel(day)"
               :aria-label="dayCountLabel(day)"
-              :aria-haspopup="dayHasHiddenNotes(day) ? 'dialog' : undefined"
-              :aria-expanded="
-                dayHasHiddenNotes(day) ? dayPreviewVisible && dayPreviewKey === day.key : undefined
-              "
+              aria-haspopup="dialog"
+              :aria-expanded="dayPreviewVisible && dayPreviewKey === day.key"
               @click.stop="toggleCountPreview(day, $event)"
             >
               <span class="month-day-cell__count-label">{{ noteCounts.get(day.key) }}</span>
-            </component>
+            </button>
           </div>
         </div>
 
         <div class="month-week__events" aria-label="本周待办">
           <MonthEventBar
-            v-for="segment in segments.filter(
+            v-for="segment in dayChips.filter(
               (item) => item.weekIndex === weekIndex - 1 && segmentIsVisible(item)
             )"
-            :key="`${segment.noteId}-${segment.weekIndex}`"
+            :key="`${segment.noteId}-${segment.weekIndex}-${segment.columnStart}`"
             :segment="segment"
             :note="noteById.get(String(segment.noteId))"
             @open-context-menu="openNoteContextMenu"
@@ -1367,18 +1357,20 @@ const protectedDraft = useDraftProtection({
   text-indent: 0;
   letter-spacing: normal;
   appearance: none;
-  pointer-events: none;
+  cursor: pointer;
+  pointer-events: auto;
   transition:
     opacity 140ms ease,
     transform 220ms var(--ease-standard);
   white-space: nowrap;
 }
+.month-day-cell__count:hover {
+  background: var(--ui-fill-hover);
+}
 .month-day-cell__count.is-overflow {
   background: var(--ui-accent);
   color: #fff;
   font-weight: 600;
-  cursor: pointer;
-  pointer-events: auto;
 }
 .month-day-cell__count.is-overflow:hover {
   background: color-mix(in srgb, var(--ui-accent) 90%, #fff);
@@ -1388,7 +1380,7 @@ const protectedDraft = useDraftProtection({
   line-height: 1;
   pointer-events: none;
 }
-.month-day-cell__count.is-overflow:focus-visible {
+.month-day-cell__count:focus-visible {
   outline: 1px solid var(--ui-border-hover);
   outline-offset: 2px;
 }

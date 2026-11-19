@@ -27,10 +27,8 @@ import ColoredTextEditor from '../note/ColoredTextEditor.vue'
 import { useMessage } from '../../composables/useMessage.js'
 import { MAX_ASSIGNED_TAGS, NOTE_TAG_LIMIT_MESSAGE } from '../../../../shared/tag-rules.js'
 import { normalizeNoteTextColorRanges } from '../../../../shared/note-text-color-rules.js'
-import {
-  DEFAULT_NEW_NOTE_SCHEDULE_TIME,
-  MIN_SCHEDULE_LEAD_TIME_MINUTES
-} from '../../../../shared/note-scheduling-rules.js'
+import { DEFAULT_NEW_NOTE_SCHEDULE_TIME } from '../../../../shared/note-scheduling-rules.js'
+import { storedReminderChannels } from '../../../../shared/reminder-rules.js'
 
 const emit = defineEmits(['create'])
 const props = defineProps({
@@ -267,9 +265,12 @@ async function handleCreate() {
       content: text,
       remark: remark.value.replace(/\r\n?/g, '\n'),
       contentColorRanges: normalizeNoteTextColorRanges(contentColorRanges.value, text),
-      durationKind: durationKind.value,
+      durationKind: durationKind.value === 'fixed_days' ? 'fixed_days' : 'single_day',
       durationDays: durationDays.value,
-      reminderChannels: canEnableNotify.value ? reminderChannels.value : 0,
+      reminderChannels: storedReminderChannels(reminderChannels.value, {
+        completed: status.value === 'completed',
+        canScheduleAtEffectiveTime: canEnableNotify.value
+      }),
       isPinned: isPinned.value ? 1 : 0
     }
     Object.assign(options, stateFields)
@@ -430,15 +431,9 @@ defineExpose({
       <div class="nnp-notification-field">
         <ReminderChannelPicker
           v-model="reminderChannels"
-          :disabled="!canEnableNotify"
-          :help-text="`仅未来至少 ${MIN_SCHEDULE_LEAD_TIME_MINUTES} 分钟的预约可开启；稍后提醒不会改变生效时间。`"
-          :disabled-reason="
-            status === 'completed'
-              ? '已完成待办不再提醒'
-              : status === 'initialized'
-                ? `新预约至少提前 ${MIN_SCHEDULE_LEAD_TIME_MINUTES} 分钟`
-                : '设置未来生效时间后可选择生效提醒'
-          "
+          :disabled="status === 'completed'"
+          help-text="桌面强制弹窗按标题栏「定时任务」的每日时间弹出，今天和更早没完成的待办都会出现，与生效时间无关。系统提醒、软件内弹窗和托盘仍只在未来生效时间触发。"
+          :disabled-reason="status === 'completed' ? '已完成待办不再提醒' : ''"
         />
       </div>
 

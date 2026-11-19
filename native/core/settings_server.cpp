@@ -230,6 +230,12 @@ std::string SettingsServer::Handle(const std::string& request)
         SendMessageTimeoutW(host_, WM_ATRIUM_SIZE_CALENDAR, WPARAM(milli), 0, SMTO_ABORTIFHUNG, 3000, nullptr);
         return Reply(L"ok");
     }
+    if (op == L"calendar") {
+        DWORD_PTR state = 0;
+        WPARAM ask = o.HasKey(L"on") ? (o.GetNamedBoolean(L"on") ? 1 : 0) : 2;
+        SendMessageTimeoutW(host_, WM_ATRIUM_CALENDAR, ask, 0, SMTO_ABORTIFHUNG, 8000, &state);
+        return Reply(L"ok", state ? L"on" : L"off");
+    }
 
     std::lock_guard t(txn_);
     Settings saved, current;

@@ -54,11 +54,10 @@
    *   --ink-rgb      text and icons
    *   --overlay-rgb  translucent lifts, borders and hairlines on a surface
    */
-  --ink-rgb: 248, 246, 240;
-  /* The same channels one by one, for relative colours (windows/island/IslandPageText.css). */
-  --ink-r: 248;
-  --ink-g: 246;
-  --ink-b: 240;
+  --ink-rgb: 245, 245, 247;
+  --ink-r: 245;
+  --ink-g: 245;
+  --ink-b: 247;
   --overlay-rgb: 255, 255, 255;
   /* Opacities of the four text levels (see --text-1..placeholder). */
   --text-1-alpha: 0.96;
@@ -76,13 +75,13 @@
   --color-inverse-ink: #101013;
   --color-surface-dark: #111112;
   /* Menus and pop-overs that float over a panel. */
-  --color-popover: #26262d;
+  --color-popover: #2c2c2e;
   /* The settings window's pages and its sidebar column. */
-  --color-window: #17191d;
-  --color-window-sidebar: #111317;
+  --color-window: #1c1c1e;
+  --color-window-sidebar: #161618;
 
   /* Accents and states */
-  --color-accent: #74d6ff;
+  --color-accent: #0a84ff;
   --color-sky: #a8d8ea;
   --color-success: #2f8c61;
   --color-danger: #c75065;
@@ -97,13 +96,13 @@
   --color-light-done: #8e8e93;
   /* Something new waits to be looked at (the community group's red dots). */
   --color-badge: #ff453a;
-  --color-focus-ring: rgba(143, 216, 255, 0.88);
-  --color-focus-ring-soft: rgba(143, 216, 255, 0.72);
+  --color-focus-ring: rgba(10, 132, 255, 0.88);
+  --color-focus-ring-soft: rgba(10, 132, 255, 0.72);
   /* The collapsed island's shading, top to bottom (faded with its fill). */
   --island-shade-top: rgba(255, 255, 255, 0.06);
   --island-shade-bottom: rgba(0, 0, 0, 0.22);
   /* Deep panels inside the island (translation, the file shelf) and floating tips and menus. */
-  --panel-deep-rgb: 20, 20, 25;
+  --panel-deep-rgb: 44, 44, 46;
   --float-rgb: 30, 30, 35;
   /* Native form controls and scrollbars where a page asks for them. */
   --color-scheme: dark;
@@ -128,23 +127,23 @@
  */
 :root[data-theme="light"],
 [data-tone="light"] {
-  --ink-rgb: 26, 26, 32;
-  --ink-r: 26;
-  --ink-g: 26;
-  --ink-b: 32;
+  --ink-rgb: 29, 29, 31;
+  --ink-r: 29;
+  --ink-g: 29;
+  --ink-b: 31;
   --overlay-rgb: 24, 24, 32;
   --text-1-alpha: 0.94;
   --text-2-alpha: 0.72;
   --text-3-alpha: 0.64;
   --text-placeholder-alpha: 0.5;
-  --color-fg-strong: #111116;
-  --color-inverse: #1d1d22;
+  --color-fg-strong: #1d1d1f;
+  --color-inverse: #1d1d1f;
   --color-inverse-ink: #f7f7f9;
   --color-surface-dark: #f3f3f6;
   --color-popover: #ffffff;
-  --color-window: #f3f3f6;
-  --color-window-sidebar: #e8e8ed;
-  --color-accent: #0071b8;
+  --color-window: #f5f5f7;
+  --color-window-sidebar: #ebebf0;
+  --color-accent: #0a84ff;
   --color-sky: #3f86a8;
   --color-success: #1f8f57;
   --color-danger: #c7354b;
@@ -157,8 +156,8 @@
   --color-light-working: #22a447;
   --color-light-done: #8e8e93;
   --color-badge: #f0362b;
-  --color-focus-ring: rgba(0, 113, 184, 0.78);
-  --color-focus-ring-soft: rgba(0, 113, 184, 0.6);
+  --color-focus-ring: rgba(10, 132, 255, 0.78);
+  --color-focus-ring-soft: rgba(10, 132, 255, 0.6);
   --island-shade-top: rgba(255, 255, 255, 0.5);
   --island-shade-bottom: rgba(0, 0, 0, 0.05);
   --panel-deep-rgb: 255, 255, 255;

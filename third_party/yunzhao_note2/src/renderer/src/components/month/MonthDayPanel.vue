@@ -139,6 +139,7 @@ onBeforeUnmount(() => {
         :key="note.id"
         :note="note"
         :status-transition="statusTransitions.get(note.id) || null"
+        external-edit
         @edit="emit('edit', $event)"
         @status-action="emit('status-action', $event)"
       />

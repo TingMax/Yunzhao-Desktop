@@ -23,6 +23,7 @@ import { MAX_ASSIGNED_TAGS, NOTE_TAG_LIMIT_MESSAGE } from '../../../../shared/ta
 import { NOTE_DURATION_KINDS } from '../../../../shared/calendar/calendar-date-rules.js'
 import { normalizeNoteTextColorRanges } from '../../../../shared/note-text-color-rules.js'
 import { MIN_SCHEDULE_LEAD_TIME_MINUTES } from '../../../../shared/note-scheduling-rules.js'
+import { storedReminderChannels } from '../../../../shared/reminder-rules.js'
 
 const props = defineProps({
   note: { type: Object, required: true }
@@ -84,10 +85,10 @@ function createSnapshot(note) {
     effectiveAt: formatDateTime(note.effective_at),
     finishedAt: note.status === 'completed' ? formatDateTime(note.finished_at) : '',
     durationKind:
-      note.duration_kind ||
-      (Number(note.duration_days) > 1
+      note.duration_kind === NOTE_DURATION_KINDS.FIXED_DAYS ||
+      (!note.duration_kind && Number(note.duration_days) > 1)
         ? NOTE_DURATION_KINDS.FIXED_DAYS
-        : NOTE_DURATION_KINDS.SINGLE_DAY),
+        : NOTE_DURATION_KINDS.SINGLE_DAY,
     durationDays: Number(note.duration_days) || 1,
     reminderChannels: Number(note.reminder_channels ?? (note.notify_enabled ? 1 : 0)),
     pendingReminderTime: note.pending_reminder ? formatDateTime(note.pending_reminder.due_at) : '',
@@ -191,10 +192,9 @@ const scheduleHelp = computed(() => {
   return `可修正生效时间；当前或过去可进行中、已完成，改为未来将转为未开始。新预约需至少晚于当前时间 ${MIN_SCHEDULE_LEAD_TIME_MINUTES} 分钟。`
 })
 
-const notifyHelp = computed(() =>
-  status.value === 'initialized'
-    ? `未来预约可设置生效提醒；新预约至少提前 ${MIN_SCHEDULE_LEAD_TIME_MINUTES} 分钟，已有预约不受剩余时间影响。`
-    : '进行中待办可修改后续提醒方式；关闭全部方式会取消待触发提醒。已结束的提醒不会重新触发。'
+const notifyHelp = computed(
+  () =>
+    '桌面强制弹窗按标题栏「定时任务」的每日时间弹出，今天和更早没完成的待办都会出现，与生效时间无关。系统提醒、软件内弹窗和托盘仍只在未来生效时间触发。'
 )
 const notifyDisabledReason = computed(() => {
   if (status.value === 'completed') return '已完成待办不再提醒'
@@ -329,9 +329,12 @@ async function handleSave() {
         remark: remark.value.replace(/\r\n?/g, '\n'),
         contentColorRanges: normalizeNoteTextColorRanges(contentColorRanges.value, text),
         ...stateFields,
-        durationKind: durationKind.value,
+        durationKind: durationKind.value === 'fixed_days' ? 'fixed_days' : 'single_day',
         durationDays: durationDays.value,
-        reminderChannels: canEditNotify.value ? reminderChannels.value : 0,
+        reminderChannels: storedReminderChannels(reminderChannels.value, {
+          completed: status.value === 'completed',
+          canScheduleAtEffectiveTime: canEditNotify.value
+        }),
         ...(canEditPendingReminder.value &&
         initialSnapshot.value.pendingReminder &&
         (pendingReminderCancelled.value ||
@@ -432,7 +435,7 @@ const commitLocked = computed(() => protectedDraft.commitLocked.value)
       <div class="ne-notification-field ne-stagger" style="animation-delay: 100ms">
         <ReminderChannelPicker
           v-model="reminderChannels"
-          :disabled="!canEditNotify"
+          :disabled="status === 'completed'"
           :help-text="notifyHelp"
           :disabled-reason="notifyDisabledReason"
         />

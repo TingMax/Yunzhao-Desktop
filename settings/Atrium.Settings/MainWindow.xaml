@@ -67,6 +67,7 @@
                 <ListViewItem Tag="13" AutomationProperties.Name="时间"><local:NavLabel Glyph="&#xE823;" Text="时间" Sub="True" /></ListViewItem>
                 <ListViewItem Tag="3" AutomationProperties.Name="通知"><local:NavLabel Glyph="&#xEA8F;" Text="通知" Sub="True" /></ListViewItem>
                 <ListViewItem Tag="4" AutomationProperties.Name="组件"><local:NavLabel Glyph="&#xE8A9;" Text="组件" /></ListViewItem>
+                <ListViewItem Tag="16" AutomationProperties.Name="日历"><local:NavLabel Glyph="&#xE787;" Text="日历" /></ListViewItem>
                 <ListViewItem Tag="5" AutomationProperties.Name="灵动岛"><local:NavLabel Glyph="&#xEC4A;" Text="灵动岛" /></ListViewItem>
                 <ListViewItem Tag="15" AutomationProperties.Name="教师工作台"><local:NavLabel Glyph="&#xE7BE;" Text="教师工作台" /></ListViewItem>
                 <ListViewItem Tag="6" AutomationProperties.Name="显示器"><local:NavLabel Glyph="&#xE7F4;" Text="显示器" /></ListViewItem>
@@ -393,7 +394,6 @@
                                     <RadioButton GroupName="widgetcategory" Content="全部" Tag="全部" Style="{StaticResource SegmentStyle}" Checked="OnWidgetCategoryChecked" IsChecked="True" />
                                     <RadioButton GroupName="widgetcategory" Content="时钟" Tag="时钟" Style="{StaticResource SegmentStyle}" Checked="OnWidgetCategoryChecked" />
                                     <RadioButton GroupName="widgetcategory" Content="天气" Tag="天气" Style="{StaticResource SegmentStyle}" Checked="OnWidgetCategoryChecked" />
-                                    <RadioButton GroupName="widgetcategory" Content="日历" Tag="日历" Style="{StaticResource SegmentStyle}" Checked="OnWidgetCategoryChecked" />
                                     <RadioButton GroupName="widgetcategory" Content="效率" Tag="效率" Style="{StaticResource SegmentStyle}" Checked="OnWidgetCategoryChecked" />
                                     <RadioButton GroupName="widgetcategory" Content="系统" Tag="系统" Style="{StaticResource SegmentStyle}" Checked="OnWidgetCategoryChecked" />
                                 </local:SegmentTrack>
@@ -404,12 +404,134 @@
                         </StackPanel>
                     </StackPanel>
 
+                    <StackPanel x:Name="PageSlot15" Visibility="Collapsed" />
+                    <StackPanel x:Name="MainCalendar" Visibility="Collapsed" Spacing="10">
+                        <TextBlock Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap"
+                                   Text="这里的每一项都会马上作用到桌面上的日历。显示开关负责打开和关闭外面的日历。" />
+                        <local:ToggleTile x:Name="CalendarOpenSwitch" Title="显示日历" SwitchName="显示日历" Toggled="OnCalendarOpenToggled" Flat="True"
+                                          Note="打开后日历出现在桌面上。关掉后，桌面上的日历会退出。" />
+                        <local:SliderTile x:Name="DateSizeSlider" />
+                        <local:SliderTile x:Name="TableSizeSlider" />
+                        <local:SliderTile x:Name="BadgeScaleSlider" />
+                        <local:SliderTile x:Name="DockSpeedSlider" />
+                        <TextBlock Text="日期字号会改变外面日历的文字大小，课表字号改变课表表头，角标大小改变课表日期上的数量。收起速度是收起和展开所用的时间，越短越快。" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="靠边收起" Style="{StaticResource RowTitleStyle}" />
+                            <ToggleSwitch x:Name="EdgeHideSwitch" Style="{StaticResource SwitchStyle}" Toggled="OnEdgeHideToggled" />
+                            <TextBlock Text="点日历或课表标题栏上的收起图标后，收成屏幕边缘的一条。鼠标放上去会有反应，点一下展开。不点图标不会自己收起。" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <TextBlock Text="基础样式" Style="{StaticResource SectionStyle}" />
+                        <TextBlock Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" Text="名称和日历自己的设置一一对应。改动会写进日历，并马上出现在桌面上的窗口里。" />
+                        <local:SliderTile x:Name="IconScaleSlider" />
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="图标颜色" Style="{StaticResource RowTitleStyle}" />
+                            <local:SegmentTrack>
+                                <RadioButton x:Name="IconBlack" GroupName="iconcolor" Content="黑色" Tag="black" Style="{StaticResource SegmentStyle}" Checked="OnCalendarIconColorChecked" />
+                                <RadioButton x:Name="IconWhite" GroupName="iconcolor" Content="白色" Tag="white" Style="{StaticResource SegmentStyle}" Checked="OnCalendarIconColorChecked" />
+                            </local:SegmentTrack>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="背景颜色" Style="{StaticResource RowTitleStyle}" />
+                            <TextBox x:Name="CalendarBgColor" Width="120" PlaceholderText="#FFFFFF" LostFocus="OnCalendarBgColorChanged" />
+                        </StackPanel>
+                        <local:ToggleTile x:Name="CalendarBorderSwitch" Title="窗口边框" SwitchName="窗口边框" Toggled="OnCalendarBorderToggled" Flat="True" />
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="界面缩放" Style="{StaticResource RowTitleStyle}" />
+                            <ComboBox x:Name="CalendarUiScale" Width="140" SelectionChanged="OnCalendarUiScaleChanged">
+                                <ComboBoxItem Content="90%" Tag="0.9" />
+                                <ComboBoxItem Content="100%" Tag="1" />
+                                <ComboBoxItem Content="110%" Tag="1.1" />
+                                <ComboBoxItem Content="125%" Tag="1.25" />
+                                <ComboBoxItem Content="150%" Tag="1.5" />
+                            </ComboBox>
+                        </StackPanel>
+                        <local:SliderTile x:Name="FontSizeSlider" />
+                        <local:SliderTile x:Name="RemarkSizeSlider" />
+                        <local:SliderTile x:Name="CompactFontSlider" />
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="文字颜色" Style="{StaticResource RowTitleStyle}" />
+                            <TextBox x:Name="CalendarTextColor" Width="120" PlaceholderText="#1D1D1F" LostFocus="OnCalendarTextColorChanged" />
+                        </StackPanel>
+                        <TextBlock Text="窗口背景与圆角" Style="{StaticResource SectionStyle}" />
+                        <local:ToggleTile x:Name="CalendarBlurSwitch" Title="启用毛玻璃" SwitchName="启用毛玻璃" Toggled="OnCalendarBlurToggled" Flat="True" />
+                        <local:SliderTile x:Name="WindowOpacitySlider" />
+                        <local:SliderTile x:Name="BlurRadiusSlider" />
+                        <local:SliderTile x:Name="BlurSaturationSlider" />
+                        <local:SliderTile x:Name="CornerSlider" />
+                        <TextBlock Text="弹窗与浮层" Style="{StaticResource SectionStyle}" />
+                        <local:SliderTile x:Name="GlassBlurSlider" />
+                        <local:SliderTile x:Name="GlassOpacitySlider" />
+                        <TextBlock Text="窗口与操作" Style="{StaticResource SectionStyle}" />
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="窗口层级" Style="{StaticResource RowTitleStyle}" />
+                            <ComboBox x:Name="CalendarZOrder" Width="160" SelectionChanged="OnCalendarZOrderChanged">
+                                <ComboBoxItem Content="始终置顶" Tag="top" />
+                                <ComboBoxItem Content="正常层级" Tag="normal" />
+                                <ComboBoxItem Content="始终置底" Tag="bottom" />
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="隐藏后的唤出方式" Style="{StaticResource RowTitleStyle}" />
+                            <ComboBox x:Name="CalendarDockReveal" Width="160" SelectionChanged="OnCalendarDockRevealChanged">
+                                <ComboBoxItem Content="直接唤出" Tag="direct" />
+                                <ComboBoxItem Content="触边确认" Tag="on-touch" />
+                                <ComboBoxItem Content="常显确认" Tag="persistent" />
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="启用边缘" Style="{StaticResource RowTitleStyle}" />
+                            <StackPanel Orientation="Horizontal" Spacing="16">
+                                <CheckBox x:Name="DockEdgeTop" Content="上" Checked="OnCalendarDockEdgesChanged" Unchecked="OnCalendarDockEdgesChanged" />
+                                <CheckBox x:Name="DockEdgeLeft" Content="左" Checked="OnCalendarDockEdgesChanged" Unchecked="OnCalendarDockEdgesChanged" />
+                                <CheckBox x:Name="DockEdgeRight" Content="右" Checked="OnCalendarDockEdgesChanged" Unchecked="OnCalendarDockEdgesChanged" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="视图显示快捷键" Style="{StaticResource RowTitleStyle}" />
+                            <TextBox x:Name="ShortcutView" Width="160" PlaceholderText="例如 Control+Alt+Y" LostFocus="OnCalendarShortcutChanged" />
+                        </StackPanel>
+                        <TextBlock Text="待办与截图" Style="{StaticResource SectionStyle}" />
+                        <local:ToggleTile x:Name="TagColorSwitch" Title="标签颜色" SwitchName="标签颜色" Toggled="OnCalendarTagColorToggled" Flat="True" />
+                        <local:ToggleTile x:Name="QuickEditSwitch" Title="双击快速编辑正文" SwitchName="双击快速编辑正文" Toggled="OnCalendarQuickEditToggled" Flat="True" />
+                        <local:ToggleTile x:Name="MinimalModeSwitch" Title="极简模式" SwitchName="极简模式" Toggled="OnCalendarMinimalToggled" Flat="True" Note="只在日历的列表视图里生效。" />
+                        <local:ToggleTile x:Name="HideShotSwitch" Title="截图时隐藏主视图" SwitchName="截图时隐藏主视图" Toggled="OnCalendarHideShotToggled" Flat="True" />
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="新建待办" Style="{StaticResource RowTitleStyle}" />
+                            <TextBox x:Name="ShortcutNewNote" Width="160" PlaceholderText="F3" LostFocus="OnCalendarShortcutChanged" />
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="截图" Style="{StaticResource RowTitleStyle}" />
+                            <TextBox x:Name="ShortcutShot" Width="160" PlaceholderText="F1" LostFocus="OnCalendarShortcutChanged" />
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource FlatRowStyle}">
+                            <TextBlock Text="快速截图复制" Style="{StaticResource RowTitleStyle}" />
+                            <TextBox x:Name="ShortcutShotCopy" Width="180" PlaceholderText="Control+F1" LostFocus="OnCalendarShortcutChanged" />
+                        </StackPanel>
+                        <TextBlock Text="天气与日历" Style="{StaticResource SectionStyle}" />
+                        <local:ToggleTile x:Name="WeatherSwitch" Title="天气" SwitchName="天气" Toggled="OnCalendarWeatherToggled" Flat="True" />
+                        <TextBlock Text="系统与数据" Style="{StaticResource SectionStyle}" />
+                        <local:ToggleTile x:Name="NoticeSwitch" Title="接收软件通知" SwitchName="接收软件通知" Toggled="OnCalendarNoticeToggled" Flat="True" />
+                        <local:ToggleTile x:Name="DeviceSwitch" Title="后续设备统计" SwitchName="后续设备统计" Toggled="OnCalendarDeviceToggled" Flat="True" />
+                        <TextBlock Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" Text="壁纸导入、节假日下载、查看日志、恢复默认和清空待办仍在日历自己的设置里完成，那些操作要打开文件或确认对话框。" />
+                        <StackPanel x:Name="CalendarGallery" Visibility="Collapsed" />
+                        <TextBlock x:Name="CalendarHint" Visibility="Collapsed" />
+                    </StackPanel>
+
                     <!-- ==== Stage Manager: the desktop with its strip, cards that swap when clicked ==== -->
                     <StackPanel x:Name="MainStage" Visibility="Collapsed" Spacing="10">
-                        <TextBlock Text="灵动岛" Style="{StaticResource LargeTitleStyle}" />
                         <TextBlock Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap"
-                                   Text="桌面顶部的灵动岛属于 Yunzhao，不再单独占一个应用图标。下面是它的设置，后面会换成 Yunzhao 自己的。" />
-                        <Border x:Name="IslandHost" Height="660" CornerRadius="16" Background="{ThemeResource CardBrush}" />
+                                   Text="下面的分组和每一项都与灵动岛原来的设置对应，名称相同。改动直接写给灵动岛，这一页打开时不再另开窗口。" />
+                        <local:SegmentTrack x:Name="IslandCategories">
+                            <RadioButton GroupName="islandpage" Content="通用" Tag="general" Style="{StaticResource SegmentStyle}" Checked="OnIslandCategoryChecked" IsChecked="True" />
+                            <RadioButton GroupName="islandpage" Content="外观" Tag="appearance" Style="{StaticResource SegmentStyle}" Checked="OnIslandCategoryChecked" />
+                            <RadioButton GroupName="islandpage" Content="音乐" Tag="music" Style="{StaticResource SegmentStyle}" Checked="OnIslandCategoryChecked" />
+                            <RadioButton GroupName="islandpage" Content="翻译" Tag="translation" Style="{StaticResource SegmentStyle}" Checked="OnIslandCategoryChecked" />
+                            <RadioButton GroupName="islandpage" Content="消息" Tag="messages" Style="{StaticResource SegmentStyle}" Checked="OnIslandCategoryChecked" />
+                            <RadioButton GroupName="islandpage" Content="账号" Tag="vault" Style="{StaticResource SegmentStyle}" Checked="OnIslandCategoryChecked" />
+                            <RadioButton GroupName="islandpage" Content="关于" Tag="about" Style="{StaticResource SegmentStyle}" Checked="OnIslandCategoryChecked" />
+                        </local:SegmentTrack>
+                        <StackPanel x:Name="IslandPage" Spacing="10" />
+                        <Border x:Name="IslandHost" Height="0" Visibility="Collapsed" />
                         <Border x:Name="StagePreview" Height="0" Visibility="Collapsed" SizeChanged="OnStagePreviewSizeChanged">
                             <Grid>
                                 <Canvas x:Name="StageCanvas" HorizontalAlignment="Left" VerticalAlignment="Top" />
@@ -641,6 +763,8 @@
                                             <RadioButton x:Name="HideAlways" GroupName="autohide" Content="一直隐藏" Tag="always" Style="{StaticResource SegmentStyle}" Checked="OnAutoHideChecked" />
                                         </local:SegmentTrack>
                                 </StackPanel>
+                                <local:SliderTile x:Name="BarRevealDelay" />
+                                <local:SliderTile x:Name="BarHideDelay" />
                             </StackPanel>
                             <StackPanel x:Name="DockLayout">
                                 <Grid>
@@ -703,7 +827,8 @@
                         <StackPanel x:Name="SideNotify" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
                                 <TextBlock Text="任务栏" Style="{StaticResource SectionStyle}" />
-                                <local:ToggleTile x:Name="NotificationsSwitch" Title="通知按钮" SwitchName="显示通知按钮" Toggled="OnBarContentToggled" Flat="True" />
+                                <local:ToggleTile x:Name="NotificationsSwitch" Title="通知按钮" SwitchName="显示通知按钮" Toggled="OnBarContentToggled" Flat="True" Visibility="Collapsed" />
+                                <TextBlock Text="通知显示在屏幕顶部的灵动岛上，任务栏不再放通知按钮。" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel>
                                 <Grid>
@@ -798,15 +923,6 @@
                                         </local:SegmentTrack>
                                     <TextBlock Text="只影响组件，不改变任务栏的玻璃、模糊和文字颜色。" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
                                 </StackPanel>
-                                <TextBlock Text="日历" Style="{StaticResource SectionStyle}" />
-                                <local:SliderTile x:Name="DateSizeSlider" />
-                                <local:SliderTile x:Name="TableSizeSlider" />
-                                <TextBlock Text="日期字号用于周、月和阴历，课表字号用于课表表头。只在这里调整，不出现在桌面组件上。" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
-                                <StackPanel Style="{StaticResource FlatRowStyle}">
-                                    <TextBlock Text="靠边收起" Style="{StaticResource RowTitleStyle}" />
-                                    <ToggleSwitch x:Name="EdgeHideSwitch" Style="{StaticResource SwitchStyle}" Toggled="OnEdgeHideToggled" />
-                                    <TextBlock Text="打开后，日历课表贴住显示器任意一边时整块收进边缘，鼠标靠近再展开。关掉之后贴边也不收。" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
-                                </StackPanel>
                                 <StackPanel Style="{StaticResource FlatRowStyle}">
                                     <TextBlock Text="玻璃映出" Style="{StaticResource RowTitleStyle}" />
                                     <local:SegmentTrack>
@@ -816,6 +932,7 @@
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
+                        <StackPanel x:Name="SideCalendar" Visibility="Collapsed" />
                     </StackPanel>
                 </ScrollViewer>
             </Grid>

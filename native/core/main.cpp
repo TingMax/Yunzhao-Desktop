@@ -507,7 +507,9 @@ static void StartYunzhaoIsland()
     auto slash = folder.find_last_of(L"\\/");
     if (slash != std::wstring::npos)
         folder.resize(slash);
-    std::wstring path;
+    std::wstring path = folder + L"\\Island\\focusd-island.exe";
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+        path.clear();
     for (int i = 0; i < 6 && path.empty(); ++i) {
         std::wstring candidate = folder + L"\\third_party\\fly-island\\src-tauri\\target\\release\\focusd-island.exe";
         if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
@@ -546,6 +548,29 @@ static void StartYunzhaoIsland()
     if (process.hThread) CloseHandle(process.hThread);
     if (process.hProcess) CloseHandle(process.hProcess);
     SetEnvironmentVariableW(L"YUNZHAO_HOST", nullptr);
+}
+
+// The island is started by Yunzhao. Closing the main app also closes it, including a
+// frameless settings window that would otherwise stay on the desktop with no close button.
+static void StopYunzhaoIsland()
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snap, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, L"focusd-island.exe") != 0)
+                continue;
+            HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
+            if (process) {
+                TerminateProcess(process, 0);
+                CloseHandle(process);
+            }
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
 }
 
 void ApplySettings(const Settings& s)
@@ -608,6 +633,7 @@ void ApplySettings(const Settings& s)
     g_app.control->SetStage(false, false);
     g_app.widgets->SetMaterial(s.widgetMaterial == L"dusk" ? WidgetMaterial::Dusk : s.widgetMaterial == L"color" ? WidgetMaterial::Color : WidgetMaterial::Glass);
     g_app.widgets->SetCalendarType(float(s.calendarDateSize), float(s.timetableDateSize));
+    g_app.widgets->SetTimetableBadge(float(s.timetableBadgeScale));
     g_app.widgets->SetEnabled(s.widgets);
     g_app.widgetsOn = s.widgets;
     // The Windows key opens the start menu and the bar's apps, which belong to the bar.
@@ -1074,6 +1100,7 @@ void SyncDisplayBars(const Settings& settings, bool refresh)
         if (!bar->StopRendering(3000)) {
             g_app.chrome->RestoreForExit();
             Log(L"core: secondary display renderer stuck during removal");
+            StopYunzhaoIsland();
             TerminateProcess(GetCurrentProcess(), 0);
         }
         return true;
@@ -1290,6 +1317,13 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (g_app.widgetsOn && g_app.widgets)
             g_app.widgets->SetCalendarScale(std::clamp(int(w), 0, 1000) / 1000.f);
         return 0;
+    case WM_ATRIUM_CALENDAR:
+        if (!g_app.widgetsOn || !g_app.widgets)
+            return 0;
+        if (w == 2)
+            return g_app.widgets->CalendarOpen() ? 1 : 0;
+        g_app.widgets->SetCalendarOpen(w != 0);
+        return g_app.widgets->CalendarOpen() ? 1 : 0;
     case WM_ATRIUM_SETTINGS:
         ApplySettings(g_app.server->Current());
         return 0;
@@ -1548,6 +1582,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    StopYunzhaoIsland();
     g_app.displaysReady = false;
     // First the render thread, while every window it draws for is still there; a driver call stuck
     // in the desktop duplication (it holds the shared device) must not keep Atrium from exiting:
@@ -1563,6 +1598,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
         g_app.chrome.reset();
         Log(L"core: exited (render thread stuck)");
         ReleaseMutex(mutex);
+        StopYunzhaoIsland();
         Sleep(150); // the log line reaches the file
         // Not ExitProcess: unloading the graphics DLLs would wait for the same stuck call.
         TerminateProcess(GetCurrentProcess(), 0);
