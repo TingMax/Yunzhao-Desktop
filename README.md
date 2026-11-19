@@ -1,6 +1,6 @@
 # Yunzhao
 
-Yunzhao 是一套跑在 Windows 11 上的桌面。打开之后，屏幕上是 Yunzhao 自己的任务栏、日历、课表和当日待办；设置、账号、教师工作台和多维表格用的是同一套界面。程序名是 `Yunzhao.exe`。
+Yunzhao 是一套跑在 Windows 11 上的桌面。打开之后，屏幕上是 Yunzhao 自己的任务栏、日历、课表和当日待办；设置、账号和教师工作台用的是同一套界面。程序名是 `Yunzhao.exe`。
 
 数据放在本机的 `%LOCALAPPDATA%\Yunzhao`。账号登录的是 [yunzhao-desktop.com](https://yunzhao-desktop.com)。代码仓库是 [TingMax/Yunzhao-Desktop](https://github.com/TingMax/Yunzhao-Desktop)。
 
@@ -39,10 +39,6 @@ Yunzhao 运行时使用自己的任务栏。任务栏自动隐藏，鼠标靠向
 
 教师工作台不再单独做一套登录。打开后读取 Yunzhao 已经登录的账号，页头显示这个账号的名称、用户名和邮箱。没有桌面登录时，页面只提示先在 Yunzhao 登录。
 
-## 多维表格
-
-多维表格从桌面打开，出现在点击它所在的那块屏幕上。页面、卡片和按钮使用 Yunzhao 的颜色：页面底是浅灰，卡片是白的，强调色是蓝色。
-
 ## 软件更新
 
 自动更新每 12 小时做一次：
@@ -70,7 +66,7 @@ tools\build.ps1 -Development
 
 需要 Visual Studio 2022 的 C++ 构建工具，以及 .NET 10。开发版输出在 `dist\Development\Atrium\Yunzhao.exe`。
 
-日历、课表和当日待办在开发时由 `tools\yunzhao-note.ps1` 启动。多维表格由 `tools\smart-table.ps1` 启动。这两个开发服务不是自动更新包的一部分。
+日历、课表和当日待办在开发时由 `tools\yunzhao-note.ps1` 启动。这个开发服务不是自动更新包的一部分。
 
 ## 许可
 

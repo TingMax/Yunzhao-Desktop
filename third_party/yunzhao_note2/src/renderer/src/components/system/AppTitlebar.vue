@@ -44,7 +44,6 @@ const tableEditing = ref(false)
 const toolsOpen = ref(false)
 const toolsMenuRef = ref(null)
 const tools = [
-  { kind: 'table', label: '多维表格' },
   { kind: 'page', path: '/teacher/exams', label: '试卷管理' },
   { kind: 'page', path: '/teacher/homework', label: '作业管理' },
   { kind: 'page', path: '/teacher/ai-grading', label: 'AI批改' },
@@ -568,11 +567,8 @@ function toggleTableEdit() {
 
 function chooseTool(tool) {
   toolsOpen.value = false
-  if (tool.kind === 'page') {
+  if (tool.kind === 'page')
     void window.api.atriumCommand?.({ cmd: 'teacher-page', path: tool.path })
-    return
-  }
-  window.api.atriumCommand?.({ cmd: 'tool', kind: 4 })
 }
 
 async function saveSchedule() {

@@ -5339,7 +5339,7 @@ struct ToolLayout {
 ToolLayout LayoutTool(float width, float height, int kind)
 {
     const float cardW = std::min(420.f, std::max(300.f, width - 48.f));
-    const float cardH = std::min(kind == 3 ? 420.f : kind == 4 ? 340.f : 300.f, std::max(260.f, height - 48.f));
+    const float cardH = std::min(kind == 3 ? 420.f : 300.f, std::max(260.f, height - 48.f));
     const float x = (width - cardW) / 2.f;
     const float y = (height - cardH) / 2.f;
     ToolLayout lay;
@@ -5364,71 +5364,19 @@ std::wstring ClockText(int ms)
     return b;
 }
 
-void LaunchBitable(RECT monitor)
-{
-    wchar_t exe[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring dir(exe);
-    const size_t slash = dir.find_last_of(L"\\/");
-    if (slash != std::wstring::npos)
-        dir.resize(slash);
-    auto resolve = [](const std::wstring& path) {
-        wchar_t full[MAX_PATH]{};
-        if (!GetFullPathNameW(path.c_str(), MAX_PATH, full, nullptr))
-            return std::wstring();
-        if (GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES)
-            return std::wstring();
-        return std::wstring(full);
-    };
-    std::wstring script = resolve(dir + L"\\..\\..\\..\\tools\\smart-table.ps1");
-    if (script.empty())
-        script = resolve(dir + L"\\tools\\smart-table.ps1");
-    if (!script.empty()) {
-        std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -File \"" + script + L"\"";
-        ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
-    }
-    HWND existing = FindWindowW(nullptr, L"Yunzhao_table");
-    if (IsWindow(existing)) {
-        int monitorW = monitor.right - monitor.left;
-        int monitorH = monitor.bottom - monitor.top;
-        int width = std::clamp(monitorW - 160, 880, 1400);
-        int height = std::clamp(monitorH - 120, 560, 900);
-        int x = monitor.left + (monitorW - width) / 2;
-        int y = monitor.top + (monitorH - height) / 2;
-        ShowWindow(existing, SW_SHOW);
-        SetWindowPos(existing, HWND_TOP, x, y, width, height, SWP_SHOWWINDOW);
-        return;
-    }
-    std::wstring host = resolve(dir + L"\\Atrium.Table.exe");
-    if (host.empty())
-        host = resolve(dir + L"\\Table\\Atrium.Table.exe");
-    if (host.empty())
-        host = resolve(dir + L"\\..\\..\\..\\tools\\Atrium.Table\\bin\\Release\\net10.0-windows\\win-x64\\Atrium.Table.exe");
-    if (host.empty())
-        return;
-    wchar_t bounds[80];
-    swprintf_s(bounds, L"--bounds=%ld,%ld,%ld,%ld", monitor.left, monitor.top, monitor.right, monitor.bottom);
-    ShellExecuteW(nullptr, L"open", host.c_str(), bounds, nullptr, SW_SHOWNORMAL);
-}
-
 } // namespace
 
 void DesktopWidgets::OpenTool(Widget& w, int kind)
 {
     if (!w.surface || w.content.calLock)
         return;
-    kind = std::clamp(kind, 0, 4);
-    if (kind == 4) {
-        LaunchBitable(WidgetMonitor(w.surface->Rect()));
-        w.surface->Invalidate();
-        return;
-    }
+    kind = std::clamp(kind, 0, 3);
     CloseTodo(false);
     CloseHandout(false);
     CloseStyle(false);
     tool_.open = true;
     tool_.owner = &w;
-    tool_.kind = std::clamp(kind, 0, 4);
+    tool_.kind = kind;
     tool_.running = false;
     tool_.swRun = false;
     tool_.result.clear();
@@ -5446,8 +5394,6 @@ void DesktopWidgets::OpenTool(Widget& w, int kind)
     toolSurface_->Show(mon, true, anchor, false);
     SetForegroundWindow(toolSurface_->Hwnd());
     toolSurface_->Invalidate();
-    if (tool_.kind == 4)
-        LaunchBitable(mon);
 }
 
 void DesktopWidgets::CloseTool()
@@ -5481,8 +5427,8 @@ void DesktopWidgets::PaintTool(Canvas& c)
     const D2D1_COLOR_F ink = D2D1::ColorF(1, 1, 1, 0.96f);
     const D2D1_COLOR_F dim = D2D1::ColorF(1, 1, 1, 0.62f);
     const D2D1_COLOR_F blue = D2D1::ColorF(0x0A84FF, 1);
-    const wchar_t* title[] = {L"倒计时", L"秒表", L"随机抽签", L"分组", L"多维表格"};
-    if (tool_.kind >= 0 && tool_.kind <= 4)
+    const wchar_t* title[] = {L"倒计时", L"秒表", L"随机抽签", L"分组"};
+    if (tool_.kind >= 0 && tool_.kind <= 3)
         c.Text(title[tool_.kind], D2D1::RectF(lay.card.left + 20, lay.card.top + 16, lay.card.right - 20, lay.card.top + 46), 18, ink, DWRITE_FONT_WEIGHT_BOLD);
     auto stepper = [&](D2D1_RECT_F dec, D2D1_RECT_F inc, const wchar_t* label, int value) {
         c.Text(label, D2D1::RectF(dec.left, dec.top - 22, inc.right, dec.top), 12, dim, DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
@@ -5530,13 +5476,6 @@ void DesktopWidgets::PaintTool(Canvas& c)
         c.Text(L"分组", lay.go, 15, D2D1::ColorF(1, 1, 1, 1), DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
         c.Fill(lay.reset, 10, D2D1::ColorF(1, 1, 1, 0.08f));
         c.Text(L"清空", lay.reset, 15, dim, DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
-    } else {
-        c.Text(L"打开后是桌面上的多维表格窗口，不用登录，也不走浏览器。里面可以导入 Excel，也可以导出成 Excel、CSV 或 JSON。",
-               D2D1::RectF(lay.card.left + 24, lay.card.top + 64, lay.card.right - 24, lay.go.top - 16), 15, dim, DWRITE_FONT_WEIGHT_NORMAL, 0, true);
-        c.Fill(lay.go, 10, blue);
-        c.Text(L"打开", lay.go, 15, D2D1::ColorF(1, 1, 1, 1), DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
-        c.Fill(lay.reset, 10, D2D1::ColorF(1, 1, 1, 0.08f));
-        c.Text(L"关闭", lay.reset, 15, dim, DWRITE_FONT_WEIGHT_SEMI_BOLD, 1);
     }
 }
 
@@ -5544,11 +5483,8 @@ bool DesktopWidgets::ToolMessage(UINT m, WPARAM wp, LPARAM lp, LRESULT&)
 {
     if (!tool_.open || !toolSurface_)
         return false;
-    if (m == WM_KEYDOWN && (wp == VK_ESCAPE || wp == VK_RETURN)) {
-        if (tool_.kind >= 4)
-            CloseTool();
+    if (m == WM_KEYDOWN && (wp == VK_ESCAPE || wp == VK_RETURN))
         return true;
-    }
     if (m != WM_LBUTTONUP)
         return false;
     RECT rect = toolSurface_->Rect();
@@ -5560,11 +5496,8 @@ bool DesktopWidgets::ToolMessage(UINT m, WPARAM wp, LPARAM lp, LRESULT&)
         CloseTool();
         return true;
     }
-    if (!InRect(lay.card, x, y)) {
-        if (tool_.kind >= 4)
-            CloseTool();
+    if (!InRect(lay.card, x, y))
         return true;
-    }
     auto nudge = [&](int& value, int delta, int lo, int hi) { value = std::clamp(value + delta, lo, hi); };
     if (tool_.kind == 0) {
         if (!tool_.running && InRect(lay.aDec, x, y)) {
@@ -5659,11 +5592,6 @@ bool DesktopWidgets::ToolMessage(UINT m, WPARAM wp, LPARAM lp, LRESULT&)
         } else if (InRect(lay.reset, x, y)) {
             tool_.result.clear();
         }
-    } else if (InRect(lay.go, x, y)) {
-        LaunchBitable(rect);
-    } else if (InRect(lay.reset, x, y)) {
-        CloseTool();
-        return true;
     }
     if (toolSurface_)
         toolSurface_->Invalidate();

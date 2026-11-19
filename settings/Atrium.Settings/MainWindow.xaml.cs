@@ -1314,7 +1314,7 @@ public sealed partial class MainWindow : Window
         if (account == null)
         {
             AccountName.Text = "未登录";
-            AccountUser.Text = "登录后，日历、课表和多维表格使用同一个账号。";
+            AccountUser.Text = "登录后，日历和课表使用同一个账号。";
             AccountMail.Text = "";
             SignOutButton.IsEnabled = false;
             StatusTitle.Text = "Yunzhao";

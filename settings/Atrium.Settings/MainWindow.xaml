@@ -626,7 +626,7 @@
                             <Border Style="{StaticResource TileStyle}">
                                 <StackPanel Spacing="12">
                                     <TextBlock Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap"
-                                               Text="日历、课表和多维表格都使用这里登录的账号。退出时先把这个账号的数据上传到服务器，再次登录时从服务器拉回。" />
+                                               Text="日历和课表都使用这里登录的账号。退出时先把这个账号的数据上传到服务器，再次登录时从服务器拉回。" />
                                     <TextBlock x:Name="AccountStatus" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
                                     <Button x:Name="SignOutButton" Content="退出登录" HorizontalAlignment="Left" Click="OnSignOut" />
                                 </StackPanel>

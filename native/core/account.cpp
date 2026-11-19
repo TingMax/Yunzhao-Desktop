@@ -735,7 +735,7 @@ LRESULT CALLBACK SignProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (form && form->bodyFont)
             SelectObject(dc, form->bodyFont);
         RECT sub{28, 52, client.right - 28, 76};
-        DrawTextW(dc, L"登录后使用日历、课表和多维表格", -1, &sub, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"登录后使用日历和课表", -1, &sub, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         EndPaint(hwnd, &ps);
         return 0;
     }

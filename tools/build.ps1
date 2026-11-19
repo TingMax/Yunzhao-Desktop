@@ -6,8 +6,8 @@
   native (CMake, MSVC) -> settings (dotnet publish, self-contained WinUI 3) -> dist.
   Layout:
     dist/Atrium/Yunzhao.exe
-    dist/Atrium/Settings/Fonts/ (MiSans, D40; the core reads it from there)
-    dist/Atrium/Settings/Atrium.Settings.exe (+ runtime)
+    dist/Atrium/Atrium.Settings.exe and the WinUI runtime
+    dist/Atrium/Fonts/ (MiSans; the core reads it from there)
   -Zip also writes dist/Yunzhao-<version>-win-x64.zip.
 #>
 param(
@@ -48,8 +48,6 @@ try {
         New-Item -ItemType Directory -Force -Path $islandDir | Out-Null
         Copy-Item -LiteralPath $island -Destination (Join-Path $islandDir "focusd-island.exe")
     }
-    dotnet publish tools/Atrium.Table/Atrium.Table.csproj -c $Configuration -r win-x64 --self-contained true -o (Join-Path $dist "Table")
-    if ($LASTEXITCODE) { throw "table window publish failed" }
     Get-ChildItem $dist -Recurse -File | Where-Object { $_.Extension -eq '.pdb' -or $_.Name -eq 'createdump.exe' -or $_.Name -eq 'Microsoft.DiaSymReader.Native.amd64.dll' } | Remove-Item -Force
     Get-ChildItem $dist -Directory -Recurse | Where-Object { $_.Name -match '^(cs|de|es|fr|it|ja|ko|pl|pt-BR|ru|tr|zh-Hant)$' } | Remove-Item -Recurse -Force
     if ($Development) { Set-Content -LiteralPath (Join-Path $dist 'development.txt') -Value 'Development distribution: does not register or change Windows startup.' }

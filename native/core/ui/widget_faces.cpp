@@ -1154,8 +1154,8 @@ void PaintCalendar(Canvas& c, WidgetSize, const WidgetContent& content, WidgetWo
         hits[i].rect.bottom += rowH;
     }
     if (content.toolsOpen) {
-        const wchar_t* toolName[] = {L"倒计时", L"秒表", L"随机抽签", L"分组", L"多维表格"};
-        const float mw = 156.f, menuRow = 34.f, mh = 8.f + 5.f * menuRow;
+        const wchar_t* toolName[] = {L"倒计时", L"秒表", L"随机抽签", L"分组"};
+        const float mw = 156.f, menuRow = 34.f, mh = 8.f + 4.f * menuRow;
         float mx = toolBtn.left;
         float my = toolBtn.bottom + 6.f;
         if (my + mh > faceH - 8.f)
@@ -1163,7 +1163,7 @@ void PaintCalendar(Canvas& c, WidgetSize, const WidgetContent& content, WidgetWo
         D2D1_RECT_F menu = D2D1::RectF(mx, my, mx + mw, my + mh);
         c.Fill(menu, 12, Rgba(0x1C1C1E, 0.96f));
         c.Stroke(menu, 12, Rgba(0x0A84FF, 0.75f), 1.2f);
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 4; ++i) {
             D2D1_RECT_F row = D2D1::RectF(mx + 4, my + 4 + float(i) * menuRow, mx + mw - 4, my + 2 + float(i + 1) * menuRow);
             c.Text(toolName[i], row, 14, Rgba(0xFFFFFF, 0.96f), DWRITE_FONT_WEIGHT_SEMI_BOLD);
             wchar_t id[16];
@@ -1315,8 +1315,8 @@ void PaintCalendar(Canvas& c, WidgetSize, const WidgetContent& content, WidgetWo
         PaintTodoPopup(c, content, p, W, H, hits);
         PaintTodoEditor(c, content, p, W, H, hits);
         if (content.toolsOpen) {
-            const wchar_t* toolName[] = {L"倒计时", L"秒表", L"随机抽签", L"分组", L"多维表格"};
-            const float mw = 156.f, rowH = 34.f, mh = 8.f + 5.f * rowH;
+            const wchar_t* toolName[] = {L"倒计时", L"秒表", L"随机抽签", L"分组"};
+            const float mw = 156.f, rowH = 34.f, mh = 8.f + 4.f * rowH;
             D2D1_RECT_F toolBtn = D2D1::RectF(viewX + 56.f, todayBtn.top, viewX + 86.f, todayBtn.bottom);
             float mx = std::max(pad, toolBtn.right - mw);
             float my = toolBtn.bottom + 6.f;
@@ -1325,7 +1325,7 @@ void PaintCalendar(Canvas& c, WidgetSize, const WidgetContent& content, WidgetWo
             D2D1_RECT_F menu = D2D1::RectF(mx, my, mx + mw, my + mh);
             c.Fill(menu, 12, Rgba(0x1C1C1E, 0.96f));
             c.Stroke(menu, 12, Alpha(p.blue, 0.75f), 1.2f);
-            for (int i = 0; i < 5; ++i) {
+            for (int i = 0; i < 4; ++i) {
                 D2D1_RECT_F row = D2D1::RectF(mx + 4, my + 4 + float(i) * rowH, mx + mw - 4, my + 2 + float(i + 1) * rowH);
                 c.Text(toolName[i], row, 14, Rgba(0xFFFFFF, 0.96f), DWRITE_FONT_WEIGHT_SEMI_BOLD);
                 wchar_t id[16];
