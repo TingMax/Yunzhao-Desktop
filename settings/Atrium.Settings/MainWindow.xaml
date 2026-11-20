@@ -638,8 +638,10 @@
                                               Note="只留下 Yunzhao 栏。关闭开关或退出 Yunzhao 时恢复；Win 键等系统快捷键照常可用。" />
                             <local:ToggleTile x:Name="HideBannersSwitch" Title="隐藏系统通知横幅" SwitchName="隐藏系统通知横幅" Toggled="OnHideBannersToggled"
                                               Note="打开 Windows 的“请勿打扰”；通知照常显示为 Yunzhao 卡片。关闭开关或退出时恢复。" />
-                            <local:ToggleTile x:Name="WinKeySwitch" Title="Win 键打开 Yunzhao 开始菜单" SwitchName="Win 键打开 Yunzhao 开始菜单" Toggled="OnWinKeyToggled" />
-                            <local:ToggleTile x:Name="WinNumbersSwitch" Title="Win + 数字键打开任务栏应用" SwitchName="Win + 数字键打开任务栏应用" Toggled="OnWinNumbersToggled" />
+                            <local:ToggleTile x:Name="WinKeySwitch" Title="Win 键打开 Yunzhao 开始菜单" SwitchName="Win 键打开 Yunzhao 开始菜单" Toggled="OnWinKeyToggled"
+                                              Note="暂时停用：会和其他软件抢快捷键，也没有冲突提示。" IsEnabled="False" />
+                            <local:ToggleTile x:Name="WinNumbersSwitch" Title="Win + 数字键打开任务栏应用" SwitchName="Win + 数字键打开任务栏应用" Toggled="OnWinNumbersToggled"
+                                              Note="暂时停用：会和其他软件抢快捷键，也没有冲突提示。" IsEnabled="False" />
                         </local:ResponsiveGrid>
                     </StackPanel>
 

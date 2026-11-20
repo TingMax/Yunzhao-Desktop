@@ -335,10 +335,11 @@ const definitions = [
     writeChannel: SETTING_WRITE_CHANNELS.SPECIALIZED,
     path: ['shortcuts', 'enabled'],
     // Session state only. Ignore the persisted gate from older versions.
-    defaultValue: true,
+    // Off until Yunzhao has conflict prompts for global hotkeys.
+    defaultValue: false,
     parse: parseBoolean,
     serialize: (value) => (value ? '1' : '0'),
-    remark: '本次运行的全局快捷键总开关，重启恢复启用'
+    remark: '本次运行的全局快捷键总开关，默认关闭以免抢占其他软件'
   },
   {
     id: 'shortcuts.viewVisibility',
@@ -346,7 +347,7 @@ const definitions = [
     writeChannel: SETTING_WRITE_CHANNELS.SPECIALIZED,
     path: ['shortcuts', 'viewVisibility'],
     db: { type: 'shortcuts', key: 'view_visibility' },
-    defaultValue: VIEW_VISIBILITY_SHORTCUT_DEFAULT,
+    defaultValue: '',
     parse: normalizeViewVisibilityShortcut,
     serialize: String,
     remark: '全视图共享的显示或隐藏当前视图快捷键'
@@ -357,7 +358,7 @@ const definitions = [
     writeChannel: SETTING_WRITE_CHANNELS.SPECIALIZED,
     path: ['shortcuts', 'newNote'],
     db: { type: 'shortcuts', key: 'new_note' },
-    defaultValue: 'F3',
+    defaultValue: '',
     parse: normalizeViewVisibilityShortcut,
     serialize: String,
     remark: '唤起当前视图并打开新建待办的全局快捷键'
@@ -368,7 +369,7 @@ const definitions = [
     writeChannel: SETTING_WRITE_CHANNELS.SPECIALIZED,
     path: ['shortcuts', 'screenshot'],
     db: { type: 'shortcuts', key: 'screenshot' },
-    defaultValue: 'F1',
+    defaultValue: '',
     parse: normalizeViewVisibilityShortcut,
     serialize: String,
     remark: '全局截图快捷键'
@@ -379,7 +380,7 @@ const definitions = [
     writeChannel: SETTING_WRITE_CHANNELS.SPECIALIZED,
     path: ['shortcuts', 'screenshotCopy'],
     db: { type: 'shortcuts', key: 'screenshot_copy' },
-    defaultValue: 'Control+F1',
+    defaultValue: '',
     parse: normalizeViewVisibilityShortcut,
     serialize: String,
     remark: '框选后直接复制到剪贴板的全局快捷键'

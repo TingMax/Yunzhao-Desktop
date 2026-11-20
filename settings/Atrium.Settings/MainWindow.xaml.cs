@@ -1531,8 +1531,13 @@ public sealed partial class MainWindow : Window
         DockSpeedSlider.SetValue(_current.CalendarDockMs);
         EdgeHideSwitch.IsOn = _current.CalendarEdgeHide;
         HideBannersSwitch.IsOn = _current.HideBanners;
-        WinKeySwitch.IsOn = _current.WinKeyStart;
-        WinNumbersSwitch.IsOn = _current.WinNumbers;
+        // Global Win-key hooks are disabled in the core until conflict handling exists.
+        _current.WinKeyStart = false;
+        _current.WinNumbers = false;
+        WinKeySwitch.IsOn = false;
+        WinNumbersSwitch.IsOn = false;
+        WinKeySwitch.IsEnabled = false;
+        WinNumbersSwitch.IsEnabled = false;
         (_current.StatusStyle == "icons" ? StatusIcons : StatusRing).IsChecked = true;
         (_current.AutoHide switch { "never" => HideNever, "always" => HideAlways, _ => HideFullscreen }).IsChecked = true;
         BarRevealDelay.SetValue(_current.BarRevealDelay);

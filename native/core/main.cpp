@@ -164,6 +164,17 @@ bool SameCoreExecutable(HWND window)
 // page: the settings app opens on it ("widgets"); an open window just comes to the front.
 void OpenSettings(const wchar_t* page = nullptr)
 {
+    // Prefer an already-open window. Launching a second instance only works when its
+    // FindWindow title matches; activating here avoids a silent no-op if it does not.
+    for (const wchar_t* title : {L"Yunzhao 设置", L"Atrium 设置"}) {
+        if (HWND existing = FindWindowW(nullptr, title)) {
+            ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+            if (page && _wcsicmp(page, L"about") == 0)
+                PostMessageW(existing, WM_APP + 31, 0, 0); // matches App.OpenAboutMessage
+            return;
+        }
+    }
     std::wstring dir = ExeDir();
     std::vector<std::wstring> candidates = {dir + L"\\Settings\\Atrium.Settings.exe", dir + L"\\Atrium.Settings.exe"};
     // A development build (native\build\win-x64\Release): the packaged settings app of the same repository.
@@ -637,15 +648,14 @@ void ApplySettings(const Settings& s)
     g_app.widgets->SetTimetableBadge(float(s.timetableBadgeScale));
     g_app.widgets->SetEnabled(s.widgets);
     g_app.widgetsOn = s.widgets;
-    // The Windows key opens the start menu and the bar's apps, which belong to the bar.
-    const bool keyStart = s.bar && s.winKeyStart, keyNumbers = s.bar && s.winNumbers;
-    if (!(keyStart == g_app.winKeyStart && keyNumbers == g_app.winNumbers && bool(g_app.winKey) == (keyStart || keyNumbers))) {
+    // Global hotkeys are temporarily disabled: the low-level Win key hook conflicts
+    // with other software and there is no in-app conflict prompt yet.
+    if (g_app.winKey) {
         g_app.winKey.reset();
-        if (keyStart || keyNumbers)
-            g_app.winKey = std::make_unique<WinKey>(g_app.host, WM_WIN_KEY, keyStart, keyNumbers);
-        g_app.winKeyStart = keyStart;
-        g_app.winNumbers = keyNumbers;
+        Log(L"winkey: disabled (conflicts with other software)");
     }
+    g_app.winKeyStart = false;
+    g_app.winNumbers = false;
     if (g_app.chrome) {
         // Without the bar, Windows' own taskbar and banners are never hidden.
         g_app.chrome->SetTaskbarHidden(s.bar && s.hideTaskbar);
@@ -710,8 +720,9 @@ int RunGuard(DWORD pid)
         DWORD_PTR answer = 0;
         const bool alive = !host || SendMessageTimeoutW(host, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 3000, &answer);
         silent = alive ? 0 : silent + 1;
-        if (silent >= 4 && !shown) {
-            // About 15 s without an answer: the taskbar back (Atrium hides it again if it recovers).
+        if (silent >= 2 && !shown) {
+            // About 4–7 s without an answer: put the system taskbar back so the
+            // desktop is usable while Yunzhao is stuck (it re-hides if it recovers).
             Log(L"guard: Atrium (%lu) is not responding: Windows' taskbar shown", pid);
             SystemChrome::ShowTaskbarsNow();
             shown = true;

@@ -63,6 +63,12 @@ pub(super) fn request_hotkey_refresh() {
 pub(super) fn refresh_registered_hotkey(hwnd: HWND) {
     unregister_current_hotkey(hwnd);
 
+    // Hosted by Yunzhao: do not register global shortcuts (conflicts, no prompt yet).
+    if std::env::var_os("YUNZHAO_HOST").is_some() || std::env::var_os("YUNZHAO_DISABLE_HOTKEYS").is_some() {
+        report_hotkey_error(None);
+        return;
+    }
+
     let snapshot = service().ok().and_then(|service| service.snapshot().ok());
 
     // Turning clipboard history off also frees its shortcut for other apps.

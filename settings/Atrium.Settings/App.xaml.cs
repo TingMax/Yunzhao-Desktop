@@ -13,7 +13,8 @@ public partial class App : Application
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int MessageBox(IntPtr hwnd, string text, string title, uint type);
     internal const uint OpenAboutMessage = 0x8000 + 31;
 
-    public const string WindowTitle = "Atrium 设置";
+    public const string WindowTitle = "Yunzhao 设置";
+    private const string LegacyWindowTitle = "Atrium 设置";
     private static Mutex? s_instance;
     private MainWindow? _window;
 
@@ -43,7 +44,10 @@ public partial class App : Application
         s_instance = new Mutex(true, @"Local\Atrium.Settings", out bool created);
         if (!created)
         {
+            // Title was renamed from Atrium; try both so an already-open window still comes forward.
             var other = FindWindow(null, WindowTitle);
+            if (other == IntPtr.Zero)
+                other = FindWindow(null, LegacyWindowTitle);
             if (other != IntPtr.Zero)
             {
                 GetWindowThreadProcessId(other, out uint pid);

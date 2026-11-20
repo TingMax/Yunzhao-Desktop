@@ -345,8 +345,9 @@ public sealed partial class MainWindow
     private void BuildIslandTranslation()
     {
         AddSection("翻译");
-        AddToggle("启用快捷翻译", "translationEnabled", true);
+        AddToggle("启用快捷翻译", "translationEnabled", false);
         AddNote("关闭后，岛上不再显示这个功能的入口，后台也停止运行；已有数据会保留。");
+        AddNote("全局快捷键暂时全部停用，避免和其他软件冲突。");
         AddSection("翻译服务");
         AddChoice("翻译服务", "translationProvider", "siliconflow",
             ("DeepSeek", "deepseek"), ("火山方舟", "volcengine"), ("通义千问", "dashscope"), ("Kimi", "moonshot"),
@@ -356,8 +357,8 @@ public sealed partial class MainWindow
         AddNote("API 密钥只保存在本机 Windows 凭据管理器。在这里输入会交给灵动岛保存，不会留在设置文件里当展示值。");
         AddField("API 密钥", "translationSecret", "", "输入 API 密钥");
         AddSection("快捷键");
-        AddField("全局快捷键", "translationShortcut", "Ctrl+Shift+F", "Ctrl+Shift+F");
-        AddNote("写成 Control、Shift、Alt 加一个键，例如 Ctrl+Shift+F。");
+        AddField("全局快捷键", "translationShortcut", "", "暂时停用");
+        AddNote("写成 Control、Shift、Alt 加一个键，例如 Ctrl+Shift+F。当前版本不会注册全局快捷键。");
     }
 
     private void BuildIslandMessages()

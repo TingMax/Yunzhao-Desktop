@@ -71,7 +71,7 @@ impl Default for ClipboardHistorySettings {
             capture_images: true,
             max_items: DEFAULT_MAX_ITEMS,
             shortcut: default_clipboard_shortcut(),
-            shortcut_enabled: true,
+            shortcut_enabled: false,
         }
     }
 }

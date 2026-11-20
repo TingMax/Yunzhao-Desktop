@@ -1117,10 +1117,16 @@ function applyResetSettingsGeometry({ reset }) {
 function applyResetShortcutBindings() {
   if (!viewVisibilityShortcutService || !captureShortcutService)
     return { status: 'deferred', error: '快捷键服务尚未就绪', retryable: true }
+  settingsRuntime.values.shortcuts.enabled = false
   viewVisibilityShortcutService.initialize(settingsRuntime.values.shortcuts.viewVisibility, {
-    enabled: settingsRuntime.values.shortcuts.enabled
+    enabled: false
   })
-  captureShortcutService.initialize(settingsRuntime.values.shortcuts)
+  captureShortcutService.initialize({
+    ...settingsRuntime.values.shortcuts,
+    newNote: '',
+    screenshot: '',
+    screenshotCopy: ''
+  })
   rebuildTrayMenu()
   const shortcuts = {
     ...captureShortcutService.snapshot(),
@@ -1891,8 +1897,10 @@ const applicationBootstrap = createApplicationBootstrap({
       onTrigger: handleViewVisibilityShortcut,
       logger
     })
+    // Temporarily keep global shortcuts off: they steal keys from other apps with no prompt.
+    settingsRuntime.values.shortcuts.enabled = false
     viewVisibilityShortcutService.initialize(settingsRuntime.values.shortcuts.viewVisibility, {
-      enabled: settingsRuntime.values.shortcuts.enabled
+      enabled: false
     })
     handleProtocolArgs(process.argv)
 
@@ -2659,7 +2667,14 @@ const applicationBootstrap = createApplicationBootstrap({
           .catch((error) => screenshotService?.report(error))
       }
     })
-    captureShortcutService.initialize(settingsRuntime.values.shortcuts)
+    settingsRuntime.values.shortcuts.enabled = false
+    captureShortcutService.initialize({
+      ...settingsRuntime.values.shortcuts,
+      enabled: false,
+      newNote: '',
+      screenshot: '',
+      screenshotCopy: ''
+    })
     startupShortcutFailures = unavailableShortcuts(
       getResolvedSettingsSnapshot().runtime.shortcuts
     ).map((item) => item.action)

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Net.Security;
+using System.Security.Authentication;
 using System.Text.Json;
 
 namespace Atrium.Settings;
@@ -10,31 +11,51 @@ internal sealed record ReleaseInfo(Version Version, string Tag, Uri Page, Uri? D
 {
     // Login already reaches this host. Prefer a direct connection: a system proxy
     // that points at a closed local port makes HttpClient fail before it leaves.
+    // Some networks also reset reused TLS sockets; each attempt uses a fresh client
+    // with TLS 1.2 only and Connection: close.
     public static async Task<ReleaseInfo?> FetchLatestAsync(CancellationToken cancel)
     {
         Exception? last = null;
         foreach (bool useProxy in new[] { false, true })
         {
-            try
+            for (int attempt = 0; attempt < 3; attempt++)
             {
-                using var handler = new HttpClientHandler
+                if (attempt > 0)
+                    await Task.Delay(400 * attempt, cancel).ConfigureAwait(false);
+                try
                 {
-                    UseProxy = useProxy,
-                    CheckCertificateRevocationList = false,
-                };
-                using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("Yunzhao-Desktop/1.0");
-                http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-                using var response = await http.GetAsync("https://yunzhao-desktop.com/releases/latest.json", cancel).ConfigureAwait(false);
-                if (response.StatusCode == HttpStatusCode.NotFound) return null;
-                response.EnsureSuccessStatusCode();
-                await using var stream = await response.Content.ReadAsStreamAsync(cancel).ConfigureAwait(false);
-                using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancel).ConfigureAwait(false);
-                return json.RootElement.ValueKind == JsonValueKind.Object ? FromManifest(json.RootElement) : null;
-            }
-            catch (Exception error) when (error is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException)
-            {
-                last = error;
+                    using var handler = new SocketsHttpHandler
+                    {
+                        UseProxy = useProxy,
+                        Proxy = useProxy ? WebRequest.DefaultWebProxy : null,
+                        AutomaticDecompression = DecompressionMethods.All,
+                        ConnectTimeout = TimeSpan.FromSeconds(10),
+                        PooledConnectionLifetime = TimeSpan.Zero,
+                        MaxConnectionsPerServer = 2,
+                        SslOptions = new SslClientAuthenticationOptions
+                        {
+                            EnabledSslProtocols = SslProtocols.Tls12,
+                            CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck,
+                        },
+                    };
+                    using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
+                    using var request = new HttpRequestMessage(HttpMethod.Get, "https://yunzhao-desktop.com/releases/latest.json");
+                    request.Version = HttpVersion.Version11;
+                    request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+                    request.Headers.TryAddWithoutValidation("User-Agent", "Yunzhao-Desktop/1.0");
+                    request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                    request.Headers.ConnectionClose = true;
+                    using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel).ConfigureAwait(false);
+                    if (response.StatusCode == HttpStatusCode.NotFound) return null;
+                    response.EnsureSuccessStatusCode();
+                    await using var stream = await response.Content.ReadAsStreamAsync(cancel).ConfigureAwait(false);
+                    using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancel).ConfigureAwait(false);
+                    return json.RootElement.ValueKind == JsonValueKind.Object ? FromManifest(json.RootElement) : null;
+                }
+                catch (Exception error) when (error is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or AuthenticationException)
+                {
+                    last = error;
+                }
             }
         }
         string detail = last switch
