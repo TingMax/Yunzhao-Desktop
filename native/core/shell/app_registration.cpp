@@ -8,6 +8,9 @@
 #include <propkey.h>
 #include <propvarutil.h>
 
+#include <functional>
+#include <vector>
+
 #include <winrt/base.h>
 
 namespace atrium {
@@ -74,60 +77,137 @@ void RegisterApplication(const std::wstring& directory)
         }
     }
 
+    auto fileName = [](const std::wstring& path) {
+        const auto slash = path.find_last_of(L"\\/");
+        return slash == std::wstring::npos ? path : path.substr(slash + 1);
+    };
+    auto ourExe = [&](const std::wstring& path) {
+        const std::wstring name = fileName(path);
+        return _wcsicmp(name.c_str(), L"Yunzhao.exe") == 0 || _wcsicmp(name.c_str(), L"Atrium.exe") == 0 ||
+               _wcsicmp(name.c_str(), L"Atrium.Core.exe") == 0;
+    };
+    auto parentDir = [](const std::wstring& path) {
+        const auto slash = path.find_last_of(L"\\/");
+        return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
+    };
+    // An older copy left its own start-menu shortcut, named Atrium. A shortcut that
+    // points at another program is left alone.
     PWSTR programs = nullptr;
     HRESULT hr = SHGetKnownFolderPath(FOLDERID_Programs, KF_FLAG_DEFAULT, nullptr, &programs);
-    std::wstring shortcut = programs ? std::wstring(programs) + L"\\Atrium.lnk" : L"";
-    std::wstring legacy = programs ? std::wstring(programs) + L"\\Atrium.Core.lnk" : L"";
+    const std::wstring programsDir = programs ? programs : L"";
     CoTaskMemFree(programs);
+    std::wstring retired;
     winrt::com_ptr<IShellLinkW> link;
-    if (SUCCEEDED(hr))
+    if (!programsDir.empty() && SUCCEEDED(hr))
         hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put()));
-    bool existing = SUCCEEDED(hr) && SUCCEEDED(link.as<IPersistFile>()->Load(shortcut.c_str(), STGM_READ));
-    wchar_t oldTarget[MAX_PATH]{}, workingDirectory[MAX_PATH]{}, iconPath[MAX_PATH]{};
-    int iconIndex = 0;
-    if (existing) {
-        link->GetPath(oldTarget, MAX_PATH, nullptr, SLGP_RAWPATH);
-        if (_wcsicmp(oldTarget, exe.c_str()) == 0) return; // leave the user's shortcut exactly as it is
-        bool ours = (!previousDirectory.empty() &&
-                     (_wcsicmp(oldTarget, (previousDirectory + L"\\Yunzhao.exe").c_str()) == 0 ||
-                      _wcsicmp(oldTarget, (previousDirectory + L"\\Atrium.exe").c_str()) == 0 ||
-                      _wcsicmp(oldTarget, (previousDirectory + L"\\Atrium.Core.exe").c_str()) == 0)) ||
-                    _wcsicmp(oldTarget, (directory + L"\\Atrium.exe").c_str()) == 0 ||
-                    _wcsicmp(oldTarget, (directory + L"\\Atrium.Core.exe").c_str()) == 0;
-        if (!ours) return;
-        hr = link.as<IPersistFile>()->Load(shortcut.c_str(), STGM_READWRITE);
-        link->GetWorkingDirectory(workingDirectory, MAX_PATH);
-        link->GetIconLocation(iconPath, MAX_PATH, &iconIndex);
-    }
-    if (SUCCEEDED(hr)) hr = link->SetPath(exe.c_str());
-    if (SUCCEEDED(hr) && (!existing || !*workingDirectory || _wcsicmp(workingDirectory, previousDirectory.c_str()) == 0))
-        hr = link->SetWorkingDirectory(directory.c_str());
-    if (SUCCEEDED(hr) && (!existing || !*iconPath || _wcsicmp(iconPath, oldTarget) == 0))
-        hr = link->SetIconLocation(exe.c_str(), existing ? iconIndex : 0);
-    if (SUCCEEDED(hr)) {
-        auto properties = link.as<IPropertyStore>();
-        PROPVARIANT id{};
-        hr = InitPropVariantFromString(kAppId, &id);
-        if (SUCCEEDED(hr)) hr = properties->SetValue(PKEY_AppUserModel_ID, id);
-        PropVariantClear(&id);
-        if (SUCCEEDED(hr)) hr = properties->Commit();
-    }
-    if (SUCCEEDED(hr)) hr = link.as<IPersistFile>()->Save(shortcut.c_str(), TRUE);
-    if (FAILED(hr)) {
-        Log(L"app: could not register the start menu shortcut (0x%08X)", unsigned(hr));
-        return;
-    }
-    SHChangeNotify(existing ? SHCNE_UPDATEITEM : SHCNE_CREATE, SHCNF_PATHW, shortcut.c_str(), nullptr);
-
-    // Migrate the old shortcut only when it belongs to this same distribution.
-    if (SUCCEEDED(link.as<IPersistFile>()->Load(legacy.c_str(), STGM_READ))) {
+    for (const wchar_t* oldName : {L"Atrium.lnk", L"Atrium.Core.lnk"}) {
+        if (!link)
+            break;
+        const std::wstring path = programsDir + L"\\" + oldName;
+        if (FAILED(link.as<IPersistFile>()->Load(path.c_str(), STGM_READ)))
+            continue;
         wchar_t target[MAX_PATH]{};
         link->GetPath(target, MAX_PATH, nullptr, SLGP_RAWPATH);
-        if (_wcsicmp(target, (directory + L"\\Atrium.Core.exe").c_str()) == 0 ||
-            _wcsicmp(target, (directory + L"\\Atrium.exe").c_str()) == 0 || _wcsicmp(target, exe.c_str()) == 0) {
-            if (DeleteFileW(legacy.c_str()))
-                SHChangeNotify(SHCNE_DELETE, SHCNF_PATHW, legacy.c_str(), nullptr);
+        if (!ourExe(target))
+            continue;
+        const std::wstring oldDir = parentDir(target);
+        if (!oldDir.empty() && _wcsicmp(oldDir.c_str(), directory.c_str()) != 0)
+            retired = oldDir;
+        if (DeleteFileW(path.c_str()))
+            SHChangeNotify(SHCNE_DELETE, SHCNF_PATHW, path.c_str(), nullptr);
+    }
+    if (!previousDirectory.empty() && _wcsicmp(previousDirectory.c_str(), directory.c_str()) != 0)
+        retired = previousDirectory;
+
+    const std::wstring shortcut = programsDir.empty() ? L"" : programsDir + L"\\Yunzhao.lnk";
+    bool existing = link && !shortcut.empty() && SUCCEEDED(link.as<IPersistFile>()->Load(shortcut.c_str(), STGM_READ));
+    wchar_t oldTarget[MAX_PATH]{};
+    if (existing) {
+        link->GetPath(oldTarget, MAX_PATH, nullptr, SLGP_RAWPATH);
+        if (_wcsicmp(oldTarget, exe.c_str()) != 0)
+            hr = link.as<IPersistFile>()->Load(shortcut.c_str(), STGM_READWRITE);
+        else
+            hr = S_FALSE; // already points here
+    }
+    if (hr == S_OK) {
+        hr = link->SetPath(exe.c_str());
+        if (SUCCEEDED(hr)) hr = link->SetWorkingDirectory(directory.c_str());
+        if (SUCCEEDED(hr)) hr = link->SetIconLocation(exe.c_str(), 0);
+        if (SUCCEEDED(hr)) hr = link->SetDescription(L"Yunzhao");
+        if (SUCCEEDED(hr)) {
+            auto properties = link.as<IPropertyStore>();
+            PROPVARIANT id{};
+            hr = InitPropVariantFromString(kAppId, &id);
+            if (SUCCEEDED(hr)) hr = properties->SetValue(PKEY_AppUserModel_ID, id);
+            PropVariantClear(&id);
+            if (SUCCEEDED(hr)) hr = properties->Commit();
         }
+        if (SUCCEEDED(hr)) hr = link.as<IPersistFile>()->Save(shortcut.c_str(), TRUE);
+        if (FAILED(hr))
+            Log(L"app: could not register the start menu shortcut (0x%08X)", unsigned(hr));
+        else
+            SHChangeNotify(existing ? SHCNE_UPDATEITEM : SHCNE_CREATE, SHCNF_PATHW, shortcut.c_str(), nullptr);
+    }
+
+    if (!retired.empty() && GetFileAttributesW((retired + L"\\Uninstall.ps1").c_str()) != INVALID_FILE_ATTRIBUTES &&
+        (GetFileAttributesW((retired + L"\\Yunzhao.exe").c_str()) != INVALID_FILE_ATTRIBUTES ||
+         GetFileAttributesW((retired + L"\\Atrium.exe").c_str()) != INVALID_FILE_ATTRIBUTES)) {
+        EnumWindows([](HWND window, LPARAM param) -> BOOL {
+            wchar_t cls[64]{};
+            if (!GetClassNameW(window, cls, 64) || wcscmp(cls, L"AtriumCoreHost") != 0)
+                return TRUE;
+            DWORD pid = 0;
+            GetWindowThreadProcessId(window, &pid);
+            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+            wchar_t image[32768]{};
+            DWORD length = DWORD(std::size(image));
+            const auto* keep = reinterpret_cast<const std::wstring*>(param);
+            if (process && QueryFullProcessImageNameW(process, 0, image, &length) && _wcsicmp(image, keep->c_str()) != 0) {
+                PostMessageW(window, WM_CLOSE, 0, 0);
+                WaitForSingleObject(process, 8000);
+            }
+            if (process)
+                CloseHandle(process);
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&exe));
+        // The folder of the previous copy. Account data is not in it.
+        std::wstring pattern = retired + L"\\*";
+        WIN32_FIND_DATAW found{};
+        HANDLE search = FindFirstFileW(pattern.c_str(), &found);
+        std::vector<std::wstring> pending;
+        if (search != INVALID_HANDLE_VALUE) {
+            do {
+                if (wcscmp(found.cFileName, L".") != 0 && wcscmp(found.cFileName, L"..") != 0)
+                    pending.push_back(retired + L"\\" + found.cFileName);
+            } while (FindNextFileW(search, &found));
+            FindClose(search);
+        }
+        std::function<void(const std::wstring&)> removeTree = [&](const std::wstring& path) {
+            DWORD attr = GetFileAttributesW(path.c_str());
+            if (attr == INVALID_FILE_ATTRIBUTES)
+                return;
+            if (attr & FILE_ATTRIBUTE_DIRECTORY) {
+                WIN32_FIND_DATAW inner{};
+                HANDLE innerSearch = FindFirstFileW((path + L"\\*").c_str(), &inner);
+                if (innerSearch != INVALID_HANDLE_VALUE) {
+                    do {
+                        if (wcscmp(inner.cFileName, L".") != 0 && wcscmp(inner.cFileName, L"..") != 0)
+                            removeTree(path + L"\\" + inner.cFileName);
+                    } while (FindNextFileW(innerSearch, &inner));
+                    FindClose(innerSearch);
+                }
+                RemoveDirectoryW(path.c_str());
+            } else {
+                SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(path.c_str());
+            }
+        };
+        for (const std::wstring& path : pending)
+            removeTree(path);
+        if (RemoveDirectoryW(retired.c_str()))
+            Log(L"app: removed the previous Atrium copy at %s", retired.c_str());
+        else
+            Log(L"app: the previous Atrium copy is still at %s", retired.c_str());
     }
 }
 

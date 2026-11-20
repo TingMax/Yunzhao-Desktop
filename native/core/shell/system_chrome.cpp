@@ -61,12 +61,19 @@ bool AutoHide()
 
 void SetAutoHide(bool on)
 {
-    APPBARDATA abd{sizeof(abd)};
-    abd.hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
-    // Windows 10 applies a zero edge as the top. Keep the taskbar where the user put it.
-    SHAppBarMessage(ABM_GETTASKBARPOS, &abd);
-    abd.lParam = on ? ABS_AUTOHIDE : ABS_ALWAYSONTOP;
-    SHAppBarMessage(ABM_SETSTATE, &abd);
+    auto apply = [&](HWND hwnd) {
+        if (!hwnd)
+            return;
+        APPBARDATA abd{sizeof(abd)};
+        abd.hWnd = hwnd;
+        // Windows 10 applies a zero edge as the top. Read this bar's own edge first.
+        SHAppBarMessage(ABM_GETTASKBARPOS, &abd);
+        abd.lParam = on ? ABS_AUTOHIDE : ABS_ALWAYSONTOP;
+        SHAppBarMessage(ABM_SETSTATE, &abd);
+    };
+    apply(FindWindowW(L"Shell_TrayWnd", nullptr));
+    for (HWND w = nullptr; (w = FindWindowExW(nullptr, w, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr;)
+        apply(w);
 }
 
 // Windows maximized while the taskbar still held its strip of the work area keep that gap when the
@@ -262,11 +269,39 @@ void SystemChrome::EmergencyRestore()
     ShowTaskbars();
 }
 
+void SystemChrome::RehideTaskbars()
+{
+    if (exiting_ || !taskbarHidden_)
+        return;
+    HideTaskbars();
+}
+
 void SystemChrome::HideTaskbars()
 {
-    for (HWND w : Taskbars())
-        if (IsWindowVisible(w))
+    for (HWND w : Taskbars()) {
+        if (!IsWindow(w))
+            continue;
+        RECT r{};
+        HMONITOR mon = MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{sizeof(mi)};
+        if (!GetWindowRect(w, &r) || !GetMonitorInfoW(mon, &mi)) {
             ShowWindow(w, SW_HIDE);
+            continue;
+        }
+        // Windows 10 slides an auto-hidden taskbar back on screen when the pointer
+        // hits the edge, and that slide often never sends a show event. If any of
+        // it is on the monitor, park it just past the far edge and hide it.
+        const bool onScreen = r.bottom > mi.rcMonitor.top && r.top < mi.rcMonitor.bottom && r.right > mi.rcMonitor.left &&
+                              r.left < mi.rcMonitor.right;
+        if (!onScreen)
+            continue;
+        const int width = std::max(1L, r.right - r.left);
+        const int height = std::max(1L, r.bottom - r.top);
+        // Keep the window alive and off the monitor. Hiding it removes the notification
+        // icons with it, so a program closed to the tray has nowhere to go.
+        SetWindowPos(w, HWND_BOTTOM, r.left, mi.rcMonitor.bottom + height, width, height,
+                     SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
+    }
 }
 
 void SystemChrome::Watch()
@@ -279,16 +314,16 @@ void SystemChrome::Watch()
         return;
     if (hook_)
         UnhookWinEvent(hook_);
+    // SHOW only. LOCATIONCHANGE fires for every pixel of Explorer's slide and
+    // SetWindowPos on the system taskbar then stalls the whole desktop.
     hook_ = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, nullptr, OnShow, pid, 0, WINEVENT_OUTOFCONTEXT);
     hookedPid_ = hook_ ? pid : 0;
 }
 
 void CALLBACK SystemChrome::OnShow(HWINEVENTHOOK, DWORD, HWND w, LONG obj, LONG, DWORD, DWORD)
 {
-    if (obj == OBJID_WINDOW && g_chrome && g_chrome->taskbarHidden_ && w && IsTaskbar(w)) {
-        ShowWindow(w, SW_HIDE);
-        Log(L"chrome: Explorer showed its taskbar; hidden again");
-    }
+    if (obj == OBJID_WINDOW && g_chrome && g_chrome->taskbarHidden_ && w && IsTaskbar(w))
+        g_chrome->HideTaskbars();
 }
 
 void SystemChrome::Save() const

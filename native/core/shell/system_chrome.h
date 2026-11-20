@@ -27,6 +27,8 @@ public:
     // Hides the taskbars again if Explorer has shown them (a restart of
     // Explorer, a display change); follows the user turning Do Not Disturb off.
     void Enforce();
+    // Cheap repeat of the hide. Enforce also repairs auto-hide and must not run this often.
+    void RehideTaskbars();
     // Irreversible for this instance: disable every hide entry point, then
     // restore Windows before joining workers or waiting for the renderer.
     void RestoreForExit();

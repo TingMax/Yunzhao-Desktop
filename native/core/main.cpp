@@ -68,6 +68,7 @@ constexpr UINT_PTR kTrayTimer = 0x51;
 constexpr UINT_PTR kStatusTimer = 0x52;       // the bar's status icon
 constexpr UINT_PTR kTrayFocusTimer = 0x53;    // after a forwarded tray click
 constexpr UINT_PTR kReadyTimer = 0x54;       // only during an update startup handshake
+constexpr UINT_PTR kChromeTimer = 0x55;      // while the system taskbar is hidden, put it back the moment it shows
 constexpr UINT kStatusMs = 3000;
 constexpr UINT kTrayId = 1;
 
@@ -649,6 +650,13 @@ void ApplySettings(const Settings& s)
         // Without the bar, Windows' own taskbar and banners are never hidden.
         g_app.chrome->SetTaskbarHidden(s.bar && s.hideTaskbar);
         g_app.chrome->SetBannersHidden(s.bar && s.hideBanners);
+        // A short period here fights Explorer on every tick and makes the whole
+        // desktop stutter, especially on Windows 10. The show/location hook and
+        // the 3 s status check are enough to keep the system taskbar parked.
+        if (s.bar && s.hideTaskbar)
+            SetTimer(g_app.host, kChromeTimer, 1000, nullptr);
+        else
+            KillTimer(g_app.host, kChromeTimer);
         if (s.bar && (s.hideTaskbar || s.hideBanners))
             EnsureGuard();
     }
@@ -1267,6 +1275,11 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
             UpdateStatus();
             if (g_app.chrome)
                 g_app.chrome->Enforce();
+            return 0;
+        }
+        if (w == kChromeTimer) {
+            if (g_app.chrome)
+                g_app.chrome->RehideTaskbars();
             return 0;
         }
         if (w == kTrayFocusTimer) {

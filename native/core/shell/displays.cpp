@@ -93,6 +93,41 @@ bool AtDisplayBottom(POINT pointer, const RECT& bounds)
     return PtInRect(&bounds, pointer) && pointer.y >= bounds.bottom - 2;
 }
 
+// A resizable or titled window is an app, even when Windows 10's frame is a few
+// pixels larger than the monitor. Only a borderless window that actually covers
+// the screen keeps the bar down, otherwise one click away hides it for good.
+bool CoversMonitor(HWND root, HMONITOR monitor)
+{
+    MONITORINFO mi{sizeof(mi)};
+    RECT r{};
+    if (!monitor || !GetMonitorInfoW(monitor, &mi))
+        return false;
+    if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
+        GetWindowRect(root, &r);
+    return r.left <= mi.rcMonitor.left + 2 && r.top <= mi.rcMonitor.top + 2 && r.right >= mi.rcMonitor.right - 2 &&
+           r.bottom >= mi.rcMonitor.bottom - 2;
+}
+
+bool ShellSurface(HWND window)
+{
+    wchar_t cls[64] = {};
+    GetClassNameW(window, cls, 64);
+    return !wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW") || !wcscmp(cls, L"SHELLDLL_DefView") ||
+           !wcscmp(cls, L"Shell_TrayWnd") || !wcscmp(cls, L"Shell_SecondaryTrayWnd");
+}
+
+bool BorderlessGame(HWND root, HMONITOR monitor)
+{
+    // The desktop itself covers the monitor and has no title bar. Clicking empty
+    // wallpaper was treated as a game, so the bar hid and would not come back.
+    if (!root || IsIconic(root) || IsZoomed(root) || ShellSurface(root))
+        return false;
+    const LONG style = GetWindowLongW(root, GWL_STYLE);
+    if (style & (WS_CAPTION | WS_THICKFRAME | WS_BORDER))
+        return false;
+    return CoversMonitor(root, monitor);
+}
+
 bool FullScreenApp(HWND window)
 {
     if (!window)
@@ -100,28 +135,19 @@ bool FullScreenApp(HWND window)
     HWND root = GetAncestor(window, GA_ROOT);
     if (!root)
         root = window;
+    HMONITOR monitor = MonitorFromWindow(root, MONITOR_DEFAULTTONULL);
+    const bool borderless = BorderlessGame(root, monitor);
     QUERY_USER_NOTIFICATION_STATE state{};
     if (SUCCEEDED(SHQueryUserNotificationState(&state)) && state == QUNS_RUNNING_D3D_FULL_SCREEN) {
         HWND fg = GetForegroundWindow();
-        if (fg && GetAncestor(fg, GA_ROOT) == root)
-            return true;
+        if (fg && GetAncestor(fg, GA_ROOT) == root && (borderless || !(GetWindowLongW(root, GWL_STYLE) & WS_CAPTION)))
+            return borderless || CoversMonitor(root, monitor);
     }
-    // Maximized apps keep their title-bar behavior: the bar may climb back over them.
-    // Windows 10 reports a titled window's rectangle past the monitor because of the
-    // invisible resize border. That is not a game, and it must not pin the bar down.
-    if (IsZoomed(root) || (GetWindowLongW(root, GWL_STYLE) & WS_CAPTION))
-        return false;
-    HMONITOR monitor = MonitorFromWindow(root, MONITOR_DEFAULTTONULL);
-    MONITORINFO mi{sizeof(mi)};
-    RECT r{};
-    if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
-        GetWindowRect(root, &r);
-    if (monitor && GetMonitorInfoW(monitor, &mi) && r.left <= mi.rcMonitor.left + 2 &&
-        r.top <= mi.rcMonitor.top + 2 && r.right >= mi.rcMonitor.right - 2 && r.bottom >= mi.rcMonitor.bottom - 2)
+    if (borderless)
         return true;
     // Alt-tab leaves the game minimized and without a title bar. It is about to
     // take the screen again; the bar has to be gone before that happens.
-    return IsIconic(root) && !(GetWindowLongW(root, GWL_STYLE) & WS_CAPTION);
+    return IsIconic(root) && !(GetWindowLongW(root, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME));
 }
 
 bool FullScreenInFront(HMONITOR monitor)
@@ -143,22 +169,16 @@ bool FullScreenInFront(HMONITOR monitor)
     if (!root || !GetWindowThreadProcessId(root, &pid) || pid == GetCurrentProcessId() ||
         MonitorFromWindow(root, MONITOR_DEFAULTTONULL) != monitor)
         return false;
-    wchar_t cls[64] = {};
-    GetClassNameW(root, cls, 64);
-    if (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW") || !wcscmp(cls, L"Shell_TrayWnd") || !wcscmp(cls, L"Shell_SecondaryTrayWnd"))
+    if (ShellSurface(root))
         return false;
-    QUERY_USER_NOTIFICATION_STATE state{};
-    if (SUCCEEDED(SHQueryUserNotificationState(&state)) && state == QUNS_RUNNING_D3D_FULL_SCREEN)
+    if (BorderlessGame(root, monitor))
         return true;
-    // Maximized fills only the work area (all of it when Windows' taskbar is hidden).
-    MONITORINFO mi{sizeof(mi)};
-    RECT r{};
-    if (IsZoomed(root) || IsIconic(root) || (GetWindowLongW(root, GWL_STYLE) & WS_CAPTION) || !GetMonitorInfoW(monitor, &mi))
-        return false;
-    if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
-        GetWindowRect(root, &r);
-    return r.left <= mi.rcMonitor.left + 2 && r.top <= mi.rcMonitor.top + 2 && r.right >= mi.rcMonitor.right - 2 &&
-           r.bottom >= mi.rcMonitor.bottom - 2;
+    // A stuck "game is fullscreen" report must not hide the bar over a normal window.
+    QUERY_USER_NOTIFICATION_STATE state{};
+    if (SUCCEEDED(SHQueryUserNotificationState(&state)) && state == QUNS_RUNNING_D3D_FULL_SCREEN &&
+        !(GetWindowLongW(root, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) && !IsZoomed(root))
+        return CoversMonitor(root, monitor);
+    return false;
 }
 
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary,

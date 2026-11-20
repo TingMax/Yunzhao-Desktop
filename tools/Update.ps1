@@ -33,16 +33,30 @@ function Assert-TemporaryPath([string]$Path) {
          (Split-Path -Leaf $absolute) -ne "$name.previous-$suffix")) { throw '更新临时目录无效。' }
 }
 
+function Test-SameFile([string]$Left, [string]$Right) {
+    if (!(Test-Path -LiteralPath $Left) -or !(Test-Path -LiteralPath $Right)) { return $false }
+    $a = Get-Item -LiteralPath $Left
+    $b = Get-Item -LiteralPath $Right
+    if ($a.PSIsContainer -or $b.PSIsContainer -or $a.Length -ne $b.Length) { return $false }
+    return (Get-FileHash -LiteralPath $Left -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $Right -Algorithm SHA256).Hash
+}
+
+function Get-FileHolders([string]$Path) {
+    # Restart Manager can wait forever for an answer from the process holding the file.
+    return ''
+}
+
 # Moves what is in $From into $To (merging folders). A folder some process is in (its current
 # directory, e.g. an app started from an older Atrium) cannot be moved itself: its contents go, it stays.
-function Move-Tree([string]$From, [string]$To, [switch]$Keep) {
+# KeepIdentical leaves a locked file in place when it already matches the downloaded package.
+function Move-Tree([string]$From, [string]$To, [switch]$Keep, [switch]$KeepIdentical) {
     if (!(Test-Path -LiteralPath $To)) { New-Item -ItemType Directory -Path $To | Out-Null }
     foreach ($item in @(Get-ChildItem -LiteralPath $From -Force)) {
         $target = Join-Path $To $item.Name
-        if ($item.PSIsContainer -and (Test-Path -LiteralPath $target)) { Move-Tree $item.FullName $target; continue }
+        if ($item.PSIsContainer -and (Test-Path -LiteralPath $target)) { Move-Tree $item.FullName $target -KeepIdentical:$KeepIdentical; continue }
         if ($item.PSIsContainer) {
             try { Move-Item -LiteralPath $item.FullName -Destination $target }
-            catch { Move-Tree $item.FullName $target }
+            catch { Move-Tree $item.FullName $target -KeepIdentical:$KeepIdentical }
             continue
         }
         # A file just written may be open for a moment (a virus scanner reading it).
@@ -50,7 +64,16 @@ function Move-Tree([string]$From, [string]$To, [switch]$Keep) {
             try { Move-Item -LiteralPath $item.FullName -Destination $target; break }
             catch {
                 if ($try -lt 6) { Start-Sleep -Milliseconds 300; continue }
-                throw "无法替换 $($item.FullName)（$($_.Exception.Message.TrimEnd('。', '.'))），请关闭正在使用它的程序后重试。"
+                $remaining = $null
+                if ($item.FullName.StartsWith($install + '\', [StringComparison]::OrdinalIgnoreCase)) { $remaining = $item.FullName }
+                elseif ($target.StartsWith($install + '\', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $target)) { $remaining = $target }
+                if ($KeepIdentical -and $remaining) {
+                    $twin = Join-Path $package $remaining.Substring($install.Length).TrimStart('\')
+                    if (Test-SameFile $remaining $twin) { break }
+                }
+                $holders = Get-FileHolders $item.FullName
+                $who = if ($holders) { "，占用程序：$holders" } else { '' }
+                throw "无法替换 $($item.FullName)（$($_.Exception.Message.TrimEnd('。', '.'))$who），请关闭正在使用它的程序后重试。"
             }
         }
     }
@@ -121,6 +144,22 @@ function Stop-NewProcesses {
     }
 }
 
+# The core's --exit does not close the calendar, capture helper, or island. Those keep
+# files such as Calendar\resources\app.asar open, and the folder swap then fails.
+function Stop-InstallTree {
+    $prefix = $install + '\'
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $left = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($left.Count -eq 0) { return }
+        foreach ($proc in $left) { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Milliseconds 300
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw '仍有程序占用安装目录，更新未安装。'
+}
+
 function Write-Result([string]$ErrorText) {
     $temporary = $result + '.tmp'
     @{ error = $ErrorText } | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -150,16 +189,17 @@ try {
         if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Atrium 尚未正常退出，更新未安装。' }
     } finally { $quit.Dispose() }
     $coreStopped = $true
+    Stop-InstallTree
     Assert-TemporaryPath $backup
     Assert-TemporaryPath $incoming
     # The folder itself stays (an app may be in it); what is in it is replaced.
-    try { Move-Tree $install $backup -Keep }
+    try { Move-Tree $install $backup -Keep -KeepIdentical }
     catch {
         Move-Tree $backup $install
         $restored = $true
         throw
     }
-    try { Move-Tree $incoming $install }
+    try { Move-Tree $incoming $install -KeepIdentical }
     catch {
         Move-Tree $install $incoming -Keep
         Move-Tree $backup $install
@@ -190,6 +230,8 @@ try {
         } catch { $failure += " 恢复旧包未完成：$($_.Exception.Message)；恢复副本保留在 $backup。" }
     }
     Write-Result $failure
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show($failure, 'Yunzhao 更新未完成') | Out-Null
 } finally {
     # Never delete an unconfirmed recovery point, even when rollback itself failed.
     $cleanup = @($incoming)

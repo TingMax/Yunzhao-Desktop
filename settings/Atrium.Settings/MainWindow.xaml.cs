@@ -900,8 +900,10 @@ public sealed partial class MainWindow : Window
             {
                 OperationCanceledException => "连接超时，请重试",
                 HttpRequestException { StatusCode: HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests }
-                    => "GitHub 暂时无法响应，请稍后重试",
-                HttpRequestException => "无法连接 GitHub，请重试",
+                    => "更新服务器暂时无法响应，请稍后重试",
+                HttpRequestException => error.Message.StartsWith("无法连接", StringComparison.Ordinal)
+                    ? error.Message
+                    : "无法连接更新服务器：" + (error.InnerException?.Message ?? error.Message),
                 IOException or UnauthorizedAccessException => $"无法准备更新：{error.Message}",
                 _ => "无法读取版本信息，请稍后重试",
             });

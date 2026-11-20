@@ -5,53 +5,80 @@ using System.Text.Json;
 
 namespace Atrium.Settings;
 
-// The public latest-release endpoint excludes drafts and prereleases.
-internal sealed record ReleaseInfo(Version Version, string Tag, Uri Page, Uri? Download, string? Digest = null)
+// Official packages are published at yunzhao-desktop.com/releases/latest.json.
+internal sealed record ReleaseInfo(Version Version, string Tag, Uri Page, Uri? Download, string? Digest = null, string? AssetUrl = null)
 {
-    internal static readonly HttpClient Http = new()
-    {
-        Timeout = TimeSpan.FromSeconds(15),
-        DefaultRequestHeaders =
-        {
-            UserAgent = { new ProductInfoHeaderValue("Yunzhao-Desktop", "1.0") },
-            Accept = { new MediaTypeWithQualityHeaderValue("application/vnd.github+json") },
-        },
-    };
-
+    // Login already reaches this host. Prefer a direct connection: a system proxy
+    // that points at a closed local port makes HttpClient fail before it leaves.
     public static async Task<ReleaseInfo?> FetchLatestAsync(CancellationToken cancel)
     {
-        using var response = await Http.GetAsync("https://api.github.com/repos/TingMax/Yunzhao-Desktop/releases?per_page=20", cancel);
-        if (response.StatusCode == HttpStatusCode.NotFound) return null;
-        response.EnsureSuccessStatusCode();
-        using var stream = await response.Content.ReadAsStreamAsync(cancel);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancel);
-        if (json.RootElement.ValueKind != JsonValueKind.Array) return null;
-        foreach (var release in json.RootElement.EnumerateArray())
+        Exception? last = null;
+        foreach (bool useProxy in new[] { false, true })
         {
-            if (!release.TryGetProperty("target_commitish", out var target) || target.GetString() != "main") continue;
-            if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
-            if (release.TryGetProperty("prerelease", out var pre) && pre.GetBoolean()) continue;
-            return FromJson(release);
+            try
+            {
+                using var handler = new HttpClientHandler
+                {
+                    UseProxy = useProxy,
+                    CheckCertificateRevocationList = false,
+                };
+                using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("Yunzhao-Desktop/1.0");
+                http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+                using var response = await http.GetAsync("https://yunzhao-desktop.com/releases/latest.json", cancel).ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.NotFound) return null;
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync(cancel).ConfigureAwait(false);
+                using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancel).ConfigureAwait(false);
+                return json.RootElement.ValueKind == JsonValueKind.Object ? FromManifest(json.RootElement) : null;
+            }
+            catch (Exception error) when (error is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException)
+            {
+                last = error;
+            }
         }
-        return null;
+        string detail = last switch
+        {
+            TaskCanceledException => "连接超时",
+            HttpRequestException { InnerException: { } inner } => inner.Message,
+            HttpRequestException http => http.Message,
+            _ => last?.Message ?? "未知错误",
+        };
+        throw new HttpRequestException("无法连接更新服务器：" + detail, last);
     }
 
-    internal static ReleaseInfo FromJson(JsonElement release)
+    internal static ReleaseInfo? FromManifest(JsonElement manifest)
     {
-        string tag = release.GetProperty("tag_name").GetString()!;
-        string number = tag.TrimStart('v', 'V').Split('+')[0];
+        // Official packages only: main channel, the versioned zip, and this host.
+        if (!manifest.TryGetProperty("channel", out var channel) || channel.GetString() != "main") return null;
+        string number = manifest.GetProperty("version").GetString() ?? "";
         if (!Version.TryParse(number, out var version)) throw new JsonException("Invalid release version.");
-        // Assembly versions have four components; v1.0.0 must equal 1.0.0.0.
         version = new Version(version.Major, version.Minor, Math.Max(0, version.Build), Math.Max(0, version.Revision));
-        Uri? download = null;
-        string? digest = null;
-        foreach (var asset in release.GetProperty("assets").EnumerateArray())
-            if (asset.GetProperty("name").GetString() == $"Yunzhao-{number}-win-x64.zip")
-            {
-                download = new Uri(asset.GetProperty("browser_download_url").GetString()!);
-                digest = asset.TryGetProperty("digest", out var hash) ? hash.GetString() : null;
-                break;
-            }
-        return new ReleaseInfo(version, tag, new Uri(release.GetProperty("html_url").GetString()!), download, digest);
+        string name = manifest.GetProperty("name").GetString() ?? "";
+        if (name != $"Yunzhao-{number}-win-x64.zip") return null;
+        string urlText = manifest.GetProperty("url").GetString() ?? "";
+        if (!Uri.TryCreate(urlText, UriKind.Absolute, out var download) || !IsPackage(download, name)) return null;
+        string tag = manifest.TryGetProperty("tag", out var tagValue) && tagValue.GetString() is { Length: > 0 } given
+            ? given : "v" + number;
+        string pageText = manifest.TryGetProperty("page", out var pageValue) && pageValue.GetString() is { Length: > 0 } page
+            ? page : "https://yunzhao-desktop.com/";
+        string? digest = manifest.TryGetProperty("digest", out var hash) && hash.ValueKind == JsonValueKind.String
+            ? hash.GetString() : null;
+        return new ReleaseInfo(version, tag, new Uri(pageText), download, digest);
     }
+
+    internal Uri ResolveFile()
+    {
+        if (Download == null) throw new IOException("更新包没有下载地址。");
+        string name = Download.Segments.Length == 0 ? "" : Uri.UnescapeDataString(Download.Segments[^1]);
+        if (!IsPackage(Download, name)) throw new IOException("更新包地址不在 yunzhao-desktop.com。");
+        return Download;
+    }
+
+    private static bool IsPackage(Uri url, string name) =>
+        url.Scheme == "https"
+        && url.Host.Equals("yunzhao-desktop.com", StringComparison.OrdinalIgnoreCase)
+        && url.AbsolutePath == "/releases/" + name
+        && name.StartsWith("Yunzhao-", StringComparison.Ordinal)
+        && name.EndsWith("-win-x64.zip", StringComparison.Ordinal);
 }

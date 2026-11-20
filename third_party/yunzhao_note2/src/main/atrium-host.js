@@ -152,54 +152,81 @@ function openBlockingTodoPopup(items) {
     right = Math.max(right, bounds.x + bounds.width)
     bottom = Math.max(bottom, bounds.y + bounds.height)
   }
-  const popup = new BrowserWindow({
+  const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds
+  const width = Math.min(460, Math.max(320, area.width - 48))
+  const height = Math.min(520, Math.max(280, area.height - 80))
+  const dialog = new BrowserWindow({
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
+    frame: false,
+    transparent: false,
+    thickFrame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    focusable: true,
+    alwaysOnTop: true,
+    backgroundColor: '#ffffff',
+    title: '未完成待办',
+    autoHideMenuBar: true,
+    webPreferences: { sandbox: true, contextIsolation: true }
+  })
+  const dimmer = new BrowserWindow({
     x: left,
     y: top,
     width: Math.max(1, right - left),
     height: Math.max(1, bottom - top),
     frame: false,
     transparent: true,
+    thickFrame: false,
     resizable: false,
     movable: false,
-    minimizable: false,
-    maximizable: false,
-    closable: false,
+    focusable: false,
     skipTaskbar: true,
-    focusable: true,
     hasShadow: false,
+    show: false,
     alwaysOnTop: true,
     backgroundColor: '#00000000',
-    title: '未完成待办',
     webPreferences: { sandbox: true }
   })
-  popup.setAlwaysOnTop(true, 'screen-saver')
+  dimmer.setAlwaysOnTop(true, 'pop-up-menu')
+  dialog.setAlwaysOnTop(true, 'screen-saver')
   let allowClose = false
-  popup.on('close', (event) => {
+  let finished = false
+  const blocked = BrowserWindow.getAllWindows().filter(
+    (win) => win !== dialog && win !== dimmer && !win.isDestroyed() && win.isEnabled()
+  )
+  const finish = () => {
+    if (finished) return
+    finished = true
+    allowClose = true
+    if (!dialog.isDestroyed()) dialog.close()
+  }
+  dialog.on('close', (event) => {
     if (!allowClose) event.preventDefault()
   })
-  const blocked = BrowserWindow.getAllWindows().filter(
-    (win) => win !== popup && !win.isDestroyed() && win.isEnabled()
-  )
-  for (const win of blocked) win.setEnabled(false)
   const timer = setInterval(() => {
-    if (popup.isDestroyed()) return
-    popup.setAlwaysOnTop(true, 'screen-saver')
-    popup.moveTop()
-    if (popup.webContents.getTitle() !== 'yunzhao-confirmed') return
-    allowClose = true
-    popup.close()
-  }, 400)
+    if (dialog.isDestroyed() || dialog.isFocused()) return
+    dialog.setAlwaysOnTop(true, 'screen-saver')
+    dialog.moveTop()
+  }, 800)
   const release = () => {
     clearInterval(timer)
     for (const win of blocked) {
       if (!win.isDestroyed()) win.setEnabled(true)
     }
+    if (!dimmer.isDestroyed()) dimmer.close()
   }
-  popup.on('closed', release)
-  popup.webContents.on('page-title-updated', (_event, title) => {
-    if (title !== 'yunzhao-confirmed' || popup.isDestroyed()) return
-    allowClose = true
-    popup.close()
+  dialog.on('closed', release)
+  dialog.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || (input.key !== 'Enter' && input.key !== 'Escape')) return
+    event.preventDefault()
+    finish()
   })
   const rows = items
     .map((item) => {
@@ -208,11 +235,35 @@ function openBlockingTodoPopup(items) {
       return `<div style="display:flex;gap:12px;padding:8px 0;border-top:1px solid #ececf1"><span style="flex:0 0 64px;color:${dateColor}">${escapeHtml(item.label)}</span><span style="min-width:0;color:${color}">${escapeHtml(item.text)}</span></div>`
     })
     .join('')
-  const html = `<!doctype html><meta charset="utf-8"><title>未完成待办</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.28);font-family:Segoe UI,Microsoft YaHei,sans-serif"><section style="width:min(460px,calc(100vw - 48px));max-height:min(560px,calc(100vh - 48px));display:flex;flex-direction:column;background:#fff;color:#1d1d1f;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28)"><div style="padding:22px 24px 8px;font-size:18px;font-weight:650">未完成待办</div><div style="padding:0 24px;flex:1;overflow:auto;font-size:15px;line-height:1.5">${rows}</div><button type="button" onclick="document.title='yunzhao-confirmed'" style="margin:12px 24px 22px;height:36px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font-size:14px">确认</button></section></body>`
-  popup.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
-  popup.show()
-  popup.focus()
-  return popup
+  const html = `<!doctype html><meta charset="utf-8"><title>未完成待办</title><body style="margin:0;height:100vh;display:flex;flex-direction:column;background:#fff;color:#1d1d1f;font-family:Segoe UI,Microsoft YaHei,sans-serif"><div style="padding:22px 24px 8px;font-size:18px;font-weight:650">未完成待办</div><div style="padding:0 24px;flex:1;overflow:auto;font-size:15px;line-height:1.5">${rows}</div><button id="ok" type="button" style="margin:12px 24px 22px;height:40px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font-size:14px;cursor:pointer">确认</button></body>`
+  dimmer.loadURL(
+    'data:text/html;charset=utf-8,' +
+      encodeURIComponent('<!doctype html><body style="margin:0;height:100vh;background:rgba(0,0,0,.28)"></body>')
+  )
+  dialog.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+  dialog.webContents.once('did-finish-load', () => {
+    if (dialog.isDestroyed()) return
+    if (!dimmer.isDestroyed()) dimmer.showInactive()
+    dialog.show()
+    dialog.moveTop()
+    dialog.focus()
+    for (const win of blocked) {
+      if (!win.isDestroyed()) win.setEnabled(false)
+    }
+    dialog.webContents
+      .executeJavaScript(
+        `new Promise((resolve) => {
+          const done = () => resolve(true)
+          document.getElementById('ok').addEventListener('click', done)
+          window.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === 'Escape') done()
+          })
+        })`
+      )
+      .then(() => finish())
+      .catch(() => {})
+  })
+  return dialog
 }
 
 export function readAtriumState() {
@@ -1038,11 +1089,20 @@ function queueDaySize() {
   daySizeTimer = setTimeout(rememberDaySize, 180)
 }
 
-function dayPageUrl(dateKey) {
-  const query = `?surface=day&date=${encodeURIComponent(dateKey || '')}`
+function surfacePage(name) {
   const dev = process.env.ELECTRON_RENDERER_URL
-  if (dev) return `${dev.replace(/\/$/, '')}/month.html${query}`
-  return pathToFileURL(join(process.cwd(), 'out', 'renderer', 'month.html')).href + query
+  if (dev) return { kind: 'url', target: `${dev.replace(/\/$/, '')}/${name}` }
+  return { kind: 'file', target: join(app.getAppPath(), 'out', 'renderer', name) }
+}
+
+function loadSurface(win, name, query) {
+  const page = surfacePage(name)
+  if (page.kind === 'url') {
+    const url = new URL(page.target)
+    for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, String(value ?? ''))
+    return win.loadURL(url.href)
+  }
+  return win.loadFile(page.target, { query })
 }
 
 function dayPayload(payload) {
@@ -1103,7 +1163,7 @@ function openDayWindow(getWindow, payload) {
       event.preventDefault()
       if (dayWin && !dayWin.isDestroyed()) dayWin.setTitle('')
     })
-    dayWin.loadURL(dayPageUrl(body.dateKey))
+    loadSurface(dayWin, 'month.html', { surface: 'day', date: body.dateKey })
     deliverDay(body)
     return true
   }

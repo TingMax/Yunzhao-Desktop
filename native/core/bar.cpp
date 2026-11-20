@@ -13,8 +13,11 @@
 #include <psapi.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
+#include <timeapi.h>
 #include <windowsx.h>
 #include <winrt/Windows.Foundation.h>
+
+#pragma comment(lib, "winmm.lib")
 
 #include <algorithm>
 #include <atomic>
@@ -504,7 +507,8 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
         std::wstring hover = HitTest(pt);
         bool magnify = scene_.magnify > 1.001f;
         if (hover != scene_.hoverKey || (magnify && scene_.pointerX != float(pt.x))) {
-            if (hover != scene_.hoverKey) {
+            const bool hoverChanged = hover != scene_.hoverKey;
+            if (hoverChanged) {
                 scene_.hoverKey = hover;
                 // With a preview up, the next app's windows follow the pointer without the tooltip's delay.
                 bool quick = previewShown_ || (previewOpen && previewOpen());
@@ -513,7 +517,9 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                     SetTimer(h, kTooltipTimer, quick ? kPreviewSwapMs : kTooltipDelayMs, nullptr);
             }
             scene_.pointerX = float(pt.x);
-            Publish();
+            // Pointer-only motion must not bump the layout generation: that forces a fresh
+            // desktop copy and mip chain on every mouse step, which is what feels late on Win10.
+            Publish(hoverChanged);
         }
         return 0;
     }
@@ -998,7 +1004,16 @@ void Bar::Relayout()
     const int x = wa.left + (wa.right - wa.left - winW) / 2;
     // A hidden system taskbar can leave its strip in the work area. Sit on the
     // screen edge then, or the bar appears above a dead gap and slides into it.
-    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND tray = nullptr;
+    if (HWND mainTray = FindWindowW(L"Shell_TrayWnd", nullptr))
+        if (MonitorFromWindow(mainTray, MONITOR_DEFAULTTONEAREST) == mon)
+            tray = mainTray;
+    if (!tray)
+        for (HWND w = nullptr; (w = FindWindowExW(nullptr, w, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr;)
+            if (MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST) == mon) {
+                tray = w;
+                break;
+            }
     const int anchorBottom = tray && IsWindowVisible(tray) ? wa.bottom : mi.rcMonitor.bottom;
     const int y = std::max(int(mi.rcMonitor.top), anchorBottom - Px(st.margin, s) - barH - insetTop);
 
@@ -1482,8 +1497,10 @@ void Bar::GuardStacking(const wchar_t* why)
         return;
     RECT bar = BarRect(), r{}, overlap{}, trayRect{};
     HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
-    bool trayOver = tray && IsWindowVisible(tray) && GetWindowRect(tray, &trayRect) && IntersectRect(&overlap, &trayRect, &bar) &&
-                    overlap.bottom - overlap.top > 2;
+    // The user asked for the system taskbar to stay gone. Letting it come forward
+    // when the pointer reaches the edge is what makes it possible to summon.
+    bool trayOver = !settings_.hideTaskbar && tray && IsWindowVisible(tray) && GetWindowRect(tray, &trayRect) &&
+                    IntersectRect(&overlap, &trayRect, &bar) && overlap.bottom - overlap.top > 2;
     bool usingTray = false;
     POINT cur{};
     wchar_t fgCls[64] = {};
@@ -1784,6 +1801,9 @@ void Bar::SetOwnWindowsDdaExclusion(bool exclude)
 void Bar::RenderThread()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    // Without this, WaitForMultipleObjects timeouts round up to ~15.6 ms on Windows 10,
+    // so magnification behind the pointer feels late when the compositor clock is absent.
+    timeBeginPeriod(1);
     while (WaitForSingleObject(quit_, 0) == WAIT_TIMEOUT) {
         bool rebuild = false;
         try {
@@ -1795,6 +1815,7 @@ void Bar::RenderThread()
         if (!rebuild || WaitForSingleObject(quit_, 1000) != WAIT_TIMEOUT)
             break;
     }
+    timeEndPeriod(1);
     winrt::uninit_apartment();
 }
 
@@ -2535,10 +2556,16 @@ bool Bar::RenderSession()
             deskMode = mode;
             deskLive = desktop.Texture() != nullptr;
         }
-        if (ID3D11Texture2D* desk = desktop.Texture())
-            renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
-        else if (source)
-            renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
+        const bool layoutChange = snap.generation != drawnGeneration;
+        // A static desktop picture does not need a fresh copy and mip chain on every
+        // pointer step. Live capture still refreshes when a frame arrived.
+        const bool needBackdrop = !renderer.HasPresented() || layoutChange || (!deskLive && hadBackdrop);
+        if (needBackdrop) {
+            if (ID3D11Texture2D* desk = desktop.Texture())
+                renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
+            else if (source)
+                renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
+        }
         {
             bool lost = false;
             if (!freeze)
@@ -2595,7 +2622,7 @@ bool Bar::RenderSession()
         animating |= clockInk.Moving(nowMs) || appsInk.Moving(nowMs);
         const Ink inks{clockInk.Value(nowMs), appsInk.Value(nowMs)};
         ULONGLONG now = GetTickCount64();
-        bool force = snap.generation != drawnGeneration || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
+        bool force = layoutChange || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
                      animating || barOwed || now - lastPresent > kStaleMs;
         if (!changed && !force) {
             ++skipped; // echo of our own present, or nothing new under the glass

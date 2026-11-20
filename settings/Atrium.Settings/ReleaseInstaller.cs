@@ -218,7 +218,7 @@ internal static class ReleaseInstaller
         try
         {
             SaveJson(DownloadPath, new Download(release, job.Id));
-            job.Add(release.Download, Path.Combine(WorkDirectory, "release.zip"));
+            job.Add(release.ResolveFile(), Path.Combine(WorkDirectory, "release.zip"));
             job.OnTransferred(Environment.ProcessPath!);
             job.Resume();
         }
