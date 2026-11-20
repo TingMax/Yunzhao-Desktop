@@ -74,7 +74,20 @@ internal static class ReleaseInstaller
             ? $"正在后台下载… {Math.Min(100, progress.Transferred * 100 / progress.Total)}%" : "正在后台下载…");
     }
 
-    private static Version CurrentVersion => typeof(ReleaseInstaller).Assembly.GetName().Version!;
+    internal static Version ProductVersion()
+    {
+        var core = CoreClient.CoreExe();
+        if (!string.IsNullOrEmpty(core))
+        {
+            var info = FileVersionInfo.GetVersionInfo(core);
+            if (info.FileMajorPart > 0 || info.FileMinorPart > 0)
+                return new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart, info.FilePrivatePart);
+        }
+        var assembly = typeof(ReleaseInstaller).Assembly.GetName().Version ?? new Version(0, 0);
+        return new Version(assembly.Major, assembly.Minor, Math.Max(0, assembly.Build), Math.Max(0, assembly.Revision));
+    }
+
+    private static Version CurrentVersion => ProductVersion();
     private static Download? ReadDownload() => ReadJson<Download>(DownloadPath);
     private static T? ReadJson<T>(string path)
     {
@@ -128,7 +141,7 @@ internal static class ReleaseInstaller
             return 0;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or COMException or JsonException
-            or FormatException or InvalidOperationException or ArgumentException)
+            or FormatException or InvalidOperationException or ArgumentException or IndexOutOfRangeException)
         {
             App.LogCrash(error);
             if (cache != null)

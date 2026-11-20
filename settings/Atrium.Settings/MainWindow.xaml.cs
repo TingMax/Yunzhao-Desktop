@@ -740,21 +740,30 @@ public sealed partial class MainWindow : Window
     private ReleaseInstaller.TransferStatus? _transferStatus;
     private DispatcherTimer? _downloadTimer;
     private bool _downloadRefreshBusy, _queueingDownload, _updatesClosed;
+    private string? _updateError;
+
+    private bool HasNewerRelease()
+    {
+        return _latestRelease?.Download != null && _latestRelease.Version > ReleaseInstaller.ProductVersion();
+    }
 
     private bool HasInstallOffer()
     {
-        var current = typeof(MainWindow).Assembly.GetName().Version!;
-        if (_preparedRelease != null || _transferStatus != null) return true;
-        return _latestRelease?.Download != null && _latestRelease.Version > current;
+        return _preparedRelease != null || _transferStatus != null || HasNewerRelease();
     }
 
     private void ShowInstallAction()
     {
-        bool offer = HasInstallOffer();
-        CheckUpdateButton.Content = offer ? "点击安装" : "检查更新";
-        CheckUpdateButton.IsEnabled = _updateCheck == null && !_queueingDownload;
+        bool ready = _preparedRelease != null;
+        bool transferring = _transferStatus != null && !ready;
+        bool offer = ready || transferring || HasNewerRelease();
+        CheckUpdateButton.Content = ready ? "点击安装" : transferring && _transferStatus!.CanRetry ? "重试" : transferring ? "正在下载" : offer ? "点击安装" : "检查更新";
+        CheckUpdateButton.IsEnabled = _updateCheck == null && !_queueingDownload && !(transferring && !_transferStatus!.CanRetry);
         UpdateAvailableButton.Visibility = offer ? Visibility.Visible : Visibility.Collapsed;
-        if (offer) UpdateStatus.Text = "功能样式已更新，是否需要安装";
+        if (!string.IsNullOrEmpty(_updateError)) UpdateStatus.Text = _updateError;
+        else if (ready) UpdateStatus.Text = "新版本已准备好，点击安装";
+        else if (transferring) UpdateStatus.Text = _transferStatus!.Text;
+        else if (offer) UpdateStatus.Text = $"发现新版本 {_latestRelease!.Version.ToString(3)}，点击安装开始下载";
     }
 
     private void ObserveDownload()
@@ -800,7 +809,9 @@ public sealed partial class MainWindow : Window
     {
         if (_queueingDownload) return;
         _queueingDownload = true;
-        ShowInstallAction();
+        _updateError = null;
+        UpdateStatus.Text = "正在开始下载…";
+        CheckUpdateButton.IsEnabled = false;
         try
         {
             using var worker = release != null ? ReleaseInstaller.StartBackgroundDownload(release)
@@ -808,11 +819,12 @@ public sealed partial class MainWindow : Window
             await worker.WaitForExitAsync(); // closing this window never cancels the transfer
             if (_updatesClosed) return;
             await RefreshDownloadAsync();
-            if (worker.ExitCode != 0 && _transferStatus == null) UpdateStatus.Text = "无法开始后台下载，请重试";
+            if (worker.ExitCode != 0 && _transferStatus == null)
+                _updateError = ReleaseInstaller.ReadFailure() ?? "无法开始后台下载，请重试";
         }
         catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception)
         {
-            if (!_updatesClosed) UpdateStatus.Text = $"无法开始后台下载：{error.Message}";
+            if (!_updatesClosed) _updateError = $"无法开始后台下载：{error.Message}";
         }
         finally
         {
@@ -824,6 +836,8 @@ public sealed partial class MainWindow : Window
     private async void OnInstallRelease(object sender, RoutedEventArgs e)
     {
         if (_updateCheck != null || _queueingDownload) return;
+        if (_transferStatus is { CanRetry: false } && _preparedRelease == null) return;
+        _updateError = null;
         if (_preparedRelease != null)
         {
             _restartUpdate = _preparedRelease;
@@ -849,6 +863,7 @@ public sealed partial class MainWindow : Window
     private async Task CheckForUpdatesAsync()
     {
         if (_updateCheck != null) return;
+        _updateError = null;
         using var cancel = new CancellationTokenSource();
         _updateCheck = cancel;
         CheckUpdateButton.IsEnabled = false;
@@ -866,8 +881,7 @@ public sealed partial class MainWindow : Window
             }
             var release = await ReleaseInfo.FetchLatestAsync(cancel.Token);
             if (cancel.IsCancellationRequested) return;
-            var current = typeof(MainWindow).Assembly.GetName().Version!;
-            bool newer = release?.Download != null && release.Version > current;
+            bool newer = release?.Download != null && release.Version > ReleaseInstaller.ProductVersion();
             _latestRelease = newer ? release : null;
             if (!newer && _transferStatus == null)
             {
@@ -882,7 +896,7 @@ public sealed partial class MainWindow : Window
             or JsonException or FormatException or InvalidOperationException or KeyNotFoundException or IOException or UnauthorizedAccessException)
         {
             if (cancel.IsCancellationRequested) return; // the window closed while checking
-            UpdateStatus.Text = _transferStatus?.Text ?? (error switch
+            _updateError = _transferStatus?.Text ?? (error switch
             {
                 OperationCanceledException => "连接超时，请重试",
                 HttpRequestException { StatusCode: HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests }

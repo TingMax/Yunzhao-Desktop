@@ -121,10 +121,21 @@ bool NetworkUp()
     return ok;
 }
 
+std::wstring SettingsExe()
+{
+    std::wstring dir = ExeDirectory();
+    for (const wchar_t* name : {L"\\Settings\\Atrium.Settings.exe", L"\\Atrium.Settings.exe"}) {
+        std::wstring path = dir + name;
+        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return path;
+    }
+    Log(L"update: settings program was not found next to the desktop");
+    return L"";
+}
+
 void StartWorker(const std::wstring& arguments)
 {
-    std::wstring exe = ExeDirectory() + L"\\Settings\\Atrium.Settings.exe";
-    if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) return; // native-only development build
+    std::wstring exe = SettingsExe();
+    if (exe.empty()) return;
     std::wstring command = L"\"" + exe + L"\" " + arguments;
     STARTUPINFOW startup{sizeof(startup)};
     startup.dwFlags = STARTF_USESHOWWINDOW;
