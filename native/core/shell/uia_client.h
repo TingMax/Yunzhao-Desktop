@@ -1,5 +1,5 @@
 // A UI Automation client for a reader thread (WeChat, Feishu). Right after
-// Atrium starts, one of the two often fails to make its condition (E_FAIL),
+// Yunzhao starts, one of the two often fails to make its condition (E_FAIL),
 // which used to end that reader for the session: a failure is retried every
 // two seconds (logged once).
 #pragma once
@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 // Callbacks only wake the reader. Cross-process tree reads remain on its MTA
 // worker.
@@ -186,4 +186,4 @@ winrt::com_ptr<IUIAutomation> CreateUia(const std::atomic<bool>& stop, HANDLE wa
     return nullptr;
 }
 
-} // namespace atrium
+} // namespace yunzhao

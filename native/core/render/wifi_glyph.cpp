@@ -7,7 +7,7 @@
 #include <array>
 #include <cmath>
 
-namespace atrium {
+namespace yunzhao {
 
 int WifiSteps(int signal) { return signal >= 60 ? 3 : signal >= 30 ? 2 : 1; }
 
@@ -56,4 +56,4 @@ void DrawWifiFan(ID2D1DeviceContext* d2d, ID2D1SolidColorBrush* brush, float cx,
     d2d->SetTransform(previous);
 }
 
-} // namespace atrium
+} // namespace yunzhao

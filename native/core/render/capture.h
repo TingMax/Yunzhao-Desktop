@@ -1,6 +1,6 @@
-// The backdrop of the glass: one monitor, captured without Atrium's own
+// The backdrop of the glass: one monitor, captured without Yunzhao's own
 // windows. DXGI Desktop Duplication is the source. The glass keeps a clean
-// copy and pastes it back over Atrium's own rectangles, so the windows stay
+// copy and pastes it back over Yunzhao's own rectangles, so the windows stay
 // IN Desktop Duplication. Remote viewers (GameViewer, ToDesk, UU) capture
 // that way; excluding the windows hides the bar and the widgets there.
 // When duplication is down (a wake, before the outputs exist) the glass uses
@@ -19,7 +19,7 @@
 #include <memory>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 
 class BackdropSource {
 public:
@@ -29,7 +29,7 @@ public:
     virtual void Release() = 0;
     // The source stopped (the display mode changed, the secure desktop came): make a new one.
     virtual bool Lost() const { return false; }
-    // Whether Atrium's windows may show in other captures while this one runs.
+    // Whether Yunzhao's windows may show in other captures while this one runs.
     virtual bool KeepsOwnWindowsOut() const = 0;
     virtual const wchar_t* Name() const = 0;
 };
@@ -92,7 +92,7 @@ private:
 
 // On a hybrid laptop DXGI lists the screens only under the GPU Windows placed
 // the process on. Asks Windows (its per-app graphics preference, as in
-// Settings > System > Display > Graphics) to run Atrium on the power-saving
+// Settings > System > Display > Graphics) to run Yunzhao on the power-saving
 // GPU, which drives the panel; from the next start. Leaves a choice the user
 // made alone. True if the preference was written.
 bool PreferPowerSavingGpu();
@@ -104,4 +104,4 @@ void SetCaptureExclusion(HWND hwnd, bool visible);
 void SetDdaExclusionEnabled(bool enabled);
 bool DdaExclusionEnabled();
 
-} // namespace atrium
+} // namespace yunzhao

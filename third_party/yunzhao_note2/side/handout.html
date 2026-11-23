@@ -31,7 +31,7 @@
     let timer = 0
     function save() {
       if (!key) return
-      window.api.atriumHandoutPiece?.(key, document.getElementById('body').innerHTML)
+      window.api.yunzhaoHandoutPiece?.(key, document.getElementById('body').innerHTML)
     }
     function load(data) {
       key = data?.key || ''
@@ -59,7 +59,7 @@
       save()
       window.close()
     }
-    window.api.onAtriumHandoutData?.(load)
+    window.api.onYunzhaoHandoutData?.(load)
   </script>
 </body>
 </html>

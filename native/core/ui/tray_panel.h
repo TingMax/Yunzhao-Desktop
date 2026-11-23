@@ -1,4 +1,4 @@
-// Atrium's tray panel: the notification area's icons (TrayModel) in a grid on
+// Yunzhao's tray panel: the notification area's icons (TrayModel) in a grid on
 // the bar's glass, above the bar's tray entry. A click is the icon's left
 // click, a right click opens the app's own menu; the name of the icon under
 // the pointer shows below the grid. A button there opens the system's own
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class TrayPanel {
 public:
@@ -67,4 +67,4 @@ private:
     double rippleMs_ = 0;
 };
 
-} // namespace atrium
+} // namespace yunzhao

@@ -5,7 +5,7 @@
 #include <d2d1_1.h>
 #include <winrt/base.h>
 
-namespace atrium {
+namespace yunzhao {
 
 inline ID2D1StrokeStyle* RoundStroke(ID2D1RenderTarget* target)
 {
@@ -24,4 +24,4 @@ inline ID2D1StrokeStyle* RoundStroke(ID2D1RenderTarget* target)
     return style.get();
 }
 
-} // namespace atrium
+} // namespace yunzhao

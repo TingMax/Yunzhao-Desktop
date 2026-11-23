@@ -29,7 +29,7 @@ Yunzhao 运行时使用自己的任务栏。任务栏自动隐藏，鼠标靠向
 - 设计语言
 - 关于：版本、软件更新、设置文件位置
 
-「关于」里的软件更新会向 GitHub 查询。自动检查在后台进行，不弹窗。
+「关于」里的软件更新会向 yunzhao-desktop.com 查询。自动检查在后台进行，不弹窗。
 
 ## 账号
 
@@ -43,14 +43,14 @@ Yunzhao 运行时使用自己的任务栏。任务栏自动隐藏，鼠标靠向
 
 自动更新每 12 小时做一次：
 
-1. 先访问 GitHub，确认网络是否通。
+1. 先访问 yunzhao-desktop.com，确认服务器是否通。
 2. 不通就取消正在下载的包，不提示、不报错。
-3. 通了就只查找 `main` 上的正式安装包，文件名是 `Yunzhao-<版本>-win-x64.zip`。
-4. `dev` 和其他分支上的包不会下载。
+3. 通了就读取 `https://yunzhao-desktop.com/releases/latest.json`。只接受 `channel` 为 `main`、文件名为 `Yunzhao-<版本>-win-x64.zip`、地址在这个域名 `/releases/` 下的正式包。
+4. `dev` 和其他渠道的包不会下载。
 
-安装包是一个文件夹，不是 Windows 安装程序。换上去的是程序本身；`%LOCALAPPDATA%\Yunzhao` 里的账号和数据留在原地。
+网页上的下载按钮和软件更新用的是同一份压缩包。它是一个文件夹，不是 Windows 安装程序。换上去的是程序本身；`%LOCALAPPDATA%\Yunzhao` 里的账号和数据留在原地。
 
-目前仓库还没有发布过安装包。打开「关于」后，没有新版本时显示「软件暂无更新」。有新版本时显示「功能样式已更新，是否需要安装」，按钮变成「点击安装」。以后发版时，把测过的 `dev` 合进 `main`，再在 `main` 上发布这个 zip。
+打开「关于」后，没有新版本时显示「软件暂无更新」。有新版本时显示「功能样式已更新，是否需要安装」，按钮变成「点击安装」。以后发版时，把测过的 `dev` 合进 `main`，再把这个 zip 和 `latest.json` 放到服务器的 `/releases/`。
 
 ## 分支
 
@@ -64,7 +64,7 @@ Yunzhao 运行时使用自己的任务栏。任务栏自动隐藏，鼠标靠向
 tools\build.ps1 -Development
 ```
 
-需要 Visual Studio 2022 的 C++ 构建工具，以及 .NET 10。开发版输出在 `dist\Development\Atrium\Yunzhao.exe`。
+需要 Visual Studio 2022 的 C++ 构建工具，以及 .NET 10。开发版输出在 `dist\Development\Yunzhao\Yunzhao.exe`。
 
 日历、课表和当日待办在开发时由 `tools\yunzhao-note.ps1` 启动。这个开发服务不是自动更新包的一部分。
 

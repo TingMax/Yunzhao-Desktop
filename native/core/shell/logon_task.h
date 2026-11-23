@@ -2,9 +2,9 @@
 
 #include <string>
 
-namespace atrium {
+namespace yunzhao {
 
-// The current user's Task Scheduler task that starts Atrium at sign-in. Not the Run key:
+// The current user's Task Scheduler task that starts Yunzhao at sign-in. Not the Run key:
 // Explorer starts Run entries one after another once the desktop is up, so the system
 // taskbar would stay for seconds; a logon task starts with the session.
 bool RegisterLogonTask(const std::wstring& exe);
@@ -12,4 +12,4 @@ bool RegisterLogonTask(const std::wstring& exe);
 std::wstring LogonTaskProgram();
 bool RemoveLogonTask();
 
-} // namespace atrium
+} // namespace yunzhao

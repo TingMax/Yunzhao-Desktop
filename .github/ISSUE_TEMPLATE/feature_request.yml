@@ -11,7 +11,7 @@ body:
     id: idea
     attributes:
       label: 建议 / Idea
-      description: 希望 Atrium 做什么，为什么需要它 / What should Atrium do, and why?
+      description: 希望 Yunzhao 做什么，为什么需要它 / What should Yunzhao do, and why?
       placeholder: |
         想要的效果 / What I would like：
         使用场景 / When I would use it：

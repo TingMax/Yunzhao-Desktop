@@ -9,7 +9,7 @@
 
 #pragma comment(lib, "icu.lib")
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -151,4 +151,4 @@ std::wstring ChineseCalendar::DayLabel(int y, int m, int d, bool* festival) cons
     return ld == 1 ? LunarMonth(lm, leap) : LunarDay(ld);
 }
 
-} // namespace atrium
+} // namespace yunzhao

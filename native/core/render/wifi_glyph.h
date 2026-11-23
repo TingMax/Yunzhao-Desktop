@@ -5,7 +5,7 @@
 
 #include <d2d1_1.h>
 
-namespace atrium {
+namespace yunzhao {
 
 // Steps lit for a signal 0..100: 1..3.
 int WifiSteps(int signal);
@@ -16,4 +16,4 @@ int WifiSteps(int signal);
 void DrawWifiFan(ID2D1DeviceContext* d2d, ID2D1SolidColorBrush* brush, float cx, float cy, float radius, int lit, D2D1_COLOR_F on,
                  D2D1_COLOR_F off);
 
-} // namespace atrium
+} // namespace yunzhao

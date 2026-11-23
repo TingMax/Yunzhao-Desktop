@@ -1,10 +1,10 @@
-# Atrium 设计规范
+# Yunzhao 设计规范
 
 版本 1.1 · 开发版解析 G3 圆角 · 2026-11-07
 
-这份规范记录 Atrium 已经在用的设计语言，并定出今后新增界面必须遵守的规则。规范里的数值都来自代码：动效曲线来自 [`native/core/motion.h`](../native/core/motion.h)，尺寸来自各面板源文件中的常量。代码与本文不一致时，以代码为准并修正本文。设置中心的“设计规范”页是本文的图解版。
+这份规范记录 Yunzhao 已经在用的设计语言，并定出今后新增界面必须遵守的规则。规范里的数值都来自代码：动效曲线来自 [`native/core/motion.h`](../native/core/motion.h)，尺寸来自各面板源文件中的常量。代码与本文不一致时，以代码为准并修正本文。设置中心的“设计规范”页是本文的图解版。
 
-对照标准：Apple《Human Interface Guidelines》（Typography、Layout、Motion、Materials）、WWDC23《Animate with springs》、WWDC18《Designing Fluid Interfaces》、Microsoft Fluent 2、Material Design 3 的 Motion 部分，以及 WCAG 2.2。Atrium 在 Windows 上运行，因此字体、图标和像素换算以 Windows 为准，其余尽量向 macOS 看齐。
+对照标准：Apple《Human Interface Guidelines》（Typography、Layout、Motion、Materials）、WWDC23《Animate with springs》、WWDC18《Designing Fluid Interfaces》、Microsoft Fluent 2、Material Design 3 的 Motion 部分，以及 WCAG 2.2。Yunzhao 在 Windows 上运行，因此字体、图标和像素换算以 Windows 为准，其余尽量向 macOS 看齐。
 
 ---
 
@@ -24,12 +24,12 @@
 
 | 用途 | 字体 | 说明 |
 | --- | --- | --- |
-| 界面文字（中英文） | **MiSans**（小米），三个字重 | 中英文同一套设计，字距与基线天然统一；随软件附带（`Settings\Fonts`），只由 Atrium 私有加载，不安装到系统（D40） |
+| 界面文字（中英文） | **MiSans**（小米），三个字重 | 中英文同一套设计，字距与基线天然统一；随软件附带（`Settings\Fonts`），只由 Yunzhao 私有加载，不安装到系统（D40） |
 | 回退 | Segoe UI Variable Text + 系统中文字体 | 字体文件缺失时自动使用；MiSans 没有的字（生僻字、emoji）由系统字体补上 |
 | 符号 | Segoe Fluent Icons | 只用字体自带的符号；源码中写作 `L"\uE706"` 这样的转义 |
 | 系统状态图形 | 自绘几何（`wifi_glyph`、状态圆环；“系统图标”样式的喇叭与电池） | 没有合适字形时按 iOS 的形状自绘，不用位图 |
 
-MiSans 的字重比名称看起来细一档，Atrium 只带三个文件，按实际粗细使用：
+MiSans 的字重比名称看起来细一档，Yunzhao 只带三个文件，按实际粗细使用：
 
 | 文件 | OS/2 字重 | 相当于 | 用途 |
 | --- | --- | --- | --- |
@@ -91,7 +91,7 @@ MiSans 的字重比名称看起来细一档，Atrium 只带三个文件，按实
 
 ### 2.3 曲率
 
-- **设计契约：所有 Atrium 绘制的容器 R 角统一为解析 G3。** 覆盖任务栏、面板、通知、小组件、悬停底板、按钮、开关轨道、照片裁剪、设置中心卡片、下拉菜单、颜色浮层、确认对话框、键盘焦点与设计语言示例。大圆角尺寸和胶囊比例保持原有取值；胶囊也不回退为直线拼半圆。正圆没有直边接缝，曲率恒定，本身满足更高阶连续性。R=0 是明确选择的直角，不宣称其为 G3；文字、线性图标笔画和第三方应用图标内部的美术轮廓不属于容器 R 角。Windows 窗口外框、系统文件选择器和系统菜单由平台绘制，不能将它们宣称为 Atrium 的 G3 实现。
+- **设计契约：所有 Yunzhao 绘制的容器 R 角统一为解析 G3。** 覆盖任务栏、面板、通知、小组件、悬停底板、按钮、开关轨道、照片裁剪、设置中心卡片、下拉菜单、颜色浮层、确认对话框、键盘焦点与设计语言示例。大圆角尺寸和胶囊比例保持原有取值；胶囊也不回退为直线拼半圆。正圆没有直边接缝，曲率恒定，本身满足更高阶连续性。R=0 是明确选择的直角，不宣称其为 G3；文字、线性图标笔画和第三方应用图标内部的美术轮廓不属于容器 R 角。Windows 窗口外框、系统文件选择器和系统菜单由平台绘制，不能将它们宣称为 Yunzhao 的 G3 实现。
 - **轮廓定义。** 令 `R=min(设置半径, 短边/2)`，过渡范围 `L=min(1.6R, 短边/2)`。令 `v=1-(1-1/√2)R/L`，`a=max(0.02, (2v⁴-v²)/(1-v²))`。在四分之一角的局部坐标内使用 `F(x,y)=f(x/L)+f(y/L)-1=0`，其中 `f(t)=t⁴/[a+(1-a)t²]`。1.6 的过渡范围参考 Figma iOS 60% 平滑的视觉尺度；空间足够时，中点保持原半径的 45° 内缩量。空间不足时收缩过渡范围，`a` 仍保持正数，不能切回圆弧。完整正圆单独使用 `a=0` 的圆方程。
 - **G3 证明。** `f(0)=f′(0)=f″(0)=f‴(0)=0`，`f′(1)=2(1+a)>0`。由隐函数定理，接点处 `y(x)=1-x⁴/[2a(1+a)]+O(x⁶)`，因此 `y′(0)=y″(0)=y‴(0)=0`；曲率 `κ=0` 且弧长方向的曲率变化率 `dκ/ds=0`，与直边两侧一致。这是解析构造的约束，不以“看起来平滑”或位置拟合误差代替。
 - **统一实现。** 原生 `corner_profile.h`、着色器 `glass.hlsl` 和设置中心 `CornerProfile.cs` 使用相同参数与隐式方程。几何覆盖率直接从 `F=0` 计算；材质折射需要的近似距离与几何边界分开。删除 16 段三次拟合路径，以及 WinUI 自带圆弧对自绘内容的裁剪。Direct2D 用 A8 角部蒙版，照片、波纹和实色填充走同一入口；长度变化复用九宫格角部，缓存按 Direct2D 资源域区分，最多 64 项且按 4 MiB 预算逐出。设置中心同样缓存角部，限制为 64 项 / 4 MiB；逻辑 `Paint` / `Edge` 与实际绘制笔刷分离，保留 WinUI 视觉状态的恢复行为。按钮沿用原来的颜色资源与 83 ms 过渡，无全局逐帧遍历。
@@ -104,7 +104,7 @@ MiSans 的字重比名称看起来细一档，Atrium 只带三个文件，按实
 ### 2.4 Apple / Figma 对照与验收
 
 - Apple 的 [App icons](https://developer.apple.com/design/human-interface-guidelines/app-icons) 要求系统遮罩与界面、设备轮廓协调，并以官方图标网格确定比例；[continuous](https://developer.apple.com/documentation/swiftui/roundedcornerstyle/continuous) 描述连续曲率。公开资料没有给出可直接照搬的统一 G3 解析公式，因此本文不将自定义公式冒称为 Apple 的专有实现。
-- Figma 的 [圆角与平滑](https://help.figma.com/hc/en-us/articles/360050986854-Adjust-corner-radius-and-smoothing) 将 iOS 预设设为 60%；其 [squircle 技术文章](https://www.figma.com/blog/desperately-seeking-squircles/) 明确说明三次曲线近似的取舍。Atrium 参考轮廓比例与平滑过渡原则，以本节的解析条件额外保证严格 G3，不能用 Figma 的平滑百分比替代导数验收。
+- Figma 的 [圆角与平滑](https://help.figma.com/hc/en-us/articles/360050986854-Adjust-corner-radius-and-smoothing) 将 iOS 预设设为 60%；其 [squircle 技术文章](https://www.figma.com/blog/desperately-seeking-squircles/) 明确说明三次曲线近似的取舍。Yunzhao 参考轮廓比例与平滑过渡原则，以本节的解析条件额外保证严格 G3，不能用 Figma 的平滑百分比替代导数验收。
 - 验收同时检查接点的切线、`κ`、`dκ/ds`；覆盖普通卡片、半高胶囊、小尺寸控件、描边与照片裁剪。核对原生 / CPU 预览 / 合成器蒙版的参数一致性，并检查缓存命中后的绘制耗时及应用内动画。不得通过降低刷新率、改动动画时长或隐藏缺陷来通过验收。
 - 本次独立验证：六组不同尺寸 / 半径的 Taylor 系数检查通过，正圆与 R=0 单独核验；七组原生 / C# 参数与各 129 个轮廓采样点一致。176 × 176、R46 卡片的 Direct2D 九宫格输出与解析覆盖率逐像素 alpha 最大差为 0/255。20 个持续改变长度的填充在软件绘制探针中约 0.4 ms / 帧；这个局部耗时不代表整机帧率保证。
 
@@ -287,7 +287,7 @@ MiSans 的字重比名称看起来细一档，Atrium 只带三个文件，按实
 
 ## 8. 设置中心
 
-设置中心是 Atrium 唯一的常规窗口，使用固定顶栏与三列工作区（v0.9.11；v0.9.12 页标题移回页面内）：左侧导航，中间是预览与本页的主要选择，右侧是本页的其他参数（检查器）。
+设置中心是 Yunzhao 唯一的常规窗口，使用固定顶栏与三列工作区（v0.9.11；v0.9.12 页标题移回页面内）：左侧导航，中间是预览与本页的主要选择，右侧是本页的其他参数（检查器）。
 
 | 部分 | 规格 |
 | --- | --- |

@@ -12,10 +12,10 @@
 
 #include <string>
 
-namespace atrium {
+namespace yunzhao {
 
 // The icon glyphs' face: Segoe Fluent Icons (Windows 11), else Segoe MDL2 Assets (Windows 10 and
-// systems without it), which has every glyph Atrium draws at the same code points.
+// systems without it), which has every glyph Yunzhao draws at the same code points.
 const wchar_t* IconFontFamily();
 
 // A text format in the interface face at `px`, for one of the usual weights.
@@ -34,4 +34,4 @@ float MeasureUiText(IDWriteFactory* dw, const std::wstring& s, float px, DWRITE_
 void DrawUiText(ID2D1RenderTarget* rt, IDWriteFactory* dw, const std::wstring& s, IDWriteTextFormat* f, D2D1_RECT_F r, ID2D1Brush* b,
                 D2D1_DRAW_TEXT_OPTIONS options = D2D1_DRAW_TEXT_OPTIONS_NONE);
 
-} // namespace atrium
+} // namespace yunzhao

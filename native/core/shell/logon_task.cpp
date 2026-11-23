@@ -8,7 +8,7 @@
 
 #include <winrt/base.h>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -49,7 +49,8 @@ std::wstring UserSid()
 }
 
 // One task per user, as OneDrive names its own.
-std::wstring TaskName(const std::wstring& sid) { return L"Atrium Startup-" + sid; }
+std::wstring TaskName(const std::wstring& sid) { return L"Yunzhao Startup-" + sid; }
+std::wstring LegacyTaskName(const std::wstring& sid) { return L"Atrium Startup-" + sid; }
 
 winrt::com_ptr<ITaskFolder> RootFolder()
 {
@@ -84,7 +85,7 @@ bool RegisterLogonTask(const std::wstring& exe)
     // Normal priority (a task's default is below normal), on battery too, never stopped.
     const std::wstring xml = L"<?xml version=\"1.0\" encoding=\"UTF-16\"?>"
                              L"<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">"
-                             L"<RegistrationInfo><Description>Starts Atrium when you sign in.</Description></RegistrationInfo>"
+                             L"<RegistrationInfo><Description>Starts Yunzhao when you sign in.</Description></RegistrationInfo>"
                              L"<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + sid + L"</UserId></LogonTrigger></Triggers>"
                              L"<Principals><Principal id=\"Author\"><UserId>" + sid +
                              L"</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>"
@@ -100,6 +101,8 @@ bool RegisterLogonTask(const std::wstring& exe)
                                       TASK_LOGON_INTERACTIVE_TOKEN, none, task.put());
     if (FAILED(hr))
         Log(L"startup: the logon task could not be registered (0x%08X)", unsigned(hr));
+    else
+        folder->DeleteTask(Bstr(LegacyTaskName(sid)), 0); // drop the pre-rename task if present
     return SUCCEEDED(hr);
 }
 
@@ -112,8 +115,12 @@ std::wstring LogonTaskProgram()
     winrt::com_ptr<ITaskDefinition> definition;
     winrt::com_ptr<IActionCollection> actions;
     winrt::com_ptr<IAction> action;
-    if (!folder || FAILED(folder->GetTask(Bstr(TaskName(sid)), task.put())) ||
-        FAILED(task->get_Definition(definition.put())) || FAILED(definition->get_Actions(actions.put())) ||
+    if (!folder)
+        return {};
+    if (FAILED(folder->GetTask(Bstr(TaskName(sid)), task.put())) &&
+        FAILED(folder->GetTask(Bstr(LegacyTaskName(sid)), task.put())))
+        return {};
+    if (FAILED(task->get_Definition(definition.put())) || FAILED(definition->get_Actions(actions.put())) ||
         FAILED(actions->get_Item(1, action.put())))
         return {};
     auto exec = action.try_as<IExecAction>();
@@ -135,7 +142,9 @@ bool RemoveLogonTask()
     if (!folder)
         return false;
     HRESULT hr = folder->DeleteTask(Bstr(TaskName(sid)), 0);
-    return SUCCEEDED(hr) || hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    HRESULT legacy = folder->DeleteTask(Bstr(LegacyTaskName(sid)), 0);
+    auto missing = [](HRESULT code) { return SUCCEEDED(code) || code == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND); };
+    return missing(hr) && missing(legacy);
 }
 
-} // namespace atrium
+} // namespace yunzhao

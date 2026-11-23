@@ -14,7 +14,7 @@
 #include <thread>
 #include <tuple>
 
-namespace atrium {
+namespace yunzhao {
 
 using namespace winrt;
 using namespace winrt::Windows::Devices::Enumeration;
@@ -237,4 +237,4 @@ bool SetProjectionMode(ProjectionMode mode)
     return r == ERROR_SUCCESS;
 }
 
-} // namespace atrium
+} // namespace yunzhao

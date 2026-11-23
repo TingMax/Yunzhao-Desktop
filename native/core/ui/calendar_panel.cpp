@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -358,4 +358,4 @@ bool CalendarPanel::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

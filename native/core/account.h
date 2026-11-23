@@ -6,7 +6,7 @@
 
 #include <windows.h>
 
-namespace atrium {
+namespace yunzhao {
 
 // Shows the sign-in window until the server accepts this Windows user.
 // Writes %LOCALAPPDATA%\Yunzhao\account.json so widget files stay under users\<id>.

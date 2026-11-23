@@ -127,27 +127,27 @@ describe('global main-window controls', () => {
     ).toBe(false)
   })
 
-  it('defaults capture to F1 and ignores the old persistent gate and retired bindings', () => {
+  it('defaults global shortcuts off and ignores the old persistent gate and retired bindings', () => {
     expect(DEFAULT_SETTINGS.shortcuts).toEqual({
-      enabled: true,
-      viewVisibility: 'F2',
-      newNote: 'F3',
-      screenshot: 'F1',
-      screenshotCopy: 'Control+F1'
+      enabled: false,
+      viewVisibility: '',
+      newNote: '',
+      screenshot: '',
+      screenshotCopy: ''
     })
     expect(
       resolveSettingsRows([
-        { type: 'shortcuts', key: 'enabled', value: '0' },
+        { type: 'shortcuts', key: 'enabled', value: '1' },
         { type: 'shortcuts', key: 'screenshot', value: 'F2' },
         { type: 'shortcuts', key: 'clipboard_pin', value: 'F3' },
         { type: 'shortcuts', key: 'toggle_pins', value: 'F4' }
       ]).shortcuts
     ).toEqual({
-      enabled: true,
-      viewVisibility: 'F2',
-      newNote: 'F3',
+      enabled: false,
+      viewVisibility: '',
+      newNote: '',
       screenshot: 'F2',
-      screenshotCopy: 'Control+F1'
+      screenshotCopy: ''
     })
     expect(serializeSetting('shortcuts.screenshotCopy', 'Ctrl+F3')).toMatchObject({
       type: 'shortcuts',
@@ -160,7 +160,7 @@ describe('global main-window controls', () => {
   })
 
   it('persists the shared view visibility shortcut in a dedicated application key', () => {
-    expect(DEFAULT_SETTINGS.shortcuts.viewVisibility).toBe('F2')
+    expect(DEFAULT_SETTINGS.shortcuts.viewVisibility).toBe('')
     expect(
       resolveSettingsRows([{ type: 'shortcuts', key: 'view_visibility', value: '' }]).shortcuts
         .viewVisibility

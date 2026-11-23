@@ -24,7 +24,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class DesktopBackdrop {
 public:
@@ -90,4 +90,4 @@ private:
     std::unique_ptr<Picture> picture_; // new, not yet taken
 };
 
-} // namespace atrium
+} // namespace yunzhao

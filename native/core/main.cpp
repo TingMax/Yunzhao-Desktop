@@ -1,4 +1,4 @@
-// Atrium: the resident process. Owns the glass bar, its popups, the desktop
+// Yunzhao: the resident process. Owns the glass bar, its popups, the desktop
 // widgets, the tray icon and the settings pipe. Explorer's taskbar stays
 // unless the user hides it (setting hideTaskbar, shell/system_chrome.h; D37).
 
@@ -50,13 +50,13 @@
 
 namespace {
 
-using namespace atrium;
+using namespace yunzhao;
 
-constexpr wchar_t kHostClass[] = L"AtriumCoreHost";
-constexpr wchar_t kGuardMutex[] = L"Local\\Atrium.Guard"; // held by the guard while it runs
-constexpr wchar_t kInstanceMutex[] = L"Local\\Atrium.Core";
+constexpr wchar_t kHostClass[] = L"YunzhaoCoreHost";
+constexpr wchar_t kGuardMutex[] = L"Local\\Yunzhao.Guard"; // held by the guard while it runs
+constexpr wchar_t kInstanceMutex[] = L"Local\\Yunzhao.Core";
 constexpr UINT WM_TRAY = WM_APP + 2;
-constexpr UINT WM_OPEN_SETTINGS = WM_APP + 3; // sent by a second Atrium.exe
+constexpr UINT WM_OPEN_SETTINGS = WM_APP + 3; // sent by a second Yunzhao.exe
 constexpr UINT WM_CATALOG = WM_APP + 4;       // the app catalog has news
 constexpr UINT WM_NOTICE = WM_APP + 5;        // lParam: Notice* from the listener thread
 constexpr UINT WM_TRAY_ICONS = WM_APP + 6;    // the tray model has read the icons
@@ -68,6 +68,7 @@ constexpr UINT_PTR kTrayTimer = 0x51;
 constexpr UINT_PTR kStatusTimer = 0x52;       // the bar's status icon
 constexpr UINT_PTR kTrayFocusTimer = 0x53;    // after a forwarded tray click
 constexpr UINT_PTR kReadyTimer = 0x54;       // only during an update startup handshake
+constexpr UINT_PTR kChromeTimer = 0x55;      // while the system taskbar is hidden, put it back the moment it shows
 constexpr UINT kStatusMs = 3000;
 constexpr UINT kTrayId = 1;
 
@@ -163,13 +164,24 @@ bool SameCoreExecutable(HWND window)
 // page: the settings app opens on it ("widgets"); an open window just comes to the front.
 void OpenSettings(const wchar_t* page = nullptr)
 {
+    // Prefer an already-open window. Launching a second instance only works when its
+    // FindWindow title matches; activating here avoids a silent no-op if it does not.
+    for (const wchar_t* title : {L"Yunzhao 设置", L"Atrium 设置"}) {
+        if (HWND existing = FindWindowW(nullptr, title)) {
+            ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+            if (page && _wcsicmp(page, L"about") == 0)
+                PostMessageW(existing, WM_APP + 31, 0, 0); // matches App.OpenAboutMessage
+            return;
+        }
+    }
     std::wstring dir = ExeDir();
-    std::vector<std::wstring> candidates = {dir + L"\\Settings\\Atrium.Settings.exe", dir + L"\\Atrium.Settings.exe"};
+    std::vector<std::wstring> candidates = {dir + L"\\Settings\\Yunzhao.Settings.exe", dir + L"\\Yunzhao.Settings.exe"};
     // A development build (native\build\win-x64\Release): the packaged settings app of the same repository.
     for (std::wstring up = dir; up.size() > 3;) {
         up = up.substr(0, up.find_last_of(L'\\'));
-        candidates.push_back(up + (IsDevelopmentBuild() ? L"\\dist\\Development\\Atrium\\Settings\\Atrium.Settings.exe"
-                                                       : L"\\dist\\Atrium\\Settings\\Atrium.Settings.exe"));
+        candidates.push_back(up + (IsDevelopmentBuild() ? L"\\dist\\Development\\Yunzhao\\Settings\\Yunzhao.Settings.exe"
+                                                       : L"\\dist\\Yunzhao\\Settings\\Yunzhao.Settings.exe"));
     }
     for (const std::wstring& exe : candidates) {
         if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -178,7 +190,7 @@ void OpenSettings(const wchar_t* page = nullptr)
         if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", exe.c_str(), page ? (std::wstring(L"--page ") + page).c_str() : nullptr, nullptr, SW_SHOWNORMAL)) > 32)
             return;
     }
-    Log(L"settings: Atrium.Settings.exe not found next to %s", dir.c_str());
+    Log(L"settings: Yunzhao.Settings.exe not found next to %s", dir.c_str());
     MessageBoxW(nullptr, L"没有找到 Yunzhao 设置程序。请确认安装目录中的 Settings 文件夹完整。", L"Yunzhao", MB_ICONWARNING);
 }
 
@@ -189,19 +201,19 @@ void AddTrayIcon()
     nid.uID = kTrayId;
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     nid.uCallbackMessage = WM_TRAY;
-    nid.hIcon = static_cast<HICON>(LoadImageW(g_app.instance, MAKEINTRESOURCEW(IDI_ATRIUM), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+    nid.hIcon = static_cast<HICON>(LoadImageW(g_app.instance, MAKEINTRESOURCEW(IDI_YUNZHAO), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                               GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
     wcscpy_s(nid.szTip, L"Yunzhao");
     g_app.trayAdded = Shell_NotifyIconW(NIM_ADD, &nid) != FALSE;
     DestroyIcon(nid.hIcon);
     if (!g_app.trayAdded) {
-        Log(L"tray: could not add Atrium's notification icon; will retry when the taskbar is ready");
+        Log(L"tray: could not add Yunzhao's notification icon; will retry when the taskbar is ready");
         return;
     }
     nid.uVersion = NOTIFYICON_VERSION_4;
     if (!Shell_NotifyIconW(NIM_SETVERSION, &nid))
         Log(L"tray: could not set notification icon version");
-    Log(L"tray: Atrium notification icon added");
+    Log(L"tray: Yunzhao notification icon added");
 }
 
 void RemoveTrayIcon()
@@ -301,7 +313,7 @@ void UpdateStatus()
         g_app.status->Refresh();
 }
 
-// Atrium's tray panel and control centre open above their entries on the
+// Yunzhao's tray panel and control centre open above their entries on the
 // bar; a click on the entry while one is open closes it (and must not reopen
 // it: the press that deactivated it is the same click).
 void ToggleTray(RECT)
@@ -636,25 +648,31 @@ void ApplySettings(const Settings& s)
     g_app.widgets->SetTimetableBadge(float(s.timetableBadgeScale));
     g_app.widgets->SetEnabled(s.widgets);
     g_app.widgetsOn = s.widgets;
-    // The Windows key opens the start menu and the bar's apps, which belong to the bar.
-    const bool keyStart = s.bar && s.winKeyStart, keyNumbers = s.bar && s.winNumbers;
-    if (!(keyStart == g_app.winKeyStart && keyNumbers == g_app.winNumbers && bool(g_app.winKey) == (keyStart || keyNumbers))) {
+    // Global hotkeys are temporarily disabled: the low-level Win key hook conflicts
+    // with other software and there is no in-app conflict prompt yet.
+    if (g_app.winKey) {
         g_app.winKey.reset();
-        if (keyStart || keyNumbers)
-            g_app.winKey = std::make_unique<WinKey>(g_app.host, WM_WIN_KEY, keyStart, keyNumbers);
-        g_app.winKeyStart = keyStart;
-        g_app.winNumbers = keyNumbers;
+        Log(L"winkey: disabled (conflicts with other software)");
     }
+    g_app.winKeyStart = false;
+    g_app.winNumbers = false;
     if (g_app.chrome) {
         // Without the bar, Windows' own taskbar and banners are never hidden.
         g_app.chrome->SetTaskbarHidden(s.bar && s.hideTaskbar);
         g_app.chrome->SetBannersHidden(s.bar && s.hideBanners);
+        // A short period here fights Explorer on every tick and makes the whole
+        // desktop stutter, especially on Windows 10. The show/location hook and
+        // the 3 s status check are enough to keep the system taskbar parked.
+        if (s.bar && s.hideTaskbar)
+            SetTimer(g_app.host, kChromeTimer, 1000, nullptr);
+        else
+            KillTimer(g_app.host, kChromeTimer);
         if (s.bar && (s.hideTaskbar || s.hideBanners))
             EnsureGuard();
     }
 }
 
-// While Windows' taskbar or its banners are hidden, a second Atrium.exe (`--guard`, RunGuard)
+// While Windows' taskbar or its banners are hidden, a second Yunzhao.exe (`--guard`, RunGuard)
 // watches this one: however it ends (a crash past the exception filter, abort, being killed),
 // what it changed in Windows is put back at once; while it does not respond, the taskbar shows.
 void EnsureGuard()
@@ -702,13 +720,14 @@ int RunGuard(DWORD pid)
         DWORD_PTR answer = 0;
         const bool alive = !host || SendMessageTimeoutW(host, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 3000, &answer);
         silent = alive ? 0 : silent + 1;
-        if (silent >= 4 && !shown) {
-            // About 15 s without an answer: the taskbar back (Atrium hides it again if it recovers).
-            Log(L"guard: Atrium (%lu) is not responding: Windows' taskbar shown", pid);
+        if (silent >= 2 && !shown) {
+            // About 4–7 s without an answer: put the system taskbar back so the
+            // desktop is usable while Yunzhao is stuck (it re-hides if it recovers).
+            Log(L"guard: Yunzhao (%lu) is not responding: Windows' taskbar shown", pid);
             SystemChrome::ShowTaskbarsNow();
             shown = true;
         } else if (alive && shown) {
-            Log(L"guard: Atrium (%lu) responds again", pid);
+            Log(L"guard: Yunzhao (%lu) responds again", pid);
             shown = false;
         }
     }
@@ -718,7 +737,7 @@ int RunGuard(DWORD pid)
     // A clean exit put everything back (system.json is gone); anything else is put back here.
     if (SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
         if (SystemChrome::UndoLeftover())
-            Log(L"guard: Atrium (%lu) ended without putting Windows back (exit 0x%08lX): done here", pid, code);
+            Log(L"guard: Yunzhao (%lu) ended without putting Windows back (exit 0x%08lX): done here", pid, code);
         CoUninitialize();
     }
     if (held) {
@@ -764,7 +783,7 @@ void ShowItemMenu(const std::wstring& key, POINT pt)
     const std::wstring pinTarget = g_app.tasks->PinTarget(key);
     const std::wstring appPath = pinTarget.empty() ? pin.path : pinTarget;
     // The Windows-style entries are a setting of their own: with the switch off
-    // the menu is the one Atrium always had.
+    // the menu is the one Yunzhao always had.
     const bool windowsEntries = !g_app.server || g_app.server->Current().windowsContextMenu;
     std::wstring appId;
     std::vector<JumpItem> listed; // the rows below the app's name, in menu order
@@ -863,7 +882,7 @@ void ShowItemMenu(const std::wstring& key, POINT pt)
     std::wstring location = g_app.tasks->FileLocation(key);
     if (!location.empty())
         entries.push_back({L"打开文件所在的位置", kCmdOpenLocation});
-    entries.push_back({it->pinned ? L"从 Atrium 取消固定" : L"固定到 Atrium", int(it->pinned ? kCmdUnpin : kCmdPin)});
+    entries.push_back({it->pinned ? L"从 Yunzhao 取消固定" : L"固定到 Yunzhao", int(it->pinned ? kCmdUnpin : kCmdPin)});
     if (windowsEntries && !appPath.empty())
         entries.push_back({L"属性", kCmdProperties});
     if (!it->windows.empty())
@@ -1149,7 +1168,7 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
         switch (LOWORD(l)) {
         case WM_CONTEXTMENU:
         case WM_RBUTTONUP: {
-            // Explorer gives the icon's place; with the system taskbar hidden (and from Atrium's
+            // Explorer gives the icon's place; with the system taskbar hidden (and from Yunzhao's
             // tray panel) that is a hidden button at the screen's edge: the pointer then.
             POINT at{GET_X_LPARAM(w), GET_Y_LPARAM(w)}, cursor;
             if (GetCursorPos(&cursor) && (std::abs(at.x - cursor.x) > 48 || std::abs(at.y - cursor.y) > 48))
@@ -1202,7 +1221,7 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_NOTICE:
         if (auto* n = reinterpret_cast<Notice*>(l)) {
             // Only from sources still turned on (a notice may arrive just after).
-            bool on = n->source == L"atrium" ? g_app.barOn.value_or(true) : n->source == L"wechat" ? bool(g_app.wechat)
+            bool on = n->source == L"yunzhao" ? g_app.barOn.value_or(true) : n->source == L"wechat" ? bool(g_app.wechat)
                        : n->source == L"feishu" ? bool(g_app.feishu) : bool(g_app.listener);
             if (g_app.notes && on)
                 g_app.notes->Post(*n);
@@ -1269,6 +1288,11 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 g_app.chrome->Enforce();
             return 0;
         }
+        if (w == kChromeTimer) {
+            if (g_app.chrome)
+                g_app.chrome->RehideTaskbars();
+            return 0;
+        }
         if (w == kTrayFocusTimer) {
             // Explorer gives the focus to its hidden overflow window when a
             // tray button is invoked. The app usually takes it for its window
@@ -1309,22 +1333,22 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         }
         break;
-    case WM_ATRIUM_ADD_WIDGET:
+    case WM_YUNZHAO_ADD_WIDGET:
         if (!(w <= WPARAM(WidgetKind::Habits) && l >= 0 && l <= LPARAM(WidgetSize::Large) && g_app.widgetsOn && g_app.widgets))
             return 0;
         return g_app.widgets->Toggle(WidgetKind(w), WidgetSize(l));
-    case WM_ATRIUM_SIZE_CALENDAR:
+    case WM_YUNZHAO_SIZE_CALENDAR:
         if (g_app.widgetsOn && g_app.widgets)
             g_app.widgets->SetCalendarScale(std::clamp(int(w), 0, 1000) / 1000.f);
         return 0;
-    case WM_ATRIUM_CALENDAR:
+    case WM_YUNZHAO_CALENDAR:
         if (!g_app.widgetsOn || !g_app.widgets)
             return 0;
         if (w == 2)
             return g_app.widgets->CalendarOpen() ? 1 : 0;
         g_app.widgets->SetCalendarOpen(w != 0);
         return g_app.widgets->CalendarOpen() ? 1 : 0;
-    case WM_ATRIUM_SETTINGS:
+    case WM_YUNZHAO_SETTINGS:
         ApplySettings(g_app.server->Current());
         return 0;
     case WM_DISPLAYCHANGE:
@@ -1382,7 +1406,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     int argumentCount = 0;
     auto startupArguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     for (int i = 1; startupArguments && i + 1 < argumentCount; ++i)
-        if (wcscmp(startupArguments[i], L"--ready-event") == 0 && std::wstring_view(startupArguments[i + 1]).starts_with(L"Local\\Atrium.Update.Core."))
+        if (wcscmp(startupArguments[i], L"--ready-event") == 0 && std::wstring_view(startupArguments[i + 1]).starts_with(L"Local\\Yunzhao.Update.Core."))
             g_readyEvent = startupArguments[i + 1];
     LocalFree(startupArguments);
     if (wcscmp(cmdLine, L"--uninstall") == 0) {
@@ -1396,12 +1420,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
         // The launcher exits before the script removes this executable.
         return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", powershell.c_str(), arguments.c_str(), nullptr, SW_HIDE)) > 32 ? 0 : 1;
     }
-    // `Atrium.exe --guard <pid>`: the guard of a run hiding Windows' taskbar (EnsureGuard).
+    // `Yunzhao.exe --guard <pid>`: the guard of a run hiding Windows' taskbar (EnsureGuard).
     if (const wchar_t* guard = wcsstr(cmdLine, L"--guard ")) {
         const DWORD pid = wcstoul(guard + 8, nullptr, 10);
         return pid ? RunGuard(pid) : 1;
     }
-    // `Atrium.exe --exit` asks a running instance to quit (installer, updater).
+    // `Yunzhao.exe --exit` asks a running instance to quit (installer, updater).
     if (wcsstr(cmdLine, L"--exit")) {
         HWND other = FindWindowW(kHostClass, nullptr);
         if (!other)
@@ -1455,7 +1479,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     wc.hInstance = instance;
     wc.lpfnWndProc = HostProc;
     wc.lpszClassName = kHostClass;
-    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_ATRIUM));
+    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_YUNZHAO));
     RegisterClassExW(&wc);
     // A hidden top-level window (not message-only) so TaskbarCreated arrives.
     g_app.host = CreateWindowExW(WS_EX_TOOLWINDOW, kHostClass, L"Yunzhao", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
@@ -1543,7 +1567,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     g_app.notes->onUnread = [](int n) { ForBars([&](Bar& bar) { bar.SetUnread(n); }); };
     g_app.notes->onActivate = RunNoticeAction;
     g_app.notes->quietIsOurs = [] { return g_app.chrome && g_app.chrome->QuietIsOurs(); };
-    // New cards wait while one of Atrium's panels is open (they would overlap it).
+    // New cards wait while one of Yunzhao's panels is open (they would overlap it).
     g_app.notes->held = [] {
         return g_app.start->Visible() || g_app.trayPanel->Visible() || g_app.control->Visible() || g_app.calendar->Visible();
     };
@@ -1585,7 +1609,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     StopYunzhaoIsland();
     g_app.displaysReady = false;
     // First the render thread, while every window it draws for is still there; a driver call stuck
-    // in the desktop duplication (it holds the shared device) must not keep Atrium from exiting:
+    // in the desktop duplication (it holds the shared device) must not keep Yunzhao from exiting:
     // the system taskbar comes back and the process ends.
     if (g_app.chrome) g_app.chrome->RestoreForExit();
     g_app.stage->RestoreAll(); // the windows Stage Manager put away come back

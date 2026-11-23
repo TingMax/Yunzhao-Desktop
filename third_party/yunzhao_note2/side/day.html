@@ -46,13 +46,13 @@
         const item = document.createElement('li')
         item.className = note.done ? 'done' : ''
         item.textContent = note.content || '未命名待办'
-        item.onclick = () => window.api.atriumDayEdit?.(note.id)
+        item.onclick = () => window.api.yunzhaoDayEdit?.(note.id)
         list.appendChild(item)
       }
     }
-    document.getElementById('create').onclick = () => window.api.atriumDayCreate?.(dateKey)
+    document.getElementById('create').onclick = () => window.api.yunzhaoDayCreate?.(dateKey)
     document.getElementById('close').onclick = () => window.close()
-    window.api.onAtriumDayData?.(paint)
+    window.api.onYunzhaoDayData?.(paint)
   </script>
 </body>
 </html>

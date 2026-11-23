@@ -1,7 +1,7 @@
 // The calendar, opened from the bar's clock: a month on a piece of the bar's
 // glass (the Chinese lunar date under each day, festivals in the accent
 // colour), and below it a capsule shaped like the bar with the time and the
-// selected day. Drawn by Atrium instead of the system's calendar flyout; the
+// selected day. Drawn by Yunzhao instead of the system's calendar flyout; the
 // lunar calendar comes from Windows' ICU.
 #pragma once
 
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class CalendarPanel {
 public:
@@ -66,4 +66,4 @@ private:
     int monthDir_ = 0;
 };
 
-} // namespace atrium
+} // namespace yunzhao

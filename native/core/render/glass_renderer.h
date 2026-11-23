@@ -16,7 +16,7 @@
 #include <optional>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 // Mirrors cbuffer GlassParams in shaders/glass.hlsl (368 bytes). Lengths in px.
 struct GlassParams {
@@ -167,4 +167,4 @@ private:
     winrt::com_ptr<IDWriteFactory3> dwrite_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

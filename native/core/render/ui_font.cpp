@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <mutex>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -238,4 +238,4 @@ void DrawUiText(ID2D1RenderTarget* rt, IDWriteFactory* dw, const std::wstring& s
     rt->DrawTextLayout(D2D1::Point2F(r.left, r.top), layout.get(), b, options);
 }
 
-} // namespace atrium
+} // namespace yunzhao

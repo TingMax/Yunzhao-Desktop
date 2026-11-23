@@ -1,5 +1,5 @@
 name: 问题反馈 / Bug report
-description: Atrium 有地方不正常 / Something in Atrium does not work as it should
+description: Yunzhao 有地方不正常 / Something in Yunzhao does not work as it should
 labels: [bug]
 body:
   - type: markdown
@@ -9,9 +9,9 @@ body:
         Thanks for reporting! The easier the problem is to reproduce, the sooner it gets fixed. Chinese or English are both fine.
 
         **收集信息的小提示 / Quick guide**
-        - **Atrium 版本 / Atrium version**：设置中心 › 关于 / Settings › 关于 (About)
+        - **Yunzhao 版本 / Yunzhao version**：设置中心 › 关于 / Settings › 关于 (About)
         - **Windows 版本 / Windows version**：按 `Win + R`，输入 `winver` 回车，抄下第二行，例如“版本 24H2（OS 内部版本 26100.2454）” / press `Win + R`, type `winver`, press Enter, copy the second line, e.g. "Version 24H2 (OS Build 26100.2454)"
-        - **日志 / Logs**：按 `Win + R`，输入 `%LOCALAPPDATA%\Atrium\logs` 回车 / press `Win + R`, type `%LOCALAPPDATA%\Atrium\logs`, press Enter
+        - **日志 / Logs**：按 `Win + R`，输入 `%LOCALAPPDATA%\Yunzhao\logs` 回车 / press `Win + R`, type `%LOCALAPPDATA%\Yunzhao\logs`, press Enter
           - `core.log`：任务栏、开始菜单、台前调度、小组件、通知等的日志；上一份是 `core.1.log` / the taskbar, start menu, Stage Manager, widgets, notifications…; the previous one is `core.1.log`
           - `settings.log`：设置中心崩溃或出错时才有 / only when the settings app crashed or failed
         - **截图和录屏 / Screenshots and videos**：直接拖进输入框即可上传；视频建议 10 MB 以内的 mp4 / drag them into a text box; keep videos under 10 MB (mp4)
@@ -48,7 +48,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Atrium 版本 / Atrium version
+      label: Yunzhao 版本 / Yunzhao version
       description: 设置中心 › 关于 / Settings › 关于 (About)
       placeholder: "2.4.0"
     validations:
@@ -74,13 +74,13 @@ body:
     attributes:
       label: 日志 / Log
       description: |
-        问题出现后尽快把 `%LOCALAPPDATA%\Atrium\logs\core.log` 拖进来（设置中心的问题再加 `settings.log`），并写上大概几点发生的。如果上传不了 .log 文件，把扩展名改成 .txt 再拖。
-        Soon after the problem happens, drag `%LOCALAPPDATA%\Atrium\logs\core.log` in (plus `settings.log` for settings app problems) and note roughly when it happened. If .log files are refused, rename it to .txt.
+        问题出现后尽快把 `%LOCALAPPDATA%\Yunzhao\logs\core.log` 拖进来（设置中心的问题再加 `settings.log`），并写上大概几点发生的。如果上传不了 .log 文件，把扩展名改成 .txt 再拖。
+        Soon after the problem happens, drag `%LOCALAPPDATA%\Yunzhao\logs\core.log` in (plus `settings.log` for settings app problems) and note roughly when it happened. If .log files are refused, rename it to .txt.
       placeholder: 大约 21:35 出现 / Happened around 21:35
   - type: textarea
     id: config
     attributes:
       label: 相关设置文件（可选）/ Settings files (optional)
       description: |
-        和某个选项有关时，可以附上 `%LOCALAPPDATA%\Atrium` 里的文件：`settings.json`（设置），`widgets.json`（小组件），`stage.json`（台前调度），`start.json`（开始菜单）。里面没有密码，但有固定应用的路径等使用痕迹，介意的话只写改过哪些选项即可。
-        If an option is involved, attach files from `%LOCALAPPDATA%\Atrium`: `settings.json` (settings), `widgets.json` (widgets), `stage.json` (Stage Manager), `start.json` (start menu). They hold no passwords but do show pinned app paths; if you prefer, just list the options you changed.
+        和某个选项有关时，可以附上 `%LOCALAPPDATA%\Yunzhao` 里的文件：`settings.json`（设置），`widgets.json`（小组件），`stage.json`（台前调度），`start.json`（开始菜单）。里面没有密码，但有固定应用的路径等使用痕迹，介意的话只写改过哪些选项即可。
+        If an option is involved, attach files from `%LOCALAPPDATA%\Yunzhao`: `settings.json` (settings), `widgets.json` (widgets), `stage.json` (Stage Manager), `start.json` (start menu). They hold no passwords but do show pinned app paths; if you prefer, just list the options you changed.

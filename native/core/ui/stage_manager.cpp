@@ -18,7 +18,7 @@
 
 namespace json = winrt::Windows::Data::Json;
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -618,7 +618,7 @@ void StageManager::RestoreAll()
 }
 
 // Minimized on the stage (setting stageMinimize): a window on the stage that is down now (it was up
-// at the last look) leaves the stage and waits at the top of the strip, put away as if Atrium had
+// at the last look) leaves the stage and waits at the top of the strip, put away as if Yunzhao had
 // (a pick there brings it back, where it was).
 void StageManager::Minimized(HWND window)
 {
@@ -1312,7 +1312,7 @@ std::shared_ptr<const WindowPicture> StageManager::PictureOf(HWND window, const 
         cacheKey = L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(window)) + L"|" + std::to_wstring(it->second.gen);
         return it->second.picture;
     }
-    // No picture (put away before Atrium started, or one that cannot be printed): its app's icon.
+    // No picture (put away before Yunzhao started, or one that cannot be printed): its app's icon.
     cacheKey = L"stage|p|" + AppOf(app);
     auto& p = placeholders_[AppOf(app)];
     if (!p) {
@@ -1663,4 +1663,4 @@ bool StageManager::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

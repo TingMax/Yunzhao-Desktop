@@ -7,7 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 
-using namespace atrium;
+using namespace yunzhao;
 
 namespace {
 void Require(bool condition, const char* message)

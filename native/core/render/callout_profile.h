@@ -3,7 +3,7 @@
 #pragma once
 #include "corner_profile.h"
 
-namespace atrium {
+namespace yunzhao {
 inline float CalloutTailEdge(float x, float y, float width, float bottom, float tipX, float halfWidth, float height, float overlap)
 {
     const float margin = std::max(0.5f, overlap * 0.25f);
@@ -29,4 +29,4 @@ inline float CalloutEdge(float x, float y, float width, float height, float radi
                                   std::abs(y - height * 0.5f) - height * 0.5f + corner.reach, corner);
     return tailHeight > 0 ? std::min(body, CalloutTailEdge(x, y, width, height, tipX, halfWidth, tailHeight, overlap)) : body;
 }
-} // namespace atrium
+} // namespace yunzhao

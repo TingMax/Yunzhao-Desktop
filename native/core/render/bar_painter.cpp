@@ -15,7 +15,7 @@
 
 #pragma comment(lib, "dxguid.lib") // CLSID_D2D1Shadow
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -143,8 +143,10 @@ bool BarPainter::Animate(const BarScene& scene, double nowMs)
     bool hovering = scene.pointerX >= 0 && scene.dragKey.empty() && scene.magnify > 1.001f;
     mag_ = std::max(1.f, scene.magnify);
     range_ = std::max(1.f, scene.magnifyRange);
-    if (hovering)
+    if (hovering) {
+        moving |= centre_ != scene.pointerX;
         centre_ = scene.pointerX;
+    }
     float amount = Approach(amount_, hovering ? 1.f : 0.f, dt, 13);
     moving |= amount != amount_;
     amount_ = amount;
@@ -849,4 +851,4 @@ void BarPainter::DrawLogo(ID2D1DeviceContext2* d2d, D2D1_RECT_F r, float opacity
     }
 }
 
-} // namespace atrium
+} // namespace yunzhao

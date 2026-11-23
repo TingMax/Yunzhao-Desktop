@@ -39,8 +39,8 @@ import {
 
 const { showMessage } = useMessage()
 let stopNewNoteShortcut = null
-const atriumHosted = ref(false)
-const atriumBoard = ref(0)
+const yunzhaoHosted = ref(false)
+const yunzhaoBoard = ref(0)
 const badgeScale = ref(0.7)
 useWeatherRecovery()
 const props = defineProps({
@@ -352,8 +352,8 @@ async function onHistoricalNotesMoved() {
   }
 }
 
-function applyAtriumState(state) {
-  atriumBoard.value = Number(state?.board) === 2 ? 2 : 0
+function applyYunzhaoState(state) {
+  yunzhaoBoard.value = Number(state?.board) === 2 ? 2 : 0
   const scale = Number(state?.badgeScale)
   badgeScale.value = Number.isFinite(scale) ? Math.min(1.6, Math.max(0.4, scale)) : 0.7
 }
@@ -467,13 +467,13 @@ function dayWindowPayload() {
 function showDayWindow() {
   const payload = dayWindowPayload()
   if (!payload) return
-  void window.api.atriumDayWindow?.(payload)
+  void window.api.yunzhaoDayWindow?.(payload)
 }
 
 watch(selectedKey, () => {
-  if (props.daySurface || !atriumHosted.value) return
+  if (props.daySurface || !yunzhaoHosted.value) return
   const payload = dayWindowPayload()
-  if (payload) void window.api.atriumDaySync?.(payload)
+  if (payload) void window.api.yunzhaoDaySync?.(payload)
 })
 
 function openHostedDay() {
@@ -491,7 +491,7 @@ function openHostedDay() {
 function openPreviewDayPanel(day) {
   if (!(day?.isActive ?? day?.inCurrentMonth)) return
   selectedKey.value = day.key
-  if (atriumHosted.value && !props.daySurface) {
+  if (yunzhaoHosted.value && !props.daySurface) {
     void nextTick(() => showDayWindow())
     return
   }
@@ -540,7 +540,7 @@ function onDayPanelClose() {
 }
 
 function toggleDayPanel() {
-  if (atriumHosted.value && !props.daySurface) {
+  if (yunzhaoHosted.value && !props.daySurface) {
     openHostedDay()
     return
   }
@@ -571,7 +571,7 @@ function onCreateRequest() {
   if (!key) return
   // The day list is its own window beside the date. Its form has to open on the calendar.
   if (props.daySurface) {
-    window.api.atriumDayCreate?.(key)
+    window.api.yunzhaoDayCreate?.(key)
     return
   }
   openCreator(key)
@@ -581,7 +581,7 @@ function onEditRequest(note) {
   const id = note?.id
   if (!id) return
   if (props.daySurface) {
-    window.api.atriumDayEdit?.(id)
+    window.api.yunzhaoDayEdit?.(id)
     return
   }
   void openEditor(note)
@@ -591,34 +591,34 @@ function onTimetableFocus(dateKey) {
   if (typeof dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) selectedKey.value = dateKey
 }
 
-let atriumAsk = 0
-let stopAtriumCreator = null
-let stopAtriumUi = null
+let yunzhaoAsk = 0
+let stopYunzhaoCreator = null
+let stopYunzhaoUi = null
 
 onMounted(() => {
-  window.addEventListener('atrium-new-note', onAtriumNewNote)
-  window.api.onAtriumDayCreate?.((dateKey) => openHostedCreator(dateKey))
-  window.api.onAtriumDayEdit?.((id) => {
+  window.addEventListener('yunzhao-new-note', onYunzhaoNewNote)
+  window.api.onYunzhaoDayCreate?.((dateKey) => openHostedCreator(dateKey))
+  window.api.onYunzhaoDayEdit?.((id) => {
     if (id) void openEditor({ id })
   })
-  stopAtriumUi = window.api.onAtriumUiSetting?.((change) => applyHostedCalendarUi(change))
-  stopAtriumCreator = window.api.onAtriumState?.((state) => {
-    applyAtriumState(state)
+  stopYunzhaoUi = window.api.onYunzhaoUiSetting?.((change) => applyHostedCalendarUi(change))
+  stopYunzhaoCreator = window.api.onYunzhaoState?.((state) => {
+    applyYunzhaoState(state)
     const ask = Number(state?.ask || 0)
-    if (ask > atriumAsk) {
-      atriumAsk = ask
+    if (ask > yunzhaoAsk) {
+      yunzhaoAsk = ask
       openHostedCreator(state?.date)
     } else {
-      atriumAsk = Math.max(atriumAsk, ask)
+      yunzhaoAsk = Math.max(yunzhaoAsk, ask)
     }
   })
-  void window.api.atriumHosted?.().then((hosted) => {
-    atriumHosted.value = Boolean(hosted)
+  void window.api.yunzhaoHosted?.().then((hosted) => {
+    yunzhaoHosted.value = Boolean(hosted)
     if (!hosted) return
-    void window.api.atriumState?.().then((state) => applyAtriumState(state))
+    void window.api.yunzhaoState?.().then((state) => applyYunzhaoState(state))
   })
   stopNewNoteShortcut = window.api.onNewNoteRequested?.(() => {
-    if (atriumHosted.value) return
+    if (yunzhaoHosted.value) return
     const creatorDialog = creatorOverlayRef.value?.querySelector('.month-creator')
     const anotherModal = [...document.querySelectorAll('[aria-modal="true"]')].some(
       (modal) => modal !== creatorDialog
@@ -648,7 +648,7 @@ const onQuickCreated = calendarModel.addNote
 
 function closeCreator() {
   creatorDate.value = ''
-  if (atriumHosted.value) window.api.atriumCommand?.({ cmd: 'creator-done' })
+  if (yunzhaoHosted.value) window.api.yunzhaoCommand?.({ cmd: 'creator-done' })
 }
 
 function openHostedCreator(dateKey) {
@@ -657,7 +657,7 @@ function openHostedCreator(dateKey) {
   creatorDate.value = key
 }
 
-function onAtriumNewNote() {
+function onYunzhaoNewNote() {
   openHostedCreator()
 }
 
@@ -779,7 +779,7 @@ onMounted(async () => {
     const key = props.dayKey || todayKey.value
     if (key) selectedKey.value = key
     panelOpen.value = true
-    stopDayShow = window.api.onAtriumDayShow?.((payload) => applyShownDay(payload?.dateKey))
+    stopDayShow = window.api.onYunzhaoDayShow?.((payload) => applyShownDay(payload?.dateKey))
   }
   let bootstrappingSettings = true
   stopSettingsListener = settingsSnapshots.subscribe((snapshot) => {
@@ -819,9 +819,9 @@ onMounted(async () => {
 
 watch(modalOpen, (open) => emit('modal-state-change', open), { immediate: true })
 watch([creatorDisplayed, editorDisplayed], ([creator, editor]) => {
-  if (props.daySurface || !atriumHosted.value) return
-  if (creator || editor) void window.api.atriumDayHold?.()
-  else void window.api.atriumDayReveal?.()
+  if (props.daySurface || !yunzhaoHosted.value) return
+  if (creator || editor) void window.api.yunzhaoDayHold?.()
+  else void window.api.yunzhaoDayReveal?.()
 })
 watch(todayKey, (next, previous) => {
   if (next !== previous) queueNotesRefresh()
@@ -842,9 +842,9 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  window.removeEventListener('atrium-new-note', onAtriumNewNote)
-  stopAtriumCreator?.()
-  stopAtriumUi?.()
+  window.removeEventListener('yunzhao-new-note', onYunzhaoNewNote)
+  stopYunzhaoCreator?.()
+  stopYunzhaoUi?.()
   stopNewNoteShortcut?.()
   statusActions.dispose()
   calendarModel.dispose()
@@ -867,12 +867,12 @@ onBeforeUnmount(() => {
     <div
       ref="workspaceBodyRef"
       class="month-workspace__body"
-      :class="{ 'is-hosted': atriumHosted && !daySurface, 'is-day-window': daySurface }"
+      :class="{ 'is-hosted': yunzhaoHosted && !daySurface, 'is-day-window': daySurface }"
       :inert="modalOpen"
     >
       <Transition name="month-side-panel">
         <MonthDayPanel
-          v-if="panelOpen && selectedKey && (!atriumHosted || daySurface)"
+          v-if="panelOpen && selectedKey && (!yunzhaoHosted || daySurface)"
           class="month-workspace__side"
           :style="daySurface ? null : { width: `${dayPanelSize}%` }"
           :date-key="selectedKey"
@@ -900,7 +900,7 @@ onBeforeUnmount(() => {
 
       <section v-if="!daySurface" class="month-workspace__calendar">
         <HostedTimetable
-          v-if="atriumHosted && atriumBoard === 2"
+          v-if="yunzhaoHosted && yunzhaoBoard === 2"
           :status-transitions="statusTransitions"
           :badge-scale="badgeScale"
           @create="openCreator"

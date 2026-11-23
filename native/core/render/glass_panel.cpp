@@ -4,7 +4,7 @@
 #include <map>
 #include <mutex>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -122,4 +122,4 @@ PanelTone PanelToneFor(uint32_t userTint, double transparency)
     return t;
 }
 
-} // namespace atrium
+} // namespace yunzhao

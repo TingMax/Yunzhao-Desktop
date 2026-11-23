@@ -32,7 +32,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -650,7 +650,7 @@ struct TaskModel::Impl {
     {
         self = this;
         shellHookMsg = RegisterWindowMessageW(L"SHELLHOOK");
-        readyMsg = RegisterWindowMessageW(L"Atrium.TaskModel.Ready");
+        readyMsg = RegisterWindowMessageW(L"Yunzhao.TaskModel.Ready");
         worker = std::thread([this] { WorkerMain(); });
 
         struct Range {
@@ -1222,7 +1222,7 @@ struct TaskModel::Impl {
         bool ok = false;
         LARGE_INTEGER t0, t1, f;
         QueryPerformanceCounter(&t0);
-        ok = LoadAtriumIcon(job.exePath, job.size, img);
+        ok = LoadYunzhaoIcon(job.exePath, job.size, img);
         for (size_t i = 0; !ok && i < sources.size(); ++i)
             ok = LoadShellImage(sources[i], job.size, img);
         for (size_t i = 0; !ok && i < job.hwnds.size(); ++i) {
@@ -1530,11 +1530,14 @@ std::wstring AppExecutable(const std::wstring& path)
     return target;
 }
 
-bool LoadAtriumIcon(const std::wstring& exePath, int sizePx, IconImage& out)
+bool LoadYunzhaoIcon(const std::wstring& exePath, int sizePx, IconImage& out)
 {
     const size_t slash = exePath.find_last_of(L"\\/");
     const wchar_t* name = exePath.c_str() + (slash == std::wstring::npos ? 0 : slash + 1);
-    if (_wcsicmp(name, L"Atrium.Settings.exe") != 0 && _wcsicmp(name, L"Yunzhao.exe") != 0 && _wcsicmp(name, L"Atrium.exe") != 0)
+    // Accept the current names and the pre-rename Atrium binaries still on disk.
+    if (_wcsicmp(name, L"Yunzhao.Settings.exe") != 0 && _wcsicmp(name, L"Yunzhao.exe") != 0 &&
+        _wcsicmp(name, L"Atrium.Settings.exe") != 0 && _wcsicmp(name, L"Atrium.exe") != 0 &&
+        _wcsicmp(name, L"Atrium.Core.exe") != 0)
         return false;
     HICON icon = nullptr;
     if (SHDefExtractIconW(exePath.c_str(), 0, 0, &icon, nullptr, MAKELONG(sizePx, 0)) != S_OK || !icon)
@@ -1787,4 +1790,4 @@ std::vector<PinnedApp> TaskModel::ImportWindowsPins()
     return pins;
 }
 
-} // namespace atrium
+} // namespace yunzhao

@@ -3,11 +3,11 @@
 在 Windows 上运行：
 
 ```powershell
-cmake --preset win-x64 -S native -B native/build/development -DATRIUM_DEVELOPMENT=ON -DATRIUM_BUILD_TESTS=ON
+cmake --preset win-x64 -S native -B native/build/development -DYUNZHAO_DEVELOPMENT=ON -DYUNZHAO_BUILD_TESTS=ON
 cmake --build native/build/development --config Release
 ctest --test-dir native/build/development -C Release --output-on-failure
 dotnet run --project tests/SettingsChecks -c Release
-dotnet build settings/Atrium.Settings/Atrium.Settings.csproj -c Release -p:AtriumDevelopment=true
+dotnet build settings/Yunzhao.Settings/Yunzhao.Settings.csproj -c Release -p:YunzhaoDevelopment=true
 ```
 
 自动检查覆盖两端配置往返、旧配置默认值、非法输入、保存状态、材质预设保留显示器设置、显示器枚举、断开重连回退，以及三种应用分屏规则（多窗口应用、跨屏移动、固定应用和活动标记）。原生规则使用模拟显示器和窗口，不修改系统显示布局。

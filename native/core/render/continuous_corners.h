@@ -7,7 +7,7 @@
 #include <array>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 struct CornerMask {
     CornerProfile outer, inner;
     float stroke = 0;
@@ -156,4 +156,4 @@ inline HRGN ContinuousRegion(RECT rect, int radius)
         }
     return CreatePolygonRgn(points.data(), int(points.size()), WINDING);
 }
-} // namespace atrium
+} // namespace yunzhao

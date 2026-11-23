@@ -6,7 +6,7 @@
 // (connecting to saved ones) or the paired Bluetooth devices; so do the sound
 // (the output device and each app's volume, as on the Windows taskbar) and
 // casting (wireless displays and the projection modes of Win+P). Drawn by
-// Atrium; only the system's dialogs and settings pages are left to Windows.
+// Yunzhao; only the system's dialogs and settings pages are left to Windows.
 #pragma once
 
 #include "motion.h"
@@ -23,7 +23,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class ControlCenter {
 public:
@@ -148,4 +148,4 @@ private:
     int monitors_ = 1;
 };
 
-} // namespace atrium
+} // namespace yunzhao

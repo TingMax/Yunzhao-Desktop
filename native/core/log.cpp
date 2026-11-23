@@ -12,7 +12,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -63,7 +63,7 @@ private:
     }
     void Run()
     {
-        SetThreadDescription(GetCurrentThread(), L"Atrium log");
+        SetThreadDescription(GetCurrentThread(), L"Yunzhao log");
         const std::wstring path = LogPath();
         WIN32_FILE_ATTRIBUTE_DATA a{};
         if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 8u << 20))
@@ -115,4 +115,4 @@ void Log(const wchar_t* format, ...)
     Writer::Get().Add(line);
 }
 
-} // namespace atrium
+} // namespace yunzhao

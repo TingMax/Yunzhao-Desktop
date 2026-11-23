@@ -5,7 +5,7 @@
 
 #include <string>
 
-namespace atrium {
+namespace yunzhao {
 
 int DaysIn(int y, int m);
 int Weekday(int y, int m, int d); // 0 Monday .. 6 Sunday
@@ -31,4 +31,4 @@ private:
     void* chinese_ = nullptr;
 };
 
-} // namespace atrium
+} // namespace yunzhao

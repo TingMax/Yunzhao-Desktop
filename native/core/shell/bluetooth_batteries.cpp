@@ -11,7 +11,7 @@
 #include <chrono>
 #include <map>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -193,4 +193,4 @@ void BluetoothBatteries::Run()
     }
 }
 
-} // namespace atrium
+} // namespace yunzhao

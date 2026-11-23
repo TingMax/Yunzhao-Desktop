@@ -12,7 +12,7 @@
 #include <set>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -68,7 +68,7 @@ std::vector<std::pair<HWND, DWORD>> Popups(const std::map<DWORD, std::wstring>& 
         [](HWND h, LPARAM l) -> BOOL {
             auto* c = reinterpret_cast<Ctx*>(l);
             // InternalGetWindowText sends no message: GetWindowText would wait for the window's
-            // thread, Atrium's own UI thread too (a deadlock while it waits for this one to end).
+            // thread, Yunzhao's own UI thread too (a deadlock while it waits for this one to end).
             wchar_t title[2] = {};
             if (!IsWindowVisible(h) || IsIconic(h) || InternalGetWindowText(h, title, 2) > 0)
                 return TRUE;
@@ -224,7 +224,7 @@ void FeishuSource::Run()
                         Log(L"feishu: new message popup");
                 }
                 seen = std::move(now);
-                baseline = true; // popups on screen when Atrium started are not new
+                baseline = true; // popups on screen when Yunzhao started are not new
             } catch (...) {
                 Log(L"feishu: reading failed");
             }
@@ -238,4 +238,4 @@ void FeishuSource::Run()
     winrt::uninit_apartment();
 }
 
-} // namespace atrium
+} // namespace yunzhao

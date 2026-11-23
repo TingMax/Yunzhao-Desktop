@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 // One piece of glass inside a popup window, window px.
 struct GlassShape {
@@ -118,4 +118,4 @@ struct PanelTone {
 };
 PanelTone PanelToneFor(uint32_t userTint, double transparency);
 
-} // namespace atrium
+} // namespace yunzhao

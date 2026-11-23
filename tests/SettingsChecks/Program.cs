@@ -1,5 +1,5 @@
 using System.Text.Json.Nodes;
-using Atrium.Settings;
+using Yunzhao.Settings;
 
 static void Require(bool condition, string message)
 {
@@ -37,7 +37,8 @@ Require(BarSettings.FromJson(new JsonObject(), settings).TaskbarRightPrimaryOnly
 Require(BarSettings.FromJson(JsonNode.Parse("""{"taskbarRightPrimaryOnly":"bad"}""")!.AsObject(), settings).TaskbarRightPrimaryOnly,
     "Malformed primary-only visibility must retain the current value.");
 parsed = BarSettings.FromJson(JsonNode.Parse("""{"taskbarRightPrimaryOnly":false}""")!.AsObject(), settings);
-Require(!parsed.TaskbarRightPrimaryOnly && parsed.ShowTray && parsed.ShowStatus && parsed.ShowClock && parsed.ShowNotifications,
+Require(!parsed.TaskbarRightPrimaryOnly && parsed.ShowTray && parsed.ShowStatus && parsed.ShowClock &&
+    parsed.ShowNotifications == settings.ShowNotifications,
     "Disabling primary-only visibility must retain the individual content switches.");
 Require(BarSettings.FromJson(new JsonObject(), new()).NotifyPlacement == "dock", "Existing users must retain the default notification placement.");
 Require(BarSettings.FromJson(JsonNode.Parse("""{"notifyPlacement":"bad"}""")!.AsObject(), new()).NotifyPlacement == "dock", "Invalid notification placement must normalize.");
@@ -89,7 +90,7 @@ Require(displays.Count > 0 && displays.Any(d => d.Primary), "Connected displays 
 Require(displays.All(d => d.Id.Length > 0 && d.Scale > 0 && d.Width > 0 && d.WorkWidth > 0), "Display IDs, geometry and scale must be valid.");
 Console.WriteLine($"Settings round trips, validation, dirty tracking and display discovery passed ({displays.Count} connected display(s)).");
 
-namespace Atrium.Settings
+namespace Yunzhao.Settings
 {
     // Pin icon resolution is outside this settings-model check.
     internal static class ShellIcons { public static string ExecutablePath(string path) => path; }

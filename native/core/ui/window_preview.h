@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class WindowPreview {
 public:
@@ -74,4 +74,4 @@ private:
     double fadeStart_ = 0;
 };
 
-} // namespace atrium
+} // namespace yunzhao

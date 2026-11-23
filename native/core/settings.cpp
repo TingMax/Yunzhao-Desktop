@@ -19,7 +19,7 @@
 
 namespace json = winrt::Windows::Data::Json;
 
-namespace atrium {
+namespace yunzhao {
 
 void Settings::Clamp()
 {
@@ -399,7 +399,7 @@ bool SetStartOnLogin(bool enabled)
         LSTATUS result = RegDeleteKeyValueW(HKEY_CURRENT_USER, key, L"Yunzhao");
         return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND;
     }
-    // The logon task, and no Run entry left to start Atrium a second time (also from
+    // The logon task, and no Run entry left to start Yunzhao a second time (also from
     // earlier versions, which started from the Run key).
     if ((_wcsicmp(task.c_str(), exe) == 0 || RegisterLogonTask(exe)) && (!runEntry || RegDeleteKeyValueW(HKEY_CURRENT_USER, key, L"Yunzhao") == ERROR_SUCCESS))
         return true;
@@ -420,7 +420,7 @@ bool StartupTurnedOff()
 
 bool IsDevelopmentBuild()
 {
-#ifdef ATRIUM_DEVELOPMENT
+#ifdef YUNZHAO_DEVELOPMENT
     return true;
 #else
     static const bool development = [] {
@@ -453,4 +453,4 @@ bool SaveSettings(const Settings& s, std::wstring* warning)
     return true;
 }
 
-} // namespace atrium
+} // namespace yunzhao

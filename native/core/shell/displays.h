@@ -8,7 +8,7 @@
 #include <optional>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct DisplayInfo {
     HMONITOR monitor;
@@ -40,4 +40,4 @@ bool FilterTasksOnDisplay(const std::wstring& mode, bool primary);
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary,
     HMONITOR monitor, HWND foreground, const std::function<HMONITOR(HWND)>& monitorOf);
 
-} // namespace atrium
+} // namespace yunzhao

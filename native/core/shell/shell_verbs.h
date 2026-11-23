@@ -1,4 +1,4 @@
-// What the shell knows about a program that Atrium's menus need: its
+// What the shell knows about a program that Yunzhao's menus need: its
 // AppUserModelID (to find the jump list it files its entries under) and the
 // document lists it publishes when it has no jump list of its own.
 #pragma once
@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 // The standard property sheet of a file (the shell's "properties" entry).
 bool ShowShellProperties(HWND owner, const std::wstring& path);
@@ -30,4 +30,4 @@ std::vector<ShellRecent> ShellDocumentList(const std::wstring& appId, int kind, 
 // other programs that set theirs at run time only).
 std::wstring ShellAppIdOfProcess(const std::wstring& exePath);
 
-} // namespace atrium
+} // namespace yunzhao

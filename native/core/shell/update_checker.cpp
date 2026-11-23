@@ -20,11 +20,12 @@
 #include <vector>
 #include <cwctype>
 
-namespace atrium {
+namespace yunzhao {
 namespace {
 namespace json = winrt::Windows::Data::Json;
 constexpr int64_t kIntervalSeconds = 12 * 60 * 60;
-constexpr wchar_t kReleases[] = L"https://api.github.com/repos/TingMax/Yunzhao-Desktop/releases?per_page=20";
+constexpr wchar_t kHost[] = L"yunzhao-desktop.com";
+constexpr wchar_t kManifest[] = L"https://yunzhao-desktop.com/releases/latest.json";
 using Version = std::array<unsigned, 4>;
 
 std::optional<Version> ParseVersion(std::wstring_view tag)
@@ -106,9 +107,9 @@ bool NetworkUp()
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) return false;
     WinHttpSetTimeouts(session, 4000, 4000, 4000, 4000);
-    const HINTERNET connect = WinHttpConnect(session, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    const HINTERNET connect = WinHttpConnect(session, kHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!connect) { WinHttpCloseHandle(session); return false; }
-    const HINTERNET request = WinHttpOpenRequest(connect, L"HEAD", L"/", nullptr, WINHTTP_NO_REFERER,
+    const HINTERNET request = WinHttpOpenRequest(connect, L"HEAD", L"/health", nullptr, WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     bool ok = false;
     if (request) {
@@ -124,7 +125,7 @@ bool NetworkUp()
 std::wstring SettingsExe()
 {
     std::wstring dir = ExeDirectory();
-    for (const wchar_t* name : {L"\\Settings\\Atrium.Settings.exe", L"\\Atrium.Settings.exe"}) {
+    for (const wchar_t* name : {L"\\Settings\\Yunzhao.Settings.exe", L"\\Yunzhao.Settings.exe"}) {
         std::wstring path = dir + name;
         if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return path;
     }
@@ -147,34 +148,31 @@ void StartWorker(const std::wstring& arguments)
     } else Log(L"update: could not start background queue (%lu)", GetLastError());
 }
 
-void DownloadRelease(const json::JsonObject& release, const Version& current)
+void DownloadRelease(const json::JsonObject& manifest, const Version& current)
 {
-    std::wstring tag = release.GetNamedString(L"tag_name").c_str();
-    auto latest = ParseVersion(tag);
-    if (!latest) throw winrt::hresult_invalid_argument(L"Invalid release version");
-    std::wstring target;
-    if (release.HasKey(L"target_commitish")) target = release.GetNamedString(L"target_commitish").c_str();
-    if (target != L"main" || *latest <= current || release.GetNamedBoolean(L"draft", false) || release.GetNamedBoolean(L"prerelease", false)) return;
-    std::wstring number = tag.substr(tag[0] == L'v' || tag[0] == L'V' ? 1 : 0);
-    number = number.substr(0, number.find(L'+'));
-    std::wstring assetName = L"Yunzhao-" + number + L"-win-x64.zip";
-    for (const auto& value : release.GetNamedArray(L"assets")) {
-        auto asset = value.GetObject();
-        if (asset.GetNamedString(L"name") != assetName) continue;
-        json::JsonObject payload;
-        std::wstring version;
-        for (unsigned part : *latest) version += (version.empty() ? L"" : L".") + std::to_wstring(part);
-        payload.SetNamedValue(L"Version", json::JsonValue::CreateStringValue(version));
-        payload.SetNamedValue(L"Tag", json::JsonValue::CreateStringValue(tag));
-        payload.SetNamedValue(L"Page", release.GetNamedValue(L"html_url"));
-        payload.SetNamedValue(L"Download", asset.GetNamedValue(L"browser_download_url"));
-        payload.SetNamedValue(L"Digest", asset.HasKey(L"digest") ? asset.GetNamedValue(L"digest") : json::JsonValue::CreateNullValue());
-        using namespace winrt::Windows::Security::Cryptography;
-        StartWorker(L"--queue-update " + std::wstring(CryptographicBuffer::EncodeToBase64String(
-            CryptographicBuffer::ConvertStringToBinary(payload.Stringify(), BinaryStringEncoding::Utf8)).c_str()));
-        Log(L"update: queued background download for %s", tag.c_str());
-        return;
-    }
+    // Official packages only: main channel, the versioned zip, and this host.
+    if (!manifest.HasKey(L"channel") || manifest.GetNamedString(L"channel") != L"main") return;
+    if (!manifest.HasKey(L"version") || !manifest.HasKey(L"name") || !manifest.HasKey(L"url")) return;
+    std::wstring number = manifest.GetNamedString(L"version").c_str();
+    auto latest = ParseVersion(number);
+    std::wstring name = manifest.GetNamedString(L"name").c_str();
+    std::wstring url = manifest.GetNamedString(L"url").c_str();
+    if (!latest || *latest <= current || name != L"Yunzhao-" + number + L"-win-x64.zip") return;
+    if (url != L"https://yunzhao-desktop.com/releases/" + name) return;
+    std::wstring tag = manifest.HasKey(L"tag") ? manifest.GetNamedString(L"tag").c_str() : L"v" + number;
+    json::JsonObject payload;
+    std::wstring version;
+    for (unsigned part : *latest) version += (version.empty() ? L"" : L".") + std::to_wstring(part);
+    payload.SetNamedValue(L"Version", json::JsonValue::CreateStringValue(version));
+    payload.SetNamedValue(L"Tag", json::JsonValue::CreateStringValue(tag));
+    payload.SetNamedValue(L"Page", json::JsonValue::CreateStringValue(
+        manifest.HasKey(L"page") ? manifest.GetNamedString(L"page") : winrt::hstring(L"https://yunzhao-desktop.com/")));
+    payload.SetNamedValue(L"Download", json::JsonValue::CreateStringValue(url));
+    payload.SetNamedValue(L"Digest", manifest.HasKey(L"digest") ? manifest.GetNamedValue(L"digest") : json::JsonValue::CreateNullValue());
+    using namespace winrt::Windows::Security::Cryptography;
+    StartWorker(L"--queue-update " + std::wstring(CryptographicBuffer::EncodeToBase64String(
+        CryptographicBuffer::ConvertStringToBinary(payload.Stringify(), BinaryStringEncoding::Utf8)).c_str()));
+    Log(L"update: queued background download for %s", tag.c_str());
 }
 } // namespace
 
@@ -212,8 +210,8 @@ void UpdateChecker::Run()
                 } else {
                     winrt::Windows::Web::Http::HttpClient http;
                     http.DefaultRequestHeaders().UserAgent().TryParseAdd(L"Yunzhao-Desktop/1.0");
-                    http.DefaultRequestHeaders().Accept().TryParseAdd(L"application/vnd.github+json");
-                    auto request = http.GetAsync(winrt::Windows::Foundation::Uri(kReleases));
+                    http.DefaultRequestHeaders().Accept().TryParseAdd(L"application/json");
+                    auto request = http.GetAsync(winrt::Windows::Foundation::Uri(kManifest));
                     const auto start = GetTickCount64();
                     while (request.Status() == winrt::Windows::Foundation::AsyncStatus::Started) {
                         if (WaitForSingleObject(stop_, 100) == WAIT_OBJECT_0 || GetTickCount64() - start >= 15000) {
@@ -229,16 +227,8 @@ void UpdateChecker::Run()
                         const auto code = response.StatusCode();
                         if (code == winrt::Windows::Web::Http::HttpStatusCode::Ok) {
                             auto parsed = json::JsonValue::Parse(response.Content().ReadAsStringAsync().get());
-                            if (parsed.ValueType() == json::JsonValueType::Array) {
-                                for (const auto& value : parsed.GetArray()) {
-                                    auto release = value.GetObject();
-                                    std::wstring target;
-                                    if (release.HasKey(L"target_commitish")) target = release.GetNamedString(L"target_commitish").c_str();
-                                    if (target != L"main") continue;
-                                    DownloadRelease(release, current);
-                                    break;
-                                }
-                            }
+                            if (parsed.ValueType() == json::JsonValueType::Object)
+                                DownloadRelease(parsed.GetObject(), current);
                         } else if (code != winrt::Windows::Web::Http::HttpStatusCode::NotFound) {
                             StartWorker(L"--close-update");
                         }
@@ -261,4 +251,4 @@ void UpdateChecker::NotifyPrepared(Notifications& notifications)
     // The download stays in the background. No card, no error, no about-page prompt.
     notifications.ClearPreparedUpdate();
 }
-} // namespace atrium
+} // namespace yunzhao

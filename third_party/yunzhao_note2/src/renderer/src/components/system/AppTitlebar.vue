@@ -13,7 +13,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { WINDOW_Z_ORDER_MODES } from '../../../../shared/settings-schema.js'
 import { enterPopover, leavePopover } from '../../utils/popoverMotion.js'
 import AppIcon from '../ui/AppIcon.vue'
-import AtriumDock from './AtriumDock.vue'
+import YunzhaoDock from './YunzhaoDock.vue'
 import ReminderChannelPicker from '../note/ReminderChannelPicker.vue'
 import { popoverStyle } from '../../utils/anchoredPopover.js'
 import { usePopoverLifecycle } from '../../composables/usePopoverLifecycle.js'
@@ -37,9 +37,9 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:locked', 'update:zOrderMode', 'request:compact'])
-const atriumHosted = ref(false)
-const atriumLocked = ref(false)
-const atriumBoard = ref(0)
+const yunzhaoHosted = ref(false)
+const yunzhaoLocked = ref(false)
+const yunzhaoBoard = ref(0)
 const tableEditing = ref(false)
 const toolsOpen = ref(false)
 const toolsMenuRef = ref(null)
@@ -171,7 +171,7 @@ async function selectZOrderMode(mode) {
     const result = await window.api.setWindowZOrderMode(mode)
     if (result?.mode) {
       emit('update:zOrderMode', result.mode)
-      if (atriumHosted.value) window.api.atriumCommand?.({ cmd: 'layer', layer: result.mode })
+      if (yunzhaoHosted.value) window.api.yunzhaoCommand?.({ cmd: 'layer', layer: result.mode })
     }
   } catch (error) {
     console.warn('[AppTitlebar] 切换窗口层级失败:', error)
@@ -225,12 +225,12 @@ function onPopoverLeave(element, done) {
 // ---- 窗口控制事件处理函数 ----
 /** 桌面日历不从这里关闭。 */
 const close = () => {
-  if (atriumHosted.value) return
+  if (yunzhaoHosted.value) return
   window.api.closeWindow()
 }
 
 function openHostedNote() {
-  window.dispatchEvent(new CustomEvent('atrium-new-note'))
+  window.dispatchEvent(new CustomEvent('yunzhao-new-note'))
 }
 /** 切换锁定/解锁状态 */
 const toggleLock = async () => {
@@ -267,7 +267,7 @@ function compactAnchor(event) {
 
 function onTitlebarDoubleClick(event) {
   // 桌面日历的顶栏空白是切换按钮两边的空位，双击不能收成便签小条。
-  if (atriumHosted.value) return
+  if (yunzhaoHosted.value) return
   if (Date.now() < suppressTitlebarDomDoubleClickUntil) return
   const target = event.target
   if (!(target instanceof Element) || target.closest(TITLEBAR_INTERACTIVE_SELECTOR)) return
@@ -367,8 +367,8 @@ function onTitlebarPointerDown(event) {
   if (!(target instanceof Element) || target.closest(TITLEBAR_INTERACTIVE_SELECTOR)) return
   // 导航栏由窗口拖动接管；禁止已有文字选区触发 Chromium 原生拖拽并取消指针事务。
   event.preventDefault()
-  if (atriumHosted.value) {
-    if (atriumLocked.value) return
+  if (yunzhaoHosted.value) {
+    if (yunzhaoLocked.value) return
     startHostedMove(event)
     return
   }
@@ -449,7 +449,7 @@ function startHostedMove(event) {
   titlebarDragPointerId = event.pointerId
   titlebarDragCaptureTarget = event.currentTarget
   hostedMove = { generation, x: event.screenX, y: event.screenY, bounds: null }
-  void window.api.atriumSizing?.(true)
+  void window.api.yunzhaoSizing?.(true)
   setTitlebarPointerCapture(titlebarDragCaptureTarget, event.pointerId)
   addTitlebarPointerListeners()
   void window.api.getWindowBounds().then((bounds) => {
@@ -519,7 +519,7 @@ async function finishTitlebarPointer(event = null, reason = 'unknown') {
   }
   if (hostedMove) {
     hostedMove = null
-    void window.api.atriumSizing?.(false)
+    void window.api.yunzhaoSizing?.(false)
     void window.api.finishWindowResize()
     titlebarDragLatestPoint = null
     titlebarPointerMoved = false
@@ -552,54 +552,54 @@ async function finishTitlebarPointer(event = null, reason = 'unknown') {
   if (titlebarDragDiagnostic === diagnostic) titlebarDragDiagnostic = null
 }
 
-let stopAtriumLayer = null
+let stopYunzhaoLayer = null
 
-function applyAtriumBoard(state) {
-  atriumLocked.value = state?.lock === true
-  atriumBoard.value = Number(state?.board) === 2 ? 2 : 0
-  if (atriumBoard.value !== 2) tableEditing.value = false
+function applyYunzhaoBoard(state) {
+  yunzhaoLocked.value = state?.lock === true
+  yunzhaoBoard.value = Number(state?.board) === 2 ? 2 : 0
+  if (yunzhaoBoard.value !== 2) tableEditing.value = false
 }
 
 function toggleTableEdit() {
   tableEditing.value = !tableEditing.value
-  window.dispatchEvent(new CustomEvent('atrium-table-edit', { detail: tableEditing.value }))
+  window.dispatchEvent(new CustomEvent('yunzhao-table-edit', { detail: tableEditing.value }))
 }
 
 function chooseTool(tool) {
   toolsOpen.value = false
   if (tool.kind === 'page')
-    void window.api.atriumCommand?.({ cmd: 'teacher-page', path: tool.path })
+    void window.api.yunzhaoCommand?.({ cmd: 'teacher-page', path: tool.path })
 }
 
 async function saveSchedule() {
-  await window.api.atriumSaveDailyPlan?.({ time: scheduleTime.value, channels: scheduleChannels.value })
+  await window.api.yunzhaoSaveDailyPlan?.({ time: scheduleTime.value, channels: scheduleChannels.value })
   scheduleOpen.value = false
 }
 
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown, true)
-  stopAtriumLayer = window.api.onAtriumState?.((state) => {
-    applyAtriumBoard(state)
+  stopYunzhaoLayer = window.api.onYunzhaoState?.((state) => {
+    applyYunzhaoBoard(state)
     const layer = state?.layer === 'top' || state?.layer === 'bottom' ? state.layer : 'normal'
     if (layer === props.zOrderMode) return
     void window.api.setWindowZOrderMode(layer).then((result) => {
       if (result?.mode) emit('update:zOrderMode', result.mode)
     })
   })
-  void window.api.atriumHosted?.().then(async (hosted) => {
-    atriumHosted.value = Boolean(hosted)
+  void window.api.yunzhaoHosted?.().then(async (hosted) => {
+    yunzhaoHosted.value = Boolean(hosted)
     if (!hosted) return
-    if (await window.api.atriumPullPending?.()) {
+    if (await window.api.yunzhaoPullPending?.()) {
       pulling.value = true
-      const result = await window.api.atriumPull?.()
+      const result = await window.api.yunzhaoPull?.()
       if (result === 'reload') {
         window.location.reload()
         return
       }
       pulling.value = false
     }
-    const state = await window.api.atriumState?.()
-    applyAtriumBoard(state)
+    const state = await window.api.yunzhaoState?.()
+    applyYunzhaoBoard(state)
     const layer = state?.layer === 'top' || state?.layer === 'bottom' ? state.layer : 'normal'
     if (layer === props.zOrderMode) return
     const result = await window.api.setWindowZOrderMode(layer)
@@ -608,7 +608,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  stopAtriumLayer?.()
+  stopYunzhaoLayer?.()
   document.removeEventListener('pointerdown', onDocumentPointerDown, true)
   if (titlebarDragPointerId !== null) void finishTitlebarPointer(null, 'component-unmount')
   else removeTitlebarPointerListeners()
@@ -622,7 +622,7 @@ onBeforeUnmount(() => {
   <!-- 标题栏空白区统一由 JS 处理拖动和双击；按钮与最上沿缩放带保持独立。 -->
   <header
     class="app-titlebar app-titlebar--microsoft"
-    :class="{ locked: locked, 'app-titlebar--hosted': atriumHosted, 'app-titlebar--timetable': atriumHosted && atriumBoard === 2 }"
+    :class="{ locked: locked, 'app-titlebar--hosted': yunzhaoHosted, 'app-titlebar--timetable': yunzhaoHosted && yunzhaoBoard === 2 }"
     @dblclick="onTitlebarDoubleClick"
     @pointerdown="onTitlebarPointerDown"
     @dragstart.capture.prevent
@@ -631,7 +631,7 @@ onBeforeUnmount(() => {
     <!-- 红绿灯按钮组：设置 no-drag 使按钮可点击 -->
     <div class="traffic-lights">
       <button
-        v-if="atriumHosted && atriumBoard === 2"
+        v-if="yunzhaoHosted && yunzhaoBoard === 2"
         class="light light-edit"
         :class="{ 'is-on': tableEditing }"
         :title="tableEditing ? '保存' : '编辑'"
@@ -640,7 +640,7 @@ onBeforeUnmount(() => {
         {{ tableEditing ? '保存' : '编辑' }}
       </button>
       <button
-        v-if="atriumHosted"
+        v-if="yunzhaoHosted"
         class="light light-add"
         title="新建待办"
         @click="openHostedNote"
@@ -648,7 +648,7 @@ onBeforeUnmount(() => {
         新建待办
       </button>
       <button
-        v-if="!atriumHosted"
+        v-if="!yunzhaoHosted"
         class="light light-close"
         data-diagnostic-action="window.close"
         title="关闭"
@@ -657,7 +657,7 @@ onBeforeUnmount(() => {
         <AppIcon class="light-icon" name="close" alt="关闭" />
       </button>
       <button
-        v-if="!atriumHosted"
+        v-if="!yunzhaoHosted"
         ref="zOrderTriggerRef"
         class="light light-pin"
         :class="{
@@ -680,7 +680,7 @@ onBeforeUnmount(() => {
         />
       </button>
       <button
-        v-if="!atriumHosted"
+        v-if="!yunzhaoHosted"
         class="light light-lock"
         :class="{ locked: locked, 'is-changing': lockChanging }"
         :title="lockChanging ? '正在切换锁定状态' : locked ? '解锁主窗口' : '锁定主窗口'"
@@ -693,8 +693,8 @@ onBeforeUnmount(() => {
     </div>
     <!-- 中间弹性区只负责布局；指针事务由整个标题栏统一接管。 -->
     <div class="app-titlebar-interaction-surface">
-      <div v-if="atriumHosted" class="hosted-cluster">
-        <AtriumDock>
+      <div v-if="yunzhaoHosted" class="hosted-cluster">
+        <YunzhaoDock>
           <template #tools>
             <div class="hosted-tools">
               <button type="button" class="hosted-icon" title="工具" @click.stop="toolsOpen = !toolsOpen">
@@ -721,7 +721,7 @@ onBeforeUnmount(() => {
           >
             <span class="mdl-glyph" aria-hidden="true">&#xE718;</span>
           </button>
-        </AtriumDock>
+        </YunzhaoDock>
       </div>
       <span v-else-if="title" class="app-titlebar-title">{{ title }}</span>
     </div>
@@ -1225,7 +1225,7 @@ onBeforeUnmount(() => {
 .app-titlebar--hosted .light-pin.is-open .mdl-glyph {
   color: #fff;
 }
-.app-titlebar--hosted :deep(.atrium-dock) {
+.app-titlebar--hosted :deep(.yunzhao-dock) {
   position: static;
   transform: none;
 }

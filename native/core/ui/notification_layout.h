@@ -6,7 +6,7 @@
 #include <cmath>
 #include <cstddef>
 
-namespace atrium::notification {
+namespace yunzhao::notification {
 
 struct PopupLayout {
     RECT rect;
@@ -31,4 +31,4 @@ inline float CardTop(size_t index, float card, float gap, float scroll)
     return float(index) * (card + gap) - scroll;
 }
 
-} // namespace atrium::notification
+} // namespace yunzhao::notification

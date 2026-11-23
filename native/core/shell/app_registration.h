@@ -2,12 +2,12 @@
 
 #include <string>
 
-namespace atrium {
+namespace yunzhao {
 
-inline constexpr wchar_t kAppId[] = L"Atrium.Desktop";
+inline constexpr wchar_t kAppId[] = L"Yunzhao.Desktop";
 
 bool IsRegisteredApplication(const std::wstring& directory);
 // Development builds never register, including complete development packages.
 void RegisterApplication(const std::wstring& directory);
 
-} // namespace atrium
+} // namespace yunzhao

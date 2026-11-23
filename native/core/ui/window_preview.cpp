@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -373,4 +373,4 @@ bool WindowPreview::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

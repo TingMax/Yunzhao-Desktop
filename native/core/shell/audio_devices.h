@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct AudioOutput {
     std::wstring id;        // the endpoint's id
@@ -41,4 +41,4 @@ std::vector<AudioApp> ListAudioApps(int iconPx);
 void SetAppVolume(const std::wstring& key, int percent);
 void SetAppMute(const std::wstring& key, bool mute);
 
-} // namespace atrium
+} // namespace yunzhao

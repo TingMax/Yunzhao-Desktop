@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atrium {
+namespace yunzhao {
 struct CornerProfile {
     float reach = 0, a = 0.02f;
 };
@@ -52,4 +52,4 @@ inline float CornerCoverage(float x, float y, float width, float height, CornerP
     const float qy = std::abs(y - height * 0.5f) - height * 0.5f + p.reach;
     return std::clamp(0.5f - CornerEdge(qx, qy, p), 0.f, 1.f);
 }
-} // namespace atrium
+} // namespace yunzhao

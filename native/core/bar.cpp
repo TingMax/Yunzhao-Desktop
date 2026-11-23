@@ -13,8 +13,11 @@
 #include <psapi.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
+#include <timeapi.h>
 #include <windowsx.h>
 #include <winrt/Windows.Foundation.h>
+
+#pragma comment(lib, "winmm.lib")
 
 #include <algorithm>
 #include <atomic>
@@ -23,7 +26,7 @@
 #include <cwctype>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -37,8 +40,8 @@ constexpr UINT WM_BAR_LAYOUT = WM_APP + 0x71; // defer DPI relayout until SetWin
 using WaitClockFn = DWORD(WINAPI*)(UINT, const HANDLE*, DWORD);
 const WaitClockFn g_waitClock = reinterpret_cast<WaitClockFn>(GetProcAddress(LoadLibraryW(L"dcomp.dll"), "DCompositionWaitForCompositorClock"));
 
-constexpr wchar_t kVisualClass[] = L"AtriumBarVisual";
-constexpr wchar_t kInputClass[] = L"AtriumBarInput";
+constexpr wchar_t kVisualClass[] = L"YunzhaoBarVisual";
+constexpr wchar_t kInputClass[] = L"YunzhaoBarInput";
 constexpr wchar_t kClockKey[] = L"#clock";
 constexpr wchar_t kStartKey[] = L"#start";
 constexpr wchar_t kNotifyKey[] = L"#notify";
@@ -71,7 +74,7 @@ std::map<Bar*, CaptureWindows> g_capturePolicies; // UI-thread only
 
 void ApplyCapturePolicies()
 {
-    // One capture fallback must exclude every Atrium window to prevent feedback.
+    // One capture fallback must exclude every Yunzhao window to prevent feedback.
     const bool visible = std::all_of(g_capturePolicies.begin(), g_capturePolicies.end(), [](const auto& entry) { return entry.second.visible; });
     for (const auto& [bar, windows] : g_capturePolicies) {
         SetCaptureExclusion(windows.visual, visible);
@@ -317,7 +320,7 @@ Bar::Bar(HINSTANCE instance, bool debugCapturable, std::wstring display) : debug
     captureAck_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     captureVisible_ = debugCapturable_;
     if (debugCapturable_)
-        Log(L"bar: --debug-capturable, Atrium shows in screenshots (with Windows.Graphics.Capture, the backdrop freezes after the first frame)");
+        Log(L"bar: --debug-capturable, Yunzhao shows in screenshots (with Windows.Graphics.Capture, the backdrop freezes after the first frame)");
     SetCaptureExclusion(visual_, captureVisible_);
     SetCaptureExclusion(input_, captureVisible_);
     g_capturePolicies[this] = {visual_, input_, debugCapturable_};
@@ -423,7 +426,7 @@ LRESULT CALLBACK Bar::VisualProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     if (m == WM_BAR_CAPTURE && self) {
-        // From the render thread: whether Atrium's windows may show in screenshots.
+        // From the render thread: whether Yunzhao's windows may show in screenshots.
         bool visible = w != 0;
         if (l == 1)
             SetDdaExclusionEnabled(true);
@@ -504,7 +507,8 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
         std::wstring hover = HitTest(pt);
         bool magnify = scene_.magnify > 1.001f;
         if (hover != scene_.hoverKey || (magnify && scene_.pointerX != float(pt.x))) {
-            if (hover != scene_.hoverKey) {
+            const bool hoverChanged = hover != scene_.hoverKey;
+            if (hoverChanged) {
                 scene_.hoverKey = hover;
                 // With a preview up, the next app's windows follow the pointer without the tooltip's delay.
                 bool quick = previewShown_ || (previewOpen && previewOpen());
@@ -513,7 +517,9 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                     SetTimer(h, kTooltipTimer, quick ? kPreviewSwapMs : kTooltipDelayMs, nullptr);
             }
             scene_.pointerX = float(pt.x);
-            Publish();
+            // Pointer-only motion must not bump the layout generation: that forces a fresh
+            // desktop copy and mip chain on every mouse step, which is what feels late on Win10.
+            Publish(hoverChanged);
         }
         return 0;
     }
@@ -998,7 +1004,16 @@ void Bar::Relayout()
     const int x = wa.left + (wa.right - wa.left - winW) / 2;
     // A hidden system taskbar can leave its strip in the work area. Sit on the
     // screen edge then, or the bar appears above a dead gap and slides into it.
-    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND tray = nullptr;
+    if (HWND mainTray = FindWindowW(L"Shell_TrayWnd", nullptr))
+        if (MonitorFromWindow(mainTray, MONITOR_DEFAULTTONEAREST) == mon)
+            tray = mainTray;
+    if (!tray)
+        for (HWND w = nullptr; (w = FindWindowExW(nullptr, w, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr;)
+            if (MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST) == mon) {
+                tray = w;
+                break;
+            }
     const int anchorBottom = tray && IsWindowVisible(tray) ? wa.bottom : mi.rcMonitor.bottom;
     const int y = std::max(int(mi.rcMonitor.top), anchorBottom - Px(st.margin, s) - barH - insetTop);
 
@@ -1482,8 +1497,10 @@ void Bar::GuardStacking(const wchar_t* why)
         return;
     RECT bar = BarRect(), r{}, overlap{}, trayRect{};
     HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
-    bool trayOver = tray && IsWindowVisible(tray) && GetWindowRect(tray, &trayRect) && IntersectRect(&overlap, &trayRect, &bar) &&
-                    overlap.bottom - overlap.top > 2;
+    // The user asked for the system taskbar to stay gone. Letting it come forward
+    // when the pointer reaches the edge is what makes it possible to summon.
+    bool trayOver = !settings_.hideTaskbar && tray && IsWindowVisible(tray) && GetWindowRect(tray, &trayRect) &&
+                    IntersectRect(&overlap, &trayRect, &bar) && overlap.bottom - overlap.top > 2;
     bool usingTray = false;
     POINT cur{};
     wchar_t fgCls[64] = {};
@@ -1769,7 +1786,7 @@ void Bar::ShowOwnWindowsToCapture(bool visible)
     if (WaitForSingleObject(captureAck_, 1000) != WAIT_OBJECT_0)
         Log(L"render: the UI thread did not confirm the capture exclusion in time");
     captureVisible_ = visible;
-    Log(L"render: Atrium %s screenshots", visible ? L"shows in" : L"is kept out of");
+    Log(L"render: Yunzhao %s screenshots", visible ? L"shows in" : L"is kept out of");
 }
 
 void Bar::SetOwnWindowsDdaExclusion(bool exclude)
@@ -1778,12 +1795,15 @@ void Bar::SetOwnWindowsDdaExclusion(bool exclude)
     PostMessageW(visual_, WM_BAR_CAPTURE, (debugCapturable_ || captureVisible_) ? 1 : 0, exclude ? 1 : 2);
     if (WaitForSingleObject(captureAck_, 1000) != WAIT_OBJECT_0)
         Log(L"render: the UI thread did not confirm the capture exclusion in time");
-    Log(L"render: Desktop Duplication %s Atrium", exclude ? L"leaves out" : L"includes");
+    Log(L"render: Desktop Duplication %s Yunzhao", exclude ? L"leaves out" : L"includes");
 }
 
 void Bar::RenderThread()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    // Without this, WaitForMultipleObjects timeouts round up to ~15.6 ms on Windows 10,
+    // so magnification behind the pointer feels late when the compositor clock is absent.
+    timeBeginPeriod(1);
     while (WaitForSingleObject(quit_, 0) == WAIT_TIMEOUT) {
         bool rebuild = false;
         try {
@@ -1795,6 +1815,7 @@ void Bar::RenderThread()
         if (!rebuild || WaitForSingleObject(quit_, 1000) != WAIT_TIMEOUT)
             break;
     }
+    timeEndPeriod(1);
     winrt::uninit_apartment();
 }
 
@@ -1821,7 +1842,7 @@ bool Bar::RenderSession()
     Gpu gpu = Gpu::ForMonitor(snap.hmonitor);
     const HMONITOR captureMonitor = snap.hmonitor;
     const unsigned captureGeneration = snap.displayGeneration;
-    // A wake used to fall back to a capture that hides every Atrium window.
+    // A wake used to fall back to a capture that hides every Yunzhao window.
     // That is the empty desktop. The windows go back on screen before any
     // retry, and they stay there if duplication is still down.
     duplicationFailed_ = false;
@@ -1940,7 +1961,7 @@ bool Bar::RenderSession()
     // for a second after a move the newest frame is kept.
     winrt::com_ptr<ID3D11Texture2D> lastFrame;
     double panelMovedMs = -1e9;
-    // A popup that opens needs it too (Atrium's own windows bring no frame):
+    // A popup that opens needs it too (Yunzhao's own windows bring no frame):
     // otherwise it is kept at most every 100 ms.
     double keptMs = -1e9;
     auto keepFrame = [&](ID3D11Texture2D* frame) {
@@ -2224,7 +2245,7 @@ bool Bar::RenderSession()
 
     HANDLE handles[] = {quit_, wake_, frame_};
     bool panelsMoving = false, barOwed = false;
-    // A clean copy of the monitor from before Atrium's windows were let into
+    // A clean copy of the monitor from before Yunzhao's windows were let into
     // Desktop Duplication. Later frames have those windows pasted back out, so
     // the glass does not sample itself and a remote viewer still sees them.
     winrt::com_ptr<ID3D11Texture2D> cleanTex, patchedTex;
@@ -2254,7 +2275,7 @@ bool Bar::RenderSession()
         return SUCCEEDED(gpu.device->CreateTexture2D(&d, nullptr, dest.put()));
     };
     for (;;) {
-        // Windows.Graphics.Capture hides Atrium from screen capture. After the
+        // Windows.Graphics.Capture hides Yunzhao from screen capture. After the
         // displays are back, return to Desktop Duplication so a remote viewer
         // sees the bar and the widgets again.
         if (capture && !capture->KeepsOwnWindowsOut() && GetTickCount64() - lastDdaProbe >= 2000) {
@@ -2281,7 +2302,7 @@ bool Bar::RenderSession()
             }
             if (back) {
                 duplicationFailed_ = false;
-                Log(L"render: desktop duplication is back; Atrium can show in screenshots again");
+                Log(L"render: desktop duplication is back; Yunzhao can show in screenshots again");
                 return true;
             }
             if (why != lastProbeWhy || GetTickCount64() - lastProbeLog >= 60000) {
@@ -2296,7 +2317,7 @@ bool Bar::RenderSession()
                 Sleep(10);
             SetOwnWindowsDdaExclusion(false);
             handedOff = true;
-            Log(L"render: Atrium stays on screen for capture; the glass uses a clean backdrop");
+            Log(L"render: Yunzhao stays on screen for capture; the glass uses a clean backdrop");
         }
         // Animations, and glass owed a frame (not Ready last time), run on the compositor's
         // clock (D45): one wake-up per composed frame, at the display's rate. A timeout would
@@ -2535,10 +2556,16 @@ bool Bar::RenderSession()
             deskMode = mode;
             deskLive = desktop.Texture() != nullptr;
         }
-        if (ID3D11Texture2D* desk = desktop.Texture())
-            renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
-        else if (source)
-            renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
+        const bool layoutChange = snap.generation != drawnGeneration;
+        // A static desktop picture does not need a fresh copy and mip chain on every
+        // pointer step. Live capture still refreshes when a frame arrived.
+        const bool needBackdrop = !renderer.HasPresented() || layoutChange || (!deskLive && hadBackdrop);
+        if (needBackdrop) {
+            if (ID3D11Texture2D* desk = desktop.Texture())
+                renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
+            else if (source)
+                renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
+        }
         {
             bool lost = false;
             if (!freeze)
@@ -2595,7 +2622,7 @@ bool Bar::RenderSession()
         animating |= clockInk.Moving(nowMs) || appsInk.Moving(nowMs);
         const Ink inks{clockInk.Value(nowMs), appsInk.Value(nowMs)};
         ULONGLONG now = GetTickCount64();
-        bool force = snap.generation != drawnGeneration || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
+        bool force = layoutChange || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
                      animating || barOwed || now - lastPresent > kStaleMs;
         if (!changed && !force) {
             ++skipped; // echo of our own present, or nothing new under the glass
@@ -2643,4 +2670,4 @@ bool Bar::RenderSession()
     }
 }
 
-} // namespace atrium
+} // namespace yunzhao

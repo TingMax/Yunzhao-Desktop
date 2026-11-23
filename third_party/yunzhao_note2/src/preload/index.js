@@ -472,78 +472,78 @@ const api = {
   /** 获取调度器健康状态 */
   retryScheduler: () => ipcRenderer.invoke('scheduler:retry'),
   getSchedulerHealth: () => ipcRenderer.invoke('scheduler:health'),
-  atriumHosted: () => ipcRenderer.invoke('atrium:hosted'),
-  atriumSizing: (active) => ipcRenderer.send('atrium:sizing', active === true),
-  atriumTodos: () => ipcRenderer.invoke('atrium:todos'),
-  atriumState: () => ipcRenderer.invoke('atrium:state'),
-  atriumCommand: (payload) => ipcRenderer.invoke('atrium:command', payload),
-  atriumDayWindow: (payload) => ipcRenderer.invoke('atrium:day-window', payload),
-  atriumDaySync: (payload) => ipcRenderer.invoke('atrium:day-sync', payload),
-  onAtriumDayShow: (callback) => {
+  yunzhaoHosted: () => ipcRenderer.invoke('yunzhao:hosted'),
+  yunzhaoSizing: (active) => ipcRenderer.send('yunzhao:sizing', active === true),
+  yunzhaoTodos: () => ipcRenderer.invoke('yunzhao:todos'),
+  yunzhaoState: () => ipcRenderer.invoke('yunzhao:state'),
+  yunzhaoCommand: (payload) => ipcRenderer.invoke('yunzhao:command', payload),
+  yunzhaoDayWindow: (payload) => ipcRenderer.invoke('yunzhao:day-window', payload),
+  yunzhaoDaySync: (payload) => ipcRenderer.invoke('yunzhao:day-sync', payload),
+  onYunzhaoDayShow: (callback) => {
     const handler = (_event, payload) => callback(payload || {})
-    ipcRenderer.on('atrium:day-show', handler)
-    return () => ipcRenderer.removeListener('atrium:day-show', handler)
+    ipcRenderer.on('yunzhao:day-show', handler)
+    return () => ipcRenderer.removeListener('yunzhao:day-show', handler)
   },
-  onAtriumPeek: (callback) => {
+  onYunzhaoPeek: (callback) => {
     const handler = (_event, payload) => callback(payload || {})
-    ipcRenderer.on('atrium:peek', handler)
-    return () => ipcRenderer.removeListener('atrium:peek', handler)
+    ipcRenderer.on('yunzhao:peek', handler)
+    return () => ipcRenderer.removeListener('yunzhao:peek', handler)
   },
-  atriumDayCreate: (dateKey) => ipcRenderer.send('atrium:day-create', dateKey),
-  atriumDayHold: () => ipcRenderer.invoke('atrium:day-hold'),
-  atriumDayReveal: () => ipcRenderer.invoke('atrium:day-reveal'),
-  atriumDayEdit: (id) => ipcRenderer.send('atrium:day-edit', id),
-  onAtriumDayData: (callback) => {
+  yunzhaoDayCreate: (dateKey) => ipcRenderer.send('yunzhao:day-create', dateKey),
+  yunzhaoDayHold: () => ipcRenderer.invoke('yunzhao:day-hold'),
+  yunzhaoDayReveal: () => ipcRenderer.invoke('yunzhao:day-reveal'),
+  yunzhaoDayEdit: (id) => ipcRenderer.send('yunzhao:day-edit', id),
+  onYunzhaoDayData: (callback) => {
     const handler = (_event, data) => callback(data || {})
-    ipcRenderer.on('atrium:day-data', handler)
-    return () => ipcRenderer.removeListener('atrium:day-data', handler)
+    ipcRenderer.on('yunzhao:day-data', handler)
+    return () => ipcRenderer.removeListener('yunzhao:day-data', handler)
   },
-  onAtriumDayCreate: (callback) => {
+  onYunzhaoDayCreate: (callback) => {
     const handler = (_event, dateKey) => callback(dateKey)
-    ipcRenderer.on('atrium:day-create', handler)
-    return () => ipcRenderer.removeListener('atrium:day-create', handler)
+    ipcRenderer.on('yunzhao:day-create', handler)
+    return () => ipcRenderer.removeListener('yunzhao:day-create', handler)
   },
-  onAtriumDayEdit: (callback) => {
+  onYunzhaoDayEdit: (callback) => {
     const handler = (_event, id) => callback(id)
-    ipcRenderer.on('atrium:day-edit', handler)
-    return () => ipcRenderer.removeListener('atrium:day-edit', handler)
+    ipcRenderer.on('yunzhao:day-edit', handler)
+    return () => ipcRenderer.removeListener('yunzhao:day-edit', handler)
   },
-  atriumOpenHandout: (payload) => ipcRenderer.invoke('atrium:open-handout', payload),
-  atriumHandoutFull: () => ipcRenderer.invoke('atrium:handout-full'),
-  atriumHandoutPiece: (key, html) => ipcRenderer.invoke('atrium:handout-piece', key, html),
-  onAtriumHandoutData: (callback) => {
+  yunzhaoOpenHandout: (payload) => ipcRenderer.invoke('yunzhao:open-handout', payload),
+  yunzhaoHandoutFull: () => ipcRenderer.invoke('yunzhao:handout-full'),
+  yunzhaoHandoutPiece: (key, html) => ipcRenderer.invoke('yunzhao:handout-piece', key, html),
+  onYunzhaoHandoutData: (callback) => {
     const handler = (_event, data) => callback(data || {})
-    ipcRenderer.on('atrium:handout-data', handler)
-    return () => ipcRenderer.removeListener('atrium:handout-data', handler)
+    ipcRenderer.on('yunzhao:handout-data', handler)
+    return () => ipcRenderer.removeListener('yunzhao:handout-data', handler)
   },
-  atriumForcePopup: (text) => ipcRenderer.invoke('atrium:force-popup', text),
-  atriumSignOut: () => ipcRenderer.invoke('atrium:sign-out'),
-  atriumPullPending: () => ipcRenderer.invoke('atrium:pull-pending'),
-  atriumPull: () => ipcRenderer.invoke('atrium:pull'),
-  atriumDailyPlan: () => ipcRenderer.invoke('atrium:daily-plan'),
-  atriumSaveDailyPlan: (plan) => ipcRenderer.invoke('atrium:daily-plan-save', plan),
-  atriumHandouts: () => ipcRenderer.invoke('atrium:handouts'),
-  atriumSaveHandouts: (body) => ipcRenderer.invoke('atrium:handouts-save', body),
-  atriumTable: () => ipcRenderer.invoke('atrium:table'),
-  onAtriumTable: (callback) => {
+  yunzhaoForcePopup: (text) => ipcRenderer.invoke('yunzhao:force-popup', text),
+  yunzhaoSignOut: () => ipcRenderer.invoke('yunzhao:sign-out'),
+  yunzhaoPullPending: () => ipcRenderer.invoke('yunzhao:pull-pending'),
+  yunzhaoPull: () => ipcRenderer.invoke('yunzhao:pull'),
+  yunzhaoDailyPlan: () => ipcRenderer.invoke('yunzhao:daily-plan'),
+  yunzhaoSaveDailyPlan: (plan) => ipcRenderer.invoke('yunzhao:daily-plan-save', plan),
+  yunzhaoHandouts: () => ipcRenderer.invoke('yunzhao:handouts'),
+  yunzhaoSaveHandouts: (body) => ipcRenderer.invoke('yunzhao:handouts-save', body),
+  yunzhaoTable: () => ipcRenderer.invoke('yunzhao:table'),
+  onYunzhaoTable: (callback) => {
     const handler = (_event, table) => callback(table || { lessons: [], changes: [], periods: [], marks: [] })
-    ipcRenderer.on('atrium:table', handler)
-    return () => ipcRenderer.removeListener('atrium:table', handler)
+    ipcRenderer.on('yunzhao:table', handler)
+    return () => ipcRenderer.removeListener('yunzhao:table', handler)
   },
-  onAtriumTodos: (callback) => {
+  onYunzhaoTodos: (callback) => {
     const handler = (_event, items) => callback(Array.isArray(items) ? items : [])
-    ipcRenderer.on('atrium:todos', handler)
-    return () => ipcRenderer.removeListener('atrium:todos', handler)
+    ipcRenderer.on('yunzhao:todos', handler)
+    return () => ipcRenderer.removeListener('yunzhao:todos', handler)
   },
-  onAtriumState: (callback) => {
+  onYunzhaoState: (callback) => {
     const handler = (_event, state) => callback(state || { board: 0, lock: false })
-    ipcRenderer.on('atrium:state', handler)
-    return () => ipcRenderer.removeListener('atrium:state', handler)
+    ipcRenderer.on('yunzhao:state', handler)
+    return () => ipcRenderer.removeListener('yunzhao:state', handler)
   },
-  onAtriumUiSetting: (callback) => {
+  onYunzhaoUiSetting: (callback) => {
     const handler = (_event, change) => callback(change || {})
-    ipcRenderer.on('atrium:ui-setting', handler)
-    return () => ipcRenderer.removeListener('atrium:ui-setting', handler)
+    ipcRenderer.on('yunzhao:ui-setting', handler)
+    return () => ipcRenderer.removeListener('yunzhao:ui-setting', handler)
   }
 }
 

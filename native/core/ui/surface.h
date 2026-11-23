@@ -27,7 +27,7 @@
 #include <tuple>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 // Ink and washes over the popup glass, which is the bar's clear material:
 // dark ink where the glass shows something bright, light ink elsewhere (the
@@ -315,4 +315,4 @@ private:
     std::map<std::wstring, winrt::com_ptr<ID2D1Bitmap>> bitmaps_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

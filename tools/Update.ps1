@@ -33,16 +33,30 @@ function Assert-TemporaryPath([string]$Path) {
          (Split-Path -Leaf $absolute) -ne "$name.previous-$suffix")) { throw '更新临时目录无效。' }
 }
 
+function Test-SameFile([string]$Left, [string]$Right) {
+    if (!(Test-Path -LiteralPath $Left) -or !(Test-Path -LiteralPath $Right)) { return $false }
+    $a = Get-Item -LiteralPath $Left
+    $b = Get-Item -LiteralPath $Right
+    if ($a.PSIsContainer -or $b.PSIsContainer -or $a.Length -ne $b.Length) { return $false }
+    return (Get-FileHash -LiteralPath $Left -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $Right -Algorithm SHA256).Hash
+}
+
+function Get-FileHolders([string]$Path) {
+    # Restart Manager can wait forever for an answer from the process holding the file.
+    return ''
+}
+
 # Moves what is in $From into $To (merging folders). A folder some process is in (its current
-# directory, e.g. an app started from an older Atrium) cannot be moved itself: its contents go, it stays.
-function Move-Tree([string]$From, [string]$To, [switch]$Keep) {
+# directory, e.g. an app started from an older Yunzhao) cannot be moved itself: its contents go, it stays.
+# KeepIdentical leaves a locked file in place when it already matches the downloaded package.
+function Move-Tree([string]$From, [string]$To, [switch]$Keep, [switch]$KeepIdentical) {
     if (!(Test-Path -LiteralPath $To)) { New-Item -ItemType Directory -Path $To | Out-Null }
     foreach ($item in @(Get-ChildItem -LiteralPath $From -Force)) {
         $target = Join-Path $To $item.Name
-        if ($item.PSIsContainer -and (Test-Path -LiteralPath $target)) { Move-Tree $item.FullName $target; continue }
+        if ($item.PSIsContainer -and (Test-Path -LiteralPath $target)) { Move-Tree $item.FullName $target -KeepIdentical:$KeepIdentical; continue }
         if ($item.PSIsContainer) {
             try { Move-Item -LiteralPath $item.FullName -Destination $target }
-            catch { Move-Tree $item.FullName $target }
+            catch { Move-Tree $item.FullName $target -KeepIdentical:$KeepIdentical }
             continue
         }
         # A file just written may be open for a moment (a virus scanner reading it).
@@ -50,7 +64,16 @@ function Move-Tree([string]$From, [string]$To, [switch]$Keep) {
             try { Move-Item -LiteralPath $item.FullName -Destination $target; break }
             catch {
                 if ($try -lt 6) { Start-Sleep -Milliseconds 300; continue }
-                throw "无法替换 $($item.FullName)（$($_.Exception.Message.TrimEnd('。', '.'))），请关闭正在使用它的程序后重试。"
+                $remaining = $null
+                if ($item.FullName.StartsWith($install + '\', [StringComparison]::OrdinalIgnoreCase)) { $remaining = $item.FullName }
+                elseif ($target.StartsWith($install + '\', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $target)) { $remaining = $target }
+                if ($KeepIdentical -and $remaining) {
+                    $twin = Join-Path $package $remaining.Substring($install.Length).TrimStart('\')
+                    if (Test-SameFile $remaining $twin) { break }
+                }
+                $holders = Get-FileHolders $item.FullName
+                $who = if ($holders) { "，占用程序：$holders" } else { '' }
+                throw "无法替换 $($item.FullName)（$($_.Exception.Message.TrimEnd('。', '.'))$who），请关闭正在使用它的程序后重试。"
             }
         }
     }
@@ -83,7 +106,7 @@ function Test-AppControlBlock([string]$Message) {
 }
 
 function Start-Verified([string]$Executable, [string]$Kind, [string]$Arguments) {
-    $eventName = "Local\Atrium.Update.$Kind.$suffix"
+    $eventName = "Local\Yunzhao.Update.$Kind.$suffix"
     $ready = New-Object System.Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, $eventName)
     try {
         $startedAt = (Get-Date).AddSeconds(-1)
@@ -93,7 +116,7 @@ function Start-Verified([string]$Executable, [string]$Kind, [string]$Arguments) 
             if (!(Test-AppControlBlock $_.Exception.Message)) { throw }
             # The release is not code-signed; each version's new files have no reputation yet.
             throw ("Windows 应用程序控制阻止了新版 $Kind 运行，已保留旧版本。新版文件没有代码签名，可能被智能应用控制或单位的应用控制策略拦截：" +
-                   "可在 Windows 安全中心 › 应用和浏览器控制 › 智能应用控制中查看；单位电脑请联系管理员放行 Atrium 所在目录。（$($_.Exception.Message.Trim())）")
+                   "可在 Windows 安全中心 › 应用和浏览器控制 › 智能应用控制中查看；单位电脑请联系管理员放行 Yunzhao 所在目录。（$($_.Exception.Message.Trim())）")
         }
         $started.Add($process)
         $until = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
@@ -121,6 +144,22 @@ function Stop-NewProcesses {
     }
 }
 
+# The core's --exit does not close the calendar, capture helper, or island. Those keep
+# files such as Calendar\resources\app.asar open, and the folder swap then fails.
+function Stop-InstallTree {
+    $prefix = $install + '\'
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $left = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($left.Count -eq 0) { return }
+        foreach ($proc in $left) { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Milliseconds 300
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw '仍有程序占用安装目录，更新未安装。'
+}
+
 function Write-Result([string]$ErrorText) {
     $temporary = $result + '.tmp'
     @{ error = $ErrorText } | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -134,7 +173,7 @@ try {
     Assert-TemporaryPath $backup
     foreach ($root in @($install, $package)) {
         if (!(Test-Path -LiteralPath (Join-Path $root 'Yunzhao.exe')) -or
-            !(Test-Path -LiteralPath (Join-Path $root 'Settings\Atrium.Settings.exe'))) { throw '找不到完整的 Atrium 程序文件。' }
+            !(Test-Path -LiteralPath (Join-Path $root 'Settings\Yunzhao.Settings.exe'))) { throw '找不到完整的 Yunzhao 程序文件。' }
     }
     # Copy before stopping the app; disk/access failures leave the old app running.
     New-Item -ItemType Directory -Path $incoming | Out-Null
@@ -147,19 +186,20 @@ try {
     if ($settingsProcess -and !$settingsProcess.WaitForExit(30000)) { throw '设置中心尚未退出，更新未安装。' }
     $quit = Start-Process -FilePath (Join-Path $install 'Yunzhao.exe') -ArgumentList '--exit' -WindowStyle Hidden -PassThru
     try {
-        if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Atrium 尚未正常退出，更新未安装。' }
+        if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Yunzhao 尚未正常退出，更新未安装。' }
     } finally { $quit.Dispose() }
     $coreStopped = $true
+    Stop-InstallTree
     Assert-TemporaryPath $backup
     Assert-TemporaryPath $incoming
     # The folder itself stays (an app may be in it); what is in it is replaced.
-    try { Move-Tree $install $backup -Keep }
+    try { Move-Tree $install $backup -Keep -KeepIdentical }
     catch {
         Move-Tree $backup $install
         $restored = $true
         throw
     }
-    try { Move-Tree $incoming $install }
+    try { Move-Tree $incoming $install -KeepIdentical }
     catch {
         Move-Tree $install $incoming -Keep
         Move-Tree $backup $install
@@ -169,7 +209,7 @@ try {
     $swapped = $true
     if ($StartCore -eq '1') { Start-Verified (Join-Path $install 'Yunzhao.exe') 'Core' '' }
     $settingsArguments = if ($StartCore -eq '1') { '--page about --require-core-ready' } else { '--page about' }
-    Start-Verified (Join-Path $install 'Settings\Atrium.Settings.exe') 'Settings' $settingsArguments
+    Start-Verified (Join-Path $install 'Settings\Yunzhao.Settings.exe') 'Settings' $settingsArguments
     foreach ($process in $started) {
         if ($process.HasExited) { throw '新版程序在启动确认期间退出。' }
     }
@@ -190,6 +230,8 @@ try {
         } catch { $failure += " 恢复旧包未完成：$($_.Exception.Message)；恢复副本保留在 $backup。" }
     }
     Write-Result $failure
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show($failure, 'Yunzhao 更新未完成') | Out-Null
 } finally {
     # Never delete an unconfirmed recovery point, even when rollback itself failed.
     $cleanup = @($incoming)
@@ -204,7 +246,7 @@ try {
         if ($coreStopped -and $StartCore -eq '1') {
             Start-Process -FilePath (Join-Path $install 'Yunzhao.exe') -WorkingDirectory $workingDirectory -WindowStyle Hidden
         }
-        Start-Process -FilePath (Join-Path $install 'Settings\Atrium.Settings.exe') -ArgumentList '--page about' -WorkingDirectory $workingDirectory -WindowStyle Hidden
+        Start-Process -FilePath (Join-Path $install 'Settings\Yunzhao.Settings.exe') -ArgumentList '--page about' -WorkingDirectory $workingDirectory -WindowStyle Hidden
     }
     if ($confirmed) {
         $work = $package

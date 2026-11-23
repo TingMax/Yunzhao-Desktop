@@ -5,7 +5,7 @@
 #include <thread>
 #include <string>
 
-namespace atrium {
+namespace yunzhao {
 class Notifications;
 
 class UpdateChecker {
@@ -24,4 +24,4 @@ private:
     std::thread worker_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

@@ -1,4 +1,4 @@
-// Atrium's motion vocabulary (docs/DESIGN.md, Motion): one ease-out curve for
+// Yunzhao's motion vocabulary (docs/DESIGN.md, Motion): one ease-out curve for
 // fades and short slides, an exponential approach for states that follow the
 // pointer (hover, press), and springs for whatever moves into place. Springs
 // are given the way Apple gives them: `response`, the period in seconds of the
@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atrium::motion {
+namespace yunzhao::motion {
 
 // Cubic ease-out over t in 0..1: fast start, soft landing.
 inline float EaseOut(float t)
@@ -91,4 +91,4 @@ struct Spring {
 constexpr Spring kPop{0.36f, 0.62f};    // popups opening: quick, a hint of overshoot
 constexpr Spring kSmooth{0.48f, 0.77f}; // levels and indicators (the status ring)
 
-} // namespace atrium::motion
+} // namespace yunzhao::motion

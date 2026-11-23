@@ -1,3 +1,3 @@
 #pragma once
 
-#define IDI_ATRIUM 1
+#define IDI_YUNZHAO 1

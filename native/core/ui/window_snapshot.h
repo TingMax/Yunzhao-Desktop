@@ -12,7 +12,7 @@
 #include <mutex>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct WindowPicture {
     IconImage image;  // the window, with kPicturePad transparent px around it
@@ -28,7 +28,7 @@ constexpr int kShadowPad = 24;
 IconImage SoftShadow(int w, int h);
 
 // The picture of a placeholder window: `icon` in the middle of a plain rounded panel (a window
-// put away before Atrium started has no picture).
+// put away before Yunzhao started has no picture).
 WindowPicture PlaceholderPicture(const IconImage& icon, int width, int height, bool dark);
 
 class WindowSnapshots {
@@ -59,4 +59,4 @@ private:
     std::shared_ptr<Shared> shared_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

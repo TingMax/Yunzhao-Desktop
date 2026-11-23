@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct RadioState {
     bool wifiPresent = false, wifiOn = false;
@@ -31,4 +31,4 @@ std::vector<BluetoothDevice> ListBluetooth();
 int GetBrightness();
 bool SetBrightness(int percent);
 
-} // namespace atrium
+} // namespace yunzhao

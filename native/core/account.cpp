@@ -30,7 +30,7 @@
 
 namespace json = winrt::Windows::Data::Json;
 
-namespace atrium {
+namespace yunzhao {
 namespace {
 
 constexpr wchar_t kHost[] = L"yunzhao-desktop.com";
@@ -926,4 +926,4 @@ void AccountPublishLayout()
     }).detach();
 }
 
-} // namespace atrium
+} // namespace yunzhao

@@ -2,7 +2,7 @@
 
 #include "log.h"
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -11,7 +11,7 @@ constexpr ULONG_PTR kOurs = 0x41545257; // "ATRW"
 
 WinKey* g_winKey = nullptr; // the hook procedure has no context of its own
 
-// The window in front runs elevated: keys Atrium sends would not reach it.
+// The window in front runs elevated: keys Yunzhao sends would not reach it.
 bool ForegroundElevated()
 {
     DWORD pid = 0;
@@ -144,4 +144,4 @@ LRESULT CALLBACK WinKey::Hook(int code, WPARAM w, LPARAM l)
     return CallNextHookEx(nullptr, code, w, l);
 }
 
-} // namespace atrium
+} // namespace yunzhao

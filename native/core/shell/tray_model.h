@@ -1,4 +1,4 @@
-// The notification area's icons (the system tray), for Atrium's own tray
+// The notification area's icons (the system tray), for Yunzhao's own tray
 // panel. Read from the shell's UI Automation tree: the taskbar's and the
 // overflow window's tray buttons are there even while hidden, named by their
 // tooltips. A click is forwarded the same way: Invoke is the icon's left click,
@@ -26,7 +26,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct TrayIcon {
     std::wstring tip;      // the tooltip; may span lines
@@ -80,4 +80,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

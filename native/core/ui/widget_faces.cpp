@@ -4,7 +4,7 @@
 #include <cmath>
 #include <map>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -2257,4 +2257,4 @@ void PaintWidget(Canvas& c, WidgetKind kind, WidgetSize size, WidgetMaterial mat
     }
 }
 
-} // namespace atrium
+} // namespace yunzhao

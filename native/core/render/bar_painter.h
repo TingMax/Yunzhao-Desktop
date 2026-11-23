@@ -19,7 +19,7 @@
 #include <tuple>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct Readback;
 struct Settings;
@@ -45,7 +45,7 @@ struct BarScene {
     bool tucked = false;       // auto-hide: the bar slides down off the screen
     float scale = 1;
     std::vector<SceneItem> items;  // apps only (drag and drop works on these)
-    std::vector<SceneItem> extras; // Atrium logo (#start), overflow (#more), tray (#tray), status (#status), notifications (#notify)
+    std::vector<SceneItem> extras; // Yunzhao logo (#start), overflow (#more), tray (#tray), status (#status), notifications (#notify)
     SystemStatus status;           // drawn by the #status entry
     bool statusIcons = false;      // as the Windows taskbar's three icons rather than the ring (statusStyle)
     float separatorX = -1;     // < 0: none
@@ -174,4 +174,4 @@ private:
     std::wstring layerKey_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

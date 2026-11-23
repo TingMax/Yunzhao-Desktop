@@ -15,7 +15,7 @@
 
 #pragma comment(lib, "wbemuuid.lib")
 
-namespace atrium {
+namespace yunzhao {
 
 using namespace winrt;
 using namespace winrt::Windows::Devices;
@@ -175,4 +175,4 @@ bool SetBrightness(int percent)
     return ok;
 }
 
-} // namespace atrium
+} // namespace yunzhao

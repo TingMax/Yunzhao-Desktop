@@ -16,7 +16,7 @@
 #include <thread>
 #include <utility>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -91,7 +91,7 @@ ControlCenter::ControlCenter(HINSTANCE instance) : surface_(instance, L"Yunzhao 
     surface_.message = [this](UINT m, WPARAM w, LPARAM l, LRESULT& r) { return Message(m, w, l, r); };
     surface_.onDismiss = [this] { Close(); };
     wchar_t privacy[8] = {};
-    private_ = GetEnvironmentVariableW(L"ATRIUM_PRIVACY", privacy, 8) && privacy[0] == L'1';
+    private_ = GetEnvironmentVariableW(L"YUNZHAO_PRIVACY", privacy, 8) && privacy[0] == L'1';
     ReadRadios(false); // the brightness (WMI is slow) before the first opening
 }
 
@@ -1450,4 +1450,4 @@ bool ControlCenter::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

@@ -8,7 +8,7 @@
 namespace wgc = winrt::Windows::Graphics::Capture;
 namespace wgd = winrt::Windows::Graphics::DirectX;
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -299,4 +299,4 @@ void DuplicationCapture::Release()
     SetEvent(released_);
 }
 
-} // namespace atrium
+} // namespace yunzhao

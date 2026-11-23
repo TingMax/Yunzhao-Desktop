@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -123,7 +123,7 @@ void CALLBACK MenuShown(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, LO
     if (_wcsicmp(name, L"explorer.exe") == 0 || (!g_follow.dir.empty() && _wcsnicmp(path.c_str(), g_follow.dir.c_str(), g_follow.dir.size()) != 0))
         return;
     const POINT at = g_follow.at;
-    if (elevated) { // Windows keeps an elevated app's windows from being moved by Atrium
+    if (elevated) { // Windows keeps an elevated app's windows from being moved by Yunzhao
         StopFollow();
         Log(L"tray: %s's menu is an elevated app's: left where it is", name);
         return;
@@ -165,7 +165,7 @@ TrayPanel::TrayPanel(HINSTANCE instance, TrayModel& model) : surface_(instance, 
     surface_.message = [this](UINT m, WPARAM w, LPARAM l, LRESULT& r) { return Message(m, w, l, r); };
     surface_.onDismiss = [this] { Close(); };
     wchar_t privacy[8] = {};
-    private_ = GetEnvironmentVariableW(L"ATRIUM_PRIVACY", privacy, 8) && privacy[0] == L'1';
+    private_ = GetEnvironmentVariableW(L"YUNZHAO_PRIVACY", privacy, 8) && privacy[0] == L'1';
 }
 
 float TrayPanel::Margin() const { return std::clamp(radius_ * 0.65f, 14.f, 22.f); }
@@ -424,4 +424,4 @@ bool TrayPanel::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

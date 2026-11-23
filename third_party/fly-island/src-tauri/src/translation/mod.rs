@@ -38,7 +38,8 @@ static HOTKEY_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
 static ACTIVE_BINDING: Mutex<Option<ShortcutBinding>> = Mutex::new(None);
 /// Off when translation is switched off in settings: the shortcut is unregistered,
 /// so its keys reach other programs again, and stays so until it is switched on.
-static ENABLED: AtomicBool = AtomicBool::new(true);
+/// Off by default while Yunzhao ships without conflict prompts for global hotkeys.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 /// On when translation opens as a page of the island: the window shortcut then
 /// brings the island forward and asks it to toggle that page.
 static OPENS_IN_ISLAND: AtomicBool = AtomicBool::new(false);
@@ -270,6 +271,7 @@ pub fn set_translation_shortcut(shortcut: String) -> Result<String, String> {
 /// the frontend then calls set_translation_shortcut with the saved shortcut.
 #[tauri::command]
 pub fn set_translation_enabled(enabled: bool) -> Result<(), String> {
+    let enabled = enabled && !hosted_by_yunzhao();
     ENABLED.store(enabled, Ordering::SeqCst);
     if !enabled {
         change_hotkey(None)?;
@@ -339,12 +341,21 @@ fn run_hotkey_loop() -> Result<(), String> {
     Ok(())
 }
 
+fn hosted_by_yunzhao() -> bool {
+    std::env::var_os("YUNZHAO_HOST").is_some() || std::env::var_os("YUNZHAO_DISABLE_HOTKEYS").is_some()
+}
+
 fn register_default(
     hwnd: HWND,
     shortcut: &str,
     id: i32,
     slot: &Mutex<Option<ShortcutBinding>>,
 ) -> Result<(), String> {
+    // Yunzhao currently ships without hotkey conflict prompts; do not steal keys.
+    if hosted_by_yunzhao() {
+        ENABLED.store(false, Ordering::SeqCst);
+        return Ok(());
+    }
     if let Some(binding) = parse_shortcut_binding(shortcut).filter(|_| ENABLED.load(Ordering::SeqCst)) {
         if register_binding(hwnd, id, &binding).is_ok() {
             *slot.lock().map_err(|error| error.to_string())? = Some(binding);

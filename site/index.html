@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Yunzhao</title>
+  <meta name="description" content="Yunzhao 是跑在 Windows 上的桌面。它有自己的任务栏、日历、课表和当日待办。" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #07080d;
+      --panel: #14161d;
+      --line: rgba(255, 255, 255, 0.08);
+      --text: #f5f5f7;
+      --muted: #a1a1aa;
+      --blue: #0a84ff;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(900px 420px at 80% -10%, rgba(10, 132, 255, 0.28), transparent 60%),
+        var(--ink);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.6;
+    }
+    a { color: inherit; }
+    header, main, footer { width: min(1040px, calc(100% - 40px)); margin: 0 auto; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 28px 0;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 650; letter-spacing: 0.02em; }
+    .mark { width: 36px; height: 36px; }
+    nav { color: var(--muted); font-size: 14px; }
+    nav a { text-decoration: none; margin-left: 22px; }
+    nav a:hover { color: var(--text); }
+    .hero { padding: 54px 0 28px; }
+    h1 { margin: 0 0 16px; font-size: clamp(42px, 6vw, 72px); line-height: 1.05; letter-spacing: -0.04em; }
+    .lead { max-width: 640px; margin: 0; color: var(--muted); font-size: 18px; }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 28px 0 0; }
+    .download {
+      display: inline-block;
+      padding: 12px 22px;
+      border-radius: 999px;
+      background: var(--blue);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 650;
+    }
+    .download:hover { filter: brightness(1.08); }
+    .meta { color: var(--muted); font-size: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 42px 0 64px; }
+    article {
+      padding: 22px 22px 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(20, 22, 29, 0.86);
+    }
+    article h2 { margin: 0 0 8px; font-size: 18px; }
+    article p { margin: 0; color: var(--muted); }
+    footer { padding: 8px 0 40px; color: var(--muted); font-size: 14px; }
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
+      nav { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 1024 1024" aria-hidden="true">
+        <rect width="1024" height="1024" rx="226" fill="#0A84FF"/>
+        <path fill="#fff" d="M300 250h150l62 286 62-286h150L560 790H464z"/>
+      </svg>
+      Yunzhao
+    </div>
+    <nav>
+      <a href="#desktop">桌面</a>
+      <a href="#calendar">日历</a>
+      <a href="#account">账号</a>
+    </nav>
+  </header>
+  <main>
+    <section class="hero">
+      <h1>一块自己的 Windows 桌面。</h1>
+      <p class="lead">Yunzhao 打开之后，屏幕上是它自己的任务栏、日历、课表和当日待办。设置、账号和教师工作台用的是同一套界面。</p>
+      <p class="actions">
+        <a class="download" href="/releases/Yunzhao-2.6.9-win-x64.zip">下载 Windows 版</a>
+        <span class="meta">2.6.9 · Windows 11 · 336 MB</span>
+      </p>
+      <p class="meta">这是一个压缩包。解压后运行 Yunzhao.exe。账号和数据留在这台电脑上。</p>
+    </section>
+    <section class="grid">
+      <article id="desktop">
+        <h2>任务栏</h2>
+        <p>Yunzhao 使用自己的任务栏。它会自动隐藏，鼠标靠向屏幕边缘时再出现。</p>
+      </article>
+      <article id="calendar">
+        <h2>日历和课表</h2>
+        <p>日历和课表在同一个窗口里切换。课表按周显示课程，也可以只改某一周。点开某一天，会弹出这一天的待办。</p>
+      </article>
+      <article>
+        <h2>当日待办</h2>
+        <p>待办可以新建、编辑和完成。窗口没有系统标题栏，大小会记住。换一天时，打开的列表跟着换成那一天。</p>
+      </article>
+      <article>
+        <h2>灵动岛</h2>
+        <p>灵动岛是单独的程序，由 Yunzhao 启动。它的设置在桌面的「灵动岛」页里，不另占一个任务栏图标。</p>
+      </article>
+      <article id="account">
+        <h2>账号</h2>
+        <p>登录使用 yunzhao-desktop.com。退出时先上传这个账号要同步的内容，再次登录时再拉回来。登录状态只留在这台电脑上。</p>
+      </article>
+      <article>
+        <h2>数据留在本机</h2>
+        <p>日历、课表和设置写在这台电脑的用户目录里。更换程序时，这些内容留在原地。</p>
+      </article>
+    </section>
+  </main>
+  <footer>Yunzhao · yunzhao-desktop.com</footer>
+</body>
+</html>

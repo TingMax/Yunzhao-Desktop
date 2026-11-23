@@ -19,7 +19,7 @@
 #pragma comment(lib, "version.lib")
 #pragma comment(lib, "shlwapi.lib")
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -132,7 +132,7 @@ int GlyphTone(const IconImage& img)
     return light * 10 >= opaque * 6 ? 1 : dark * 10 >= opaque * 6 ? -1 : 0;
 }
 
-// The glyph's neutral pixels (and their soft edges) in Atrium's ink of the
+// The glyph's neutral pixels (and their soft edges) in Yunzhao's ink of the
 // other kind (DESIGN.md, ink): #111317 at 92 % for a white glyph, white at 96 %
 // for a black one. Alpha and coloured pixels stay.
 IconImage InkedGlyph(const IconImage& img, int tone)
@@ -944,7 +944,7 @@ void TrayModel::Worker()
                     auto& pic = pictures[key];
                     if (!pic.image || pic.exe != r.exe || pic.snapshot != r.png) {
                         IconImage img;
-                        if (!LoadAtriumIcon(r.exe, kIconPx, img) && (r.png.empty() || !DecodePng(r.png, img)) && !LoadShellImage(r.exe, kIconPx, img))
+                        if (!LoadYunzhaoIcon(r.exe, kIconPx, img) && (r.png.empty() || !DecodePng(r.png, img)) && !LoadShellImage(r.exe, kIconPx, img))
                             img = {};
                         pic.exe = r.exe;
                         pic.snapshot = r.png;
@@ -991,4 +991,4 @@ void TrayModel::Worker()
     winrt::uninit_apartment();
 }
 
-} // namespace atrium
+} // namespace yunzhao

@@ -17,7 +17,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct CatalogApp {
     std::wstring name;    // display name
@@ -84,4 +84,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

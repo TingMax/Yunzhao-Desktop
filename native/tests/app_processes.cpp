@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
-using namespace atrium;
+using namespace yunzhao;
 namespace fs = std::filesystem;
 
 namespace {
@@ -61,7 +61,7 @@ struct Fixture {
     {
         wchar_t temporary[MAX_PATH]{};
         Require(GetTempPathW(ARRAYSIZE(temporary), temporary) != 0, "read temporary directory");
-        root = fs::path(temporary) / (L"Atrium-process-tests-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+        root = fs::path(temporary) / (L"Yunzhao-process-tests-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
         fs::create_directory(root);
     }
 
@@ -111,7 +111,7 @@ void CheckTermination(const fs::path& self)
     const auto grandchild = fixture.Copy(self, L"game", L"background.exe");
     const auto unrelated = fixture.Copy(self, L"unrelated", L"probe.exe");
     const auto shell = fixture.Copy(self, L"shell", L"explorer.exe");
-    const auto eventName = L"Local\\AtriumProcessTests-" + std::to_wstring(GetCurrentProcessId());
+    const auto eventName = L"Local\\YunzhaoProcessTests-" + std::to_wstring(GetCurrentProcessId());
     Handle ready(CreateEventW(nullptr, TRUE, FALSE, eventName.c_str()), CloseHandle);
     Require(bool(ready), "create probe readiness event");
     fixture.children.push_back(Spawn(app, {L"--probe", eventName, helper.wstring(), grandchild.wstring()}));

@@ -13,7 +13,7 @@
 // pointer is at the screen's bottom edge below it (auto-hide; setting autoHide
 // can keep it up always, or hide it whatever is in front). Not over an app in
 // front that fills the whole screen (a game): as Windows' taskbar, it stays down.
-// The render thread also draws the glass layer of Atrium's popups.
+// The render thread also draws the glass layer of Yunzhao's popups.
 #pragma once
 
 #include "render/bar_painter.h"
@@ -34,7 +34,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class Surface;
 
@@ -83,9 +83,9 @@ public:
     std::function<void(POINT)> onContextMenu;                 // right click elsewhere on the bar
     std::function<void()> onClockClick;
     // Bar entries; `anchor` is the entry's rectangle on screen (popups open above it).
-    std::function<void(RECT anchor)> onStartClick;  // the Atrium logo
+    std::function<void(RECT anchor)> onStartClick;  // the Yunzhao logo
     std::function<void(RECT anchor)> onNotifyClick; // the notification bell
-    std::function<void(RECT anchor)> onTrayClick;   // the tray entry (Atrium's tray panel)
+    std::function<void(RECT anchor)> onTrayClick;   // the tray entry (Yunzhao's tray panel)
     std::function<void(RECT anchor)> onStatusClick; // the status icon (Wi-Fi, battery: the control centre)
     std::function<void(int notches)> onStatusWheel; // the wheel over the status icon (volume)
     // The overflow entry: apps that did not fit, in bar order.
@@ -249,9 +249,9 @@ private:
     HANDLE quit_ = nullptr;
     HANDLE frame_ = nullptr; // a capture frame arrived
     HANDLE captureAck_ = nullptr; // the UI thread changed the windows' capture exclusion
-    std::atomic<bool> captureVisible_{false}; // Atrium's windows show in screenshots (render thread)
+    std::atomic<bool> captureVisible_{false}; // Yunzhao's windows show in screenshots (render thread)
     bool duplicationFailed_ = false;            // Desktop Duplication cannot run here: Windows.Graphics.Capture
     std::thread render_;
 };
 
-} // namespace atrium
+} // namespace yunzhao
