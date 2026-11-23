@@ -90,6 +90,16 @@ onMounted(() => {
       }
     }
   })
+  void window.api?.yunzhaoPeekState?.().then((payload) => {
+    if (payload?.edge) peekEdge.value = payload.edge
+    if (payload?.thick) {
+      peekBox.value = {
+        thick: payload.thick,
+        long: payload.long,
+        radius: payload.radius
+      }
+    }
+  })
 })
 const viewLabel = computed(() => (isWeekView.value ? '周视图' : '月视图'))
 const defaults = createDefaultSettings(props.viewMode)

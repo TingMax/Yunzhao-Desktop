@@ -473,6 +473,7 @@ const api = {
   retryScheduler: () => ipcRenderer.invoke('scheduler:retry'),
   getSchedulerHealth: () => ipcRenderer.invoke('scheduler:health'),
   yunzhaoHosted: () => ipcRenderer.invoke('yunzhao:hosted'),
+  yunzhaoPeekState: () => ipcRenderer.invoke('yunzhao:peek-state'),
   yunzhaoSizing: (active) => ipcRenderer.send('yunzhao:sizing', active === true),
   yunzhaoTodos: () => ipcRenderer.invoke('yunzhao:todos'),
   yunzhaoState: () => ipcRenderer.invoke('yunzhao:state'),
