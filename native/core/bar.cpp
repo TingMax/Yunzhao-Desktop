@@ -2323,23 +2323,31 @@ bool Bar::RenderSession()
         // Animations, and glass owed a frame (not Ready last time), run on the compositor's
         // clock (D45): one wake-up per composed frame, at the display's rate. A timeout would
         // be rounded up to 15.6 ms, and the popups' latency objects (no vsync) would spin.
-        // Pending readbacks are polled soon.
+        // Pending readbacks are polled soon. When the bar owes a frame, also wait on its
+        // latency object so Win10 (no compositor clock) presents the latest pointer ASAP.
         bool owed = barOwed || std::any_of(panels.begin(), panels.end(), [](const auto& e) { return e.second.owed; });
         bool paced = animating || panelsMoving || owed;
         bool readback = renderer.ReadbackPending() || std::any_of(panels.begin(), panels.end(), [](const auto& e) {
             return e.second.renderer && e.second.renderer->ReadbackPending();
         });
+        HANDLE waitSet[4] = {handles[0], handles[1], handles[2], nullptr};
+        DWORD waitCount = 3;
+        if (barOwed && renderer.Waitable()) {
+            waitSet[waitCount++] = renderer.Waitable();
+        }
         DWORD w = WAIT_FAILED;
         if (paced && g_waitClock) {
-            w = g_waitClock(3, handles, 100);
-            if (w == WAIT_OBJECT_0 + 3 || w == WAIT_TIMEOUT) {
+            w = g_waitClock(waitCount, waitSet, 100);
+            if (w == WAIT_OBJECT_0 + waitCount || w == WAIT_TIMEOUT) {
                 ++tick;
-            } else if (w > WAIT_OBJECT_0 + 3) {
-                w = WaitForMultipleObjects(3, handles, FALSE, 6); // no clock (the display is off)
+            } else if (w > WAIT_OBJECT_0 + waitCount) {
+                w = WaitForMultipleObjects(waitCount, waitSet, FALSE, 6); // no clock (the display is off)
                 ++tick;
             }
         } else {
-            w = WaitForMultipleObjects(3, handles, FALSE, paced ? 6 : readback ? 3 : 1000);
+            // Win10: no compositor clock. Keep the timeout short while following the pointer
+            // so WaitForMultipleObjects does not round up toward the 15.6 ms timer quantum.
+            w = WaitForMultipleObjects(waitCount, waitSet, FALSE, paced ? 4 : readback ? 3 : 1000);
             ++tick;
         }
         if (w == WAIT_OBJECT_0)
@@ -2373,6 +2381,57 @@ bool Bar::RenderSession()
         {
             std::lock_guard g(lock_);
             snap = snapshot_;
+        }
+        // Pointer / hover follow only: skip Desktop Duplication, panels and backdrop copy.
+        // Those steps were dominating the gap between WM_MOUSEMOVE and the drawn wave on Win10.
+        const bool pointerFollowOnly = renderer.HasPresented() && snap.generation == drawnGeneration && snap.visible &&
+                                       snap.panels.empty() && !panelsMoving &&
+                                       (snap.scene.pointerX != drawnPointerX || snap.scene.hoverKey != drawnHoverKey);
+        if (pointerFollowOnly) {
+            std::wstring time, date;
+            if (snap.settings.showClock)
+                ClockStrings(time, date);
+            const double nowMs = ClockMs();
+            animating = painter.Animate(snap.scene, nowMs);
+            animating |= painter.UpdateDotInk(snap.scene, dotBackdrop, snap.settings, nowMs);
+            animating |= clockInk.Moving(nowMs) || appsInk.Moving(nowMs);
+            const Ink inks{clockInk.Value(nowMs), appsInk.Value(nowMs)};
+            if (!renderer.Ready()) {
+                barOwed = true;
+                continue;
+            }
+            barOwed = false;
+            GlassParams params = ParamsFor(snap.settings, snap.scale);
+            const BarFrame& bf = painter.Frame();
+            params.radius = std::min(params.radius, (bf.shape.bottom - bf.shape.top) / 2);
+            params.shapeL = bf.shape.left;
+            params.shapeT = bf.shape.top;
+            params.shapeR = bf.shape.right;
+            params.shapeB = bf.shape.bottom;
+            params.rippleX = bf.rippleX;
+            params.rippleY = bf.rippleY;
+            params.rippleR = bf.rippleR;
+            params.rippleA = bf.rippleA;
+            params.waveX = bf.waveX;
+            params.waveWidth = bf.waveWidth;
+            params.waveHeight = bf.waveHeight;
+            const bool pointerMoved = true;
+            bool ok = renderer.Present(params, [&](ID2D1DeviceContext2* d2d) {
+                painter.Draw(d2d, snap.scene, inks, time, date,
+                             std::to_wstring(snap.generation) + time + L"|" + date + (drawnDark ? L"d" : L"l") + (drawnDarkIcons ? L"d" : L"l"),
+                             animating || pointerMoved);
+            });
+            if (!ok) {
+                Log(L"render: device lost");
+                return true;
+            }
+            ++presents;
+            workMs.push_back(elapsedMs());
+            presentMs.push_back(workMs.back());
+            drawnPointerX = snap.scene.pointerX;
+            drawnHoverKey = snap.scene.hoverKey;
+            lastPresent = GetTickCount64();
+            continue;
         }
         ID3D11Texture2D* frame = capture->Acquire();
         if (capture->Lost())
