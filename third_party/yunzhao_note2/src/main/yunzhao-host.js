@@ -54,7 +54,8 @@ function ensureClipApi() {
     offset: gdi32.func('int OffsetRgn(void *, int, int)'),
     combine: gdi32.func('int CombineRgn(void *, void *, void *, int)'),
     drop: gdi32.func('int DeleteObject(void *)'),
-    box: gdi32.func('GetRgnBox', 'int', ['void *', koffi.out(koffi.pointer(rectType))])
+    box: gdi32.func('GetRgnBox', 'int', ['void *', koffi.out(koffi.pointer(rectType))]),
+    pressed: user32.func('int GetAsyncKeyState(int)')
   }
   return nativeCalendarClip
 }
@@ -424,6 +425,25 @@ function tellPeek(win, edge) {
     : { edge: '' })
 }
 
+// The page only knows it is collapsed from this message. A reload, a view
+// switch or a slow first paint can drop it, and then the pill has no expand
+// target at all, so the state is repeated while the calendar stays collapsed.
+function keepTellingPeek(win) {
+  if (!peek || !win || win.isDestroyed()) return
+  tellPeek(win, peek.edge)
+  setTimeout(() => {
+    if (!peek || !win || win.isDestroyed()) return
+    if (motion) return
+    tellPeek(win, peek.edge)
+  }, 700)
+}
+
+function peekStateMessage() {
+  return peek
+    ? { edge: peek.edge, thick: PEEK_THICK, long: PEEK_LONG, radius: PEEK_RADIUS }
+    : { edge: '' }
+}
+
 function windowHwnd(win) {
   const handle = win.getNativeWindowHandle()
   return handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0))
@@ -590,11 +610,46 @@ function revealPeek(win) {
     return
   }
   peek.placed = 'bar'
+  raisePeekAbove(win)
   animateBounds(win, peekHostBounds(win, barBounds()), Math.min(readDockDuration(), 320), () => alignPeek(win), 'hover')
 }
 
 let peekResizeGuard = null
 let parkingPeek = false
+
+// The calendar keeps its own z-order while expanded. Collapsing puts it in the
+// topmost band so it survives a fullscreen app, and expanding puts it back.
+let peekTopWas = null
+let restoreHostZOrder = null
+
+function raisePeekAbove(win) {
+  if (!win || win.isDestroyed()) return
+  try {
+    if (peekTopWas == null) peekTopWas = win.isAlwaysOnTop()
+    if (!win.isAlwaysOnTop()) win.setAlwaysOnTop(true, 'screen-saver')
+    win.moveTop()
+  } catch {
+    // A missing topmost right still leaves the pill where it was.
+  }
+}
+
+function dropPeekAbove(win) {
+  if (!win || win.isDestroyed()) return
+  const restore = peekTopWas === true
+  peekTopWas = null
+  try {
+    if (win.isAlwaysOnTop() !== restore) win.setAlwaysOnTop(restore)
+  } catch {
+    // The window keeps the layer it already has.
+  }
+  if (!restore && typeof restoreHostZOrder === 'function') {
+    try {
+      restoreHostZOrder()
+    } catch {
+      // The saved z-order mode is applied by its own retry path.
+    }
+  }
+}
 
 function holdPeekSize(win) {
   if (!win || win.isDestroyed()) return
@@ -674,11 +729,17 @@ function collapseCalendar(win) {
   peek = { edge, home, placed: 'rim' }
   dockShown = 1
   holdPeekSize(win)
+  // A fullscreen app covers everything below the topmost band. The pill stays
+  // reachable only if it sits there too, the way the island does.
+  raisePeekAbove(win)
   win.setOpacity(1)
   win.setIgnoreMouseEvents(false)
   win.webContents.executeJavaScript("document.documentElement.style.transform='none'").catch(() => {})
   tellPeek(win, edge)
-  animateBounds(win, peekHostBounds(win, rimBounds()), readDockDuration(), () => alignPeek(win), 'collapse')
+  animateBounds(win, peekHostBounds(win, rimBounds()), readDockDuration(), () => {
+    alignPeek(win)
+    keepTellingPeek(win)
+  }, 'collapse')
 }
 
 function expandCalendar(win) {
@@ -689,6 +750,7 @@ function expandCalendar(win) {
   clearPeekShape(win)
   win.setMaximumSize(16384, 16384)
   win.setMinimumSize(1, 1)
+  dropPeekAbove(win)
   const home = clampYunzhaoBounds(peek.home)
   win.setOpacity(1)
   win.setIgnoreMouseEvents(false)
@@ -1350,7 +1412,8 @@ async function openTeacherPage(host, pagePath) {
   return true
 }
 
-export function startYunzhaoHost({ getWindow, getMode, switchView, suspendDock, applyUiSetting, getSettings }) {
+export function startYunzhaoHost({ getWindow, getMode, switchView, suspendDock, applyUiSetting, getSettings, restoreZOrder }) {
+  restoreHostZOrder = typeof restoreZOrder === 'function' ? restoreZOrder : null
   ipcMain.on('yunzhao:sizing', (_event, active) => {
     if (peek && active === true) return
     if (active === true) expandYunzhaoForDrag(getWindow())
@@ -1361,6 +1424,7 @@ export function startYunzhaoHost({ getWindow, getMode, switchView, suspendDock, 
     }
   })
   ipcMain.handle('yunzhao:hosted', () => yunzhaoHosted())
+  ipcMain.handle('yunzhao:peek-state', () => peekStateMessage())
   ipcMain.handle('yunzhao:todos', () => readYunzhaoTodos())
   ipcMain.handle('yunzhao:state', () => readYunzhaoState())
   ipcMain.handle('yunzhao:command', (_event, payload) => {
@@ -1915,6 +1979,35 @@ function startIsland(getWindow) {
     screen.on(eventName, () => setTimeout(bringBack, 400))
   }
   setInterval(place, 250)
+  // A fullscreen app can still push the pill behind itself. Re-raise it while
+  // collapsed so it stays visible and clickable, as the island does.
+  setInterval(() => {
+    const win = getWindow()
+    if (!win || win.isDestroyed() || !peek || motion) return
+    if (!win.isAlwaysOnTop()) raisePeekAbove(win)
+    else if (!win.isFocused()) win.moveTop()
+  }, 1200)
+  // The pill is only a few pixels tall and its page can miss the peek message.
+  // Watching the pointer here keeps hover and click working in that case.
+  let pressArmed = false
+  setInterval(() => {
+    const win = getWindow()
+    if (!win || win.isDestroyed() || !peek || motion) return
+    if (Date.now() < peekQuietUntil) return
+    const on = cursorOnPill()
+    if (on !== peekHot) hoverPeek(win, on)
+    let down = false
+    try {
+      down = (ensureClipApi().pressed(0x01) & 0x8000) !== 0
+    } catch {
+      down = false
+    }
+    if (down && on) pressArmed = true
+    else if (!down && pressArmed) {
+      pressArmed = false
+      if (on) expandCalendar(win)
+    }
+  }, 120)
   setInterval(() => {
     const plan = readDailyPlan()
     if (!plan.channels || !plan.time) return

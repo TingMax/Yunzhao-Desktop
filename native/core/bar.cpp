@@ -507,8 +507,7 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
         std::wstring hover = HitTest(pt);
         bool magnify = scene_.magnify > 1.001f;
         if (hover != scene_.hoverKey || (magnify && scene_.pointerX != float(pt.x))) {
-            const bool hoverChanged = hover != scene_.hoverKey;
-            if (hoverChanged) {
+            if (hover != scene_.hoverKey) {
                 scene_.hoverKey = hover;
                 // With a preview up, the next app's windows follow the pointer without the tooltip's delay.
                 bool quick = previewShown_ || (previewOpen && previewOpen());
@@ -517,9 +516,10 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                     SetTimer(h, kTooltipTimer, quick ? kPreviewSwapMs : kTooltipDelayMs, nullptr);
             }
             scene_.pointerX = float(pt.x);
-            // Pointer-only motion must not bump the layout generation: that forces a fresh
-            // desktop copy and mip chain on every mouse step, which is what feels late on Win10.
-            Publish(hoverChanged);
+            // Hover / magnify tracking never bumps the layout generation: a fresh desktop
+            // copy and mip chain on every move (or every icon crossed) is what makes the
+            // magnification wave feel a beat late, especially on Win10.
+            Publish(false);
         }
         return 0;
     }
@@ -1906,7 +1906,8 @@ bool Bar::RenderSession()
     BarPainter painter(renderer.D2D(), renderer.DWrite());
 
     unsigned drawnGeneration = 0;
-    std::wstring drawnText;
+    std::wstring drawnText, drawnHoverKey;
+    float drawnPointerX = -2; // not equal to any real pointer; forces the first follow
     bool darkClock = false, darkApps = false, drawnDark = false, drawnDarkIcons = false, animating = false;
     InkFade clockInk, appsInk; // the inks fade to a new colour, not switch
     Readback dotBackdrop; // newest completed luminance grid, reused while the desktop is still
@@ -2622,7 +2623,10 @@ bool Bar::RenderSession()
         animating |= clockInk.Moving(nowMs) || appsInk.Moving(nowMs);
         const Ink inks{clockInk.Value(nowMs), appsInk.Value(nowMs)};
         ULONGLONG now = GetTickCount64();
-        bool force = layoutChange || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
+        // Magnification and hover washes live only in the scene: they must still force a
+        // present when the layout generation did not change.
+        const bool pointerMoved = snap.scene.pointerX != drawnPointerX || snap.scene.hoverKey != drawnHoverKey;
+        bool force = layoutChange || pointerMoved || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
                      animating || barOwed || now - lastPresent > kStaleMs;
         if (!changed && !force) {
             ++skipped; // echo of our own present, or nothing new under the glass
@@ -2653,7 +2657,7 @@ bool Bar::RenderSession()
                                    [&](ID2D1DeviceContext2* d2d) {
                                        painter.Draw(d2d, snap.scene, inks, time, date,
                                                     std::to_wstring(snap.generation) + textKey + (dark ? L"d" : L"l") + (darkIcons ? L"d" : L"l"),
-                                                    animating);
+                                                    animating || pointerMoved);
                                    });
         if (!ok) {
             Log(L"render: device lost");
@@ -2666,6 +2670,8 @@ bool Bar::RenderSession()
         drawnText = textKey;
         drawnDark = dark;
         drawnDarkIcons = darkIcons;
+        drawnPointerX = snap.scene.pointerX;
+        drawnHoverKey = snap.scene.hoverKey;
         lastPresent = now;
     }
 }

@@ -2454,7 +2454,11 @@ const applicationBootstrap = createApplicationBootstrap({
       switchView: (view) => switchMainView(view),
       suspendDock: () => dockRuntime.beginDockInteractionSuspension('yunzhao'),
       getSettings: () => settingsRuntime.values,
-      applyUiSetting: (id, value) => Promise.resolve(persistSettingValue(id, value))
+      applyUiSetting: (id, value) => Promise.resolve(persistSettingValue(id, value)),
+      restoreZOrder: () => {
+        const result = applyWindowZOrder()
+        return result?.success !== false
+      }
     })
     remoteCoordinator = new RemoteCoordinator({
       app,
