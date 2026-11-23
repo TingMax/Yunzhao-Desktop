@@ -116,7 +116,9 @@ private:
     // The same as the Windows taskbar shows it: the network, the speaker and the battery side by
     // side in `r` (its height the icons'), redrawn in the bar's ink.
     void DrawStatusIcons(ID2D1DeviceContext2* d2d, const SystemStatus& st, D2D1_RECT_F r, ID2D1SolidColorBrush* brush, D2D1_COLOR_F ink, bool darkInk);
-    float MapX(float u) const; // base x -> displayed x under the magnification
+    float MapX(float u) const; // base x -> displayed x (the wave no longer displaces)
+    // This icon's own scale under the magnification wave at window x `x` (1 = as is).
+    float WaveGrow(float x) const;
 
     struct Motion {
         float hover = 0;   // 0..1

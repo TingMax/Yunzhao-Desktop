@@ -96,18 +96,37 @@ float WaveArea(float x)
     return x / 2 + std::sin(pi * x) / (2 * pi);
 }
 
+// Raised cosine over [-1, 1]: 1 under the pointer, 0 at the wave's edge.
+float Wave(float x)
+{
+    constexpr float pi = 3.14159265f;
+    if (x <= -1 || x >= 1)
+        return 0;
+    return 0.5f * (1 + std::cos(pi * x));
+}
+
 } // namespace
 
-// Displayed position of base position u. The local scale is 1 + (mag-1) *
-// amount * wave((t - centre) / range); integrating it from the pointer keeps
-// the point under the pointer fixed, so the icon under the pointer in the base
-// layout is the one shown under it, and the neighbours spread out like a wave.
+// Displayed position of an application icon's base position u. Integrating the
+// local scale from the pointer keeps the point under the pointer fixed, so the
+// icon under the pointer is shown under it and its neighbours spread aside.
+// Only the app strip uses this: the tray, the status icon and the clock never move.
 float BarPainter::MapX(float u) const
 {
-    float k = (mag_ - 1) * amount_;
+    const float k = (mag_ - 1) * amount_;
     if (k <= 0)
         return u;
     return u + k * range_ * WaveArea((u - centre_) / range_);
+}
+
+// One icon's own scale at base position x (1 = as is). This is the derivative of
+// MapX, so an icon is drawn exactly as wide as the wave spread it.
+float BarPainter::WaveGrow(float x) const
+{
+    const float k = (mag_ - 1) * amount_;
+    if (k <= 0)
+        return 1.f;
+    return 1.f + k * Wave((x - centre_) / range_);
 }
 
 bool BarPainter::Animate(const BarScene& scene, double nowMs)
@@ -293,11 +312,11 @@ bool BarPainter::Animate(const BarScene& scene, double nowMs)
     }
     frame_.slideY = slide_ * std::max(0.f, scene.windowH - scene.bar.top);
 
-    // What the glass shows this frame: the stretched shape and the ripple.
-    frame_.shape = D2D1::RectF(MapX(barL_), scene.bar.top + frame_.slideY, MapX(barR_), scene.bar.bottom + frame_.slideY);
-    // Share the icons' wave and easing; its support widens with the stretched bar.
+    // What the glass shows this frame: the shape and the ripple. The shape does not
+    // stretch with the wave, so the right group keeps exactly its drawn place.
+    frame_.shape = D2D1::RectF(barL_, scene.bar.top + frame_.slideY, barR_, scene.bar.bottom + frame_.slideY);
     frame_.waveX = centre_;
-    frame_.waveWidth = range_ * (1 + (mag_ - 1) * amount_ / 2);
+    frame_.waveWidth = range_;
     frame_.waveHeight = scene.magnifyLift * amount_;
     frame_.rippleA = 0;
     if (scene.rippleMs > 0) {
@@ -305,7 +324,7 @@ bool BarPainter::Animate(const BarScene& scene, double nowMs)
         double t = nowMs - scene.rippleMs;
         if (t >= 0 && t < kRippleMs) {
             float u = float(t / kRippleMs);
-            frame_.rippleX = MapX(scene.rippleX);
+            frame_.rippleX = scene.rippleX;
             frame_.rippleY = scene.rippleY + frame_.slideY;
             frame_.rippleR = (scene.bar.bottom - scene.bar.top) * 1.5f * motion::EaseOut(u);
             frame_.rippleA = 0.9f * (1 - u) * (1 - u);
@@ -423,16 +442,14 @@ void BarPainter::DrawContent(ID2D1DeviceContext2* d2d, const BarScene& scene, In
         D2D1_COLOR_F c = inkFor(darkText);
         c.a = 0.30f + (0.18f - 0.30f) * darkText;
         brush->SetColor(c);
-        float h = (scene.bar.bottom - scene.bar.top) * 0.46f, mid = (scene.bar.top + scene.bar.bottom) / 2, x = MapX(sepX_);
+        float h = (scene.bar.bottom - scene.bar.top) * 0.46f, mid = (scene.bar.top + scene.bar.bottom) / 2, x = sepX_;
         d2d->FillRectangle(D2D1::RectF(x - 0.5f * s, mid - h / 2, x + 0.5f * s, mid + h / 2), brush.get());
     }
 
     if (scene.clock.right > scene.clock.left) {
         const Motion& m = motion_[L"#clock"];
         ink = inkFor(darkText);
-        // The clock does not grow; it moves with the stretched bar.
-        float shift = MapX(clockX_) - (scene.clock.left + scene.clock.right) / 2;
-        d2d->SetTransform(D2D1::Matrix3x2F::Translation(shift, 0));
+        // The clock does not grow or move with the wave; only its hover plate reacts.
         if (m.hover > 0.001f) {
             D2D1_COLOR_F c = washFor(darkText);
             c.a *= motion::EaseOut(m.hover);
@@ -462,8 +479,9 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
 {
     const float s = scene.scale;
     const Motion& m = motion_[it.key];
-    // Only the app icons take part in the magnification wave: the tray, volume,
-    // status and logo entries keep their size and place, as on the system taskbar.
+    // Every entry reacts to the pointer. Only application icons grow; the tray,
+    // the volume/status icon, the logo and the overflow button get the plate wash
+    // instead, so they respond without moving (as on the system taskbar).
     const bool isApp = !it.key.empty() && it.key.front() != L'#';
     const bool magnifying = mag_ > 1.001f && isApp;
     // Base position: everything of the item slides with its plate (reordering,
@@ -473,16 +491,16 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
     D2D1_RECT_F icon = D2D1::RectF(it.icon.left + dx, it.icon.top, it.icon.right + dx, it.icon.bottom);
     float size = icon.right - icon.left;
     float bx = (icon.left + icon.right) / 2, bottom = icon.bottom;
-    float pw = std::max(1.f, plate.right - plate.left);
-    float grow = magnifying ? (MapX(bx + pw / 2) - MapX(bx - pw / 2)) / pw : 1.f; // local magnification
+    float grow = magnifying ? WaveGrow(bx) : 1.f; // this icon's own scale
+    // Application icons spread with the wave; every other entry keeps its place.
     float cx = isApp ? MapX(bx) : bx;
     float hover = motion::EaseOut(m.hover), lift = motion::EaseOut(m.lift);
     // A still icon uses its resting bitmap; a reduced one (a neighbour of the
     // wave shrinking back) uses it too, so nothing is a downscaled big bitmap.
     const bool useRestBitmap = grow < 1.005f;
 
-    // 底板仅响应悬停（关闭放大时）和拖动，按下仅缩放图标。
-    // Its corners are concentric with the bar's.
+    // 底板响应悬停和拖动。被放大到更大的图标不需要底板（它会跟着一起放大）；
+    // 其余入口（托盘、状态、开始、更多）没有放大，靠底板表示悬停。
     float plateA = (magnifying ? 0.f : hover) + 0.4f * lift;
     if (plateA > 0.001f) {
         D2D1_COLOR_F c = wash;
