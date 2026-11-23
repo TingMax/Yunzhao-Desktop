@@ -182,7 +182,8 @@ private:
     bool filterTasks_ = false;
     bool layoutPending_ = false; // coalesce window-move events
     bool coverPending_ = false; // a look at what covers the monitor is due (kCoverTimer)
-    std::map<std::wstring, CachedIcon> icons_;
+    std::map<std::wstring, CachedIcon> icons_;     // at the magnified size
+    std::map<std::wstring, CachedIcon> iconsRest_; // at the resting size (drawn when not grown)
     uint64_t nextIconId_ = 1;
     BarScene scene_;
     std::vector<Hit> hits_;

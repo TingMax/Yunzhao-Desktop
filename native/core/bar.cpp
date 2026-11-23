@@ -1100,9 +1100,11 @@ void Bar::Relayout()
     const int appsLeft = appsMin + std::max(0, (rightLeft - 2 * groupGap - appsMin - appsW) / 2);
     scene.extras.push_back(entry(kStartKey, startLeft, L""));
     hits_.push_back({kStartKey, RECT{insetX, hitTop, appsMin - gap / 2, hitBottom}});
-    // Icons are rendered for their magnified size, so they stay sharp when they grow.
+    // Icons are rendered for their magnified size, so they stay sharp when they grow;
+    // the resting size is kept too, so a still icon is not a downscaled big bitmap.
     const int iconPx = int(std::lround(float(icon) * mag));
-    std::map<std::wstring, CachedIcon> keep;
+    const int iconPxRest = icon;
+    std::map<std::wstring, CachedIcon> keep, keepRest;
     for (int k = 0; k < n; ++k) {
         const int i = order[size_t(k)];
         const TaskItem& t = items_[size_t(i)];
@@ -1134,6 +1136,20 @@ void Bar::Relayout()
             it.imageId = c.id;
             keep[t.key] = c;
         }
+        if (iconProvider && iconPxRest != iconPx) {
+            if (auto f = iconsRest_.find(t.key); f != iconsRest_.end() && f->second.version == t.iconVersion && f->second.px == iconPxRest && f->second.image)
+                c = f->second;
+            else {
+                IconImage img = iconProvider(t.key, iconPxRest);
+                if (!img.empty())
+                    c = {t.iconVersion, iconPxRest, nextIconId_++, std::make_shared<const IconImage>(std::move(img))};
+            }
+            if (c.image) {
+                it.imageRest = c.image;
+                it.imageRestId = c.id;
+                keepRest[t.key] = c;
+            }
+        }
         scene.items.push_back(std::move(it));
         // Hit cells split the gaps; the last one reaches the separator.
         int hl = k == 0 ? appsMin - gap / 2 : appsLeft + k * pitch - gap / 2;
@@ -1146,6 +1162,7 @@ void Bar::Relayout()
         hits_.push_back({kMoreKey, RECT{n ? left - gap / 2 : appsMin - gap / 2, hitTop, rightLeft - groupGap, hitBottom}});
     }
     icons_ = std::move(keep);
+    iconsRest_ = std::move(keepRest);
     appsLeft_ = appsLeft;
     pitch_ = pitch;
     plate_ = plate;

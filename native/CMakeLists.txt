@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(yunzhao_native VERSION 2.6.12 LANGUAGES CXX RC)
+project(yunzhao_native VERSION 2.6.13 LANGUAGES CXX RC)
 option(YUNZHAO_DEVELOPMENT "Run without changing installed-app registration or Windows startup" ON)
 
 set(CMAKE_CXX_STANDARD 20)

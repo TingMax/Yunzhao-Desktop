@@ -1,6 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="Yunzhao" Manufacturer="Yunzhao" Version="2.6.12.0"
+  <Package Name="Yunzhao" Manufacturer="Yunzhao" Version="2.6.13.0"
            UpgradeCode="8C4A1E2B-6D47-4F0A-9C55-2B7E91A4D310" Scope="perUser"
            Compressed="yes">
     <MajorUpgrade DowngradeErrorMessage="已经安装了更新的 Yunzhao。" />

@@ -69,13 +69,13 @@ IDWriteTextFormat* BarPainter::Format(float px, DWRITE_FONT_WEIGHT weight, const
     return f.get();
 }
 
-ID2D1Bitmap1* BarPainter::BitmapFor(ID2D1DeviceContext2* d2d, const SceneItem& item)
+ID2D1Bitmap1* BarPainter::BitmapFor(ID2D1DeviceContext2* d2d, const std::shared_ptr<const IconImage>& image, uint64_t id)
 {
-    if (!item.image || item.image->empty())
+    if (!image || image->empty())
         return nullptr;
-    auto& b = bitmaps_[item.imageId];
+    auto& b = bitmaps_[id];
     if (!b) {
-        const IconImage& img = *item.image;
+        const IconImage& img = *image;
         D2D1_BITMAP_PROPERTIES1 bp =
             D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
         d2d->CreateBitmap(D2D1::SizeU(UINT32(img.width), UINT32(img.height)), img.bgra.data(), UINT32(img.width * 4), &bp, b.put());
@@ -462,7 +462,10 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
 {
     const float s = scene.scale;
     const Motion& m = motion_[it.key];
-    const bool magnifying = mag_ > 1.001f;
+    // Only the app icons take part in the magnification wave: the tray, volume,
+    // status and logo entries keep their size and place, as on the system taskbar.
+    const bool isApp = !it.key.empty() && it.key.front() != L'#';
+    const bool magnifying = mag_ > 1.001f && isApp;
     // Base position: everything of the item slides with its plate (reordering,
     // drag and drop). Displayed position: the base one under the magnification.
     float dx = m.placed ? m.x - (it.plate.left + it.plate.right) / 2 : 0;
@@ -471,9 +474,12 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
     float size = icon.right - icon.left;
     float bx = (icon.left + icon.right) / 2, bottom = icon.bottom;
     float pw = std::max(1.f, plate.right - plate.left);
-    float grow = (MapX(bx + pw / 2) - MapX(bx - pw / 2)) / pw; // local magnification
-    float cx = MapX(bx);
+    float grow = magnifying ? (MapX(bx + pw / 2) - MapX(bx - pw / 2)) / pw : 1.f; // local magnification
+    float cx = isApp ? MapX(bx) : bx;
     float hover = motion::EaseOut(m.hover), lift = motion::EaseOut(m.lift);
+    // A still icon uses its resting bitmap; a reduced one (a neighbour of the
+    // wave shrinking back) uses it too, so nothing is a downscaled big bitmap.
+    const bool useRestBitmap = grow < 1.005f;
 
     // 底板仅响应悬停（关闭放大时）和拖动，按下仅缩放图标。
     // Its corners are concentric with the bar's.
@@ -509,8 +515,8 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
             brush->SetColor(ink);
             d2d->DrawText(it.glyph.c_str(), UINT32(it.glyph.size()), f, icon, brush);
         }
-    } else if (ID2D1Bitmap1* bmp = BitmapFor(d2d, it)) {
-        usedBitmaps_.push_back(it.imageId);
+    } else if (ID2D1Bitmap1* bmp = BitmapFor(d2d, useRestBitmap ? it.imageRest : it.image, useRestBitmap ? it.imageRestId : it.imageId)) {
+        usedBitmaps_.push_back(useRestBitmap ? it.imageRestId : it.imageId);
         shadow_->SetInput(0, bmp);
         shadow_->SetValue(D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, (1.6f + 1.6f * lift + 1.2f * m.hop) * s);
         shadow_->SetValue(D2D1_SHADOW_PROP_COLOR, D2D1::Vector4F(0, 0, 0, (0.38f + 0.12f * lift) * m.appear));

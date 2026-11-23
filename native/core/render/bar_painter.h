@@ -28,8 +28,12 @@ struct SceneItem {
     std::wstring key;
     D2D1_RECT_F icon{};        // icon square, window px
     D2D1_RECT_F plate{};       // hover/active plate around the icon, same centre
-    std::shared_ptr<const IconImage> image; // may be null while loading
+    std::shared_ptr<const IconImage> image; // may be null while loading; drawn at full magnification
     uint64_t imageId = 0;      // identity of `image` for the bitmap cache
+    // The icon at its resting size: drawn whenever the wave does not grow it, so
+    // a still icon is never a downscaled magnified bitmap (which looks soft).
+    std::shared_ptr<const IconImage> imageRest;
+    uint64_t imageRestId = 0;
     bool running = false;
     bool active = false;
     bool attention = false;
@@ -101,7 +105,7 @@ public:
 
 private:
     void DrawContent(ID2D1DeviceContext2* d2d, const BarScene& scene, Ink ink, const std::wstring& time, const std::wstring& date);
-    ID2D1Bitmap1* BitmapFor(ID2D1DeviceContext2* d2d, const SceneItem& item);
+    ID2D1Bitmap1* BitmapFor(ID2D1DeviceContext2* d2d, const std::shared_ptr<const IconImage>& image, uint64_t id);
     IDWriteTextFormat* Format(float px, DWRITE_FONT_WEIGHT weight, const wchar_t* family = nullptr); // nullptr: the interface face
     void DrawLogo(ID2D1DeviceContext2* d2d, D2D1_RECT_F r, float opacity);
     // The status icon in `r` (icon height): a ring open at the bottom with the
