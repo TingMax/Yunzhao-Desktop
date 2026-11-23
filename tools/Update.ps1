@@ -33,6 +33,23 @@ function Assert-TemporaryPath([string]$Path) {
          (Split-Path -Leaf $absolute) -ne "$name.previous-$suffix")) { throw '更新临时目录无效。' }
 }
 
+# Current installs may still use Atrium.Settings.exe from before the rename.
+function Get-CoreExe([string]$Root) {
+    foreach ($leaf in @('Yunzhao.exe', 'Atrium.exe')) {
+        $path = Join-Path $Root $leaf
+        if (Test-Path -LiteralPath $path) { return $path }
+    }
+    return $null
+}
+
+function Get-SettingsExe([string]$Root) {
+    foreach ($leaf in @('Settings\Yunzhao.Settings.exe', 'Settings\Atrium.Settings.exe')) {
+        $path = Join-Path $Root $leaf
+        if (Test-Path -LiteralPath $path) { return $path }
+    }
+    return $null
+}
+
 function Test-SameFile([string]$Left, [string]$Right) {
     if (!(Test-Path -LiteralPath $Left) -or !(Test-Path -LiteralPath $Right)) { return $false }
     $a = Get-Item -LiteralPath $Left
@@ -171,9 +188,14 @@ try {
         !$package.StartsWith($cache + '\', [StringComparison]::OrdinalIgnoreCase)) { throw '更新目录无效。' }
     Assert-TemporaryPath $incoming
     Assert-TemporaryPath $backup
-    foreach ($root in @($install, $package)) {
-        if (!(Test-Path -LiteralPath (Join-Path $root 'Yunzhao.exe')) -or
-            !(Test-Path -LiteralPath (Join-Path $root 'Settings\Yunzhao.Settings.exe'))) { throw '找不到完整的 Yunzhao 程序文件。' }
+    # The new package must be Yunzhao-named. The install being replaced may still
+    # be an older Atrium.Settings layout from before the rename.
+    if (!(Test-Path -LiteralPath (Join-Path $package 'Yunzhao.exe')) -or
+        !(Test-Path -LiteralPath (Join-Path $package 'Settings\Yunzhao.Settings.exe'))) {
+        throw '找不到完整的 Yunzhao 程序文件（更新包）。'
+    }
+    if (!(Get-CoreExe $install) -or !(Get-SettingsExe $install)) {
+        throw '找不到完整的 Yunzhao 程序文件（当前安装）。'
     }
     # Copy before stopping the app; disk/access failures leave the old app running.
     New-Item -ItemType Directory -Path $incoming | Out-Null
@@ -184,7 +206,7 @@ try {
     }
     $settingsProcess = Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue
     if ($settingsProcess -and !$settingsProcess.WaitForExit(30000)) { throw '设置中心尚未退出，更新未安装。' }
-    $quit = Start-Process -FilePath (Join-Path $install 'Yunzhao.exe') -ArgumentList '--exit' -WindowStyle Hidden -PassThru
+    $quit = Start-Process -FilePath (Get-CoreExe $install) -ArgumentList '--exit' -WindowStyle Hidden -PassThru
     try {
         if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Yunzhao 尚未正常退出，更新未安装。' }
     } finally { $quit.Dispose() }
@@ -243,10 +265,14 @@ try {
         }
     }
     if (!$confirmed -and (!$swapped -or $restored)) {
-        if ($coreStopped -and $StartCore -eq '1') {
-            Start-Process -FilePath (Join-Path $install 'Yunzhao.exe') -WorkingDirectory $workingDirectory -WindowStyle Hidden
+        $core = Get-CoreExe $install
+        $settings = Get-SettingsExe $install
+        if ($coreStopped -and $StartCore -eq '1' -and $core) {
+            Start-Process -FilePath $core -WorkingDirectory $workingDirectory -WindowStyle Hidden
         }
-        Start-Process -FilePath (Join-Path $install 'Settings\Yunzhao.Settings.exe') -ArgumentList '--page about' -WorkingDirectory $workingDirectory -WindowStyle Hidden
+        if ($settings) {
+            Start-Process -FilePath $settings -ArgumentList '--page about' -WorkingDirectory $workingDirectory -WindowStyle Hidden
+        }
     }
     if ($confirmed) {
         $work = $package

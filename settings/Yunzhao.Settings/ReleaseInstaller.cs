@@ -254,6 +254,16 @@ internal static class ReleaseInstaller
                 ? Path.Combine(unpacked, "Yunzhao")
                 : Path.Combine(unpacked, "Atrium"); // older portable zips used this folder name
         ValidatePackage(root, pending.Release.Version);
+        // Prefer the package helper on install: the copy next to this Settings build may
+        // still be an older Update.ps1 that rejects Atrium.Settings-named installs.
+        string helper = Path.Combine(root, "Update.ps1");
+        if (File.Exists(helper))
+        {
+            try { File.Copy(helper, Path.Combine(AppContext.BaseDirectory, "Update.ps1"), true); }
+            catch (IOException) { /* install folder may be read-only; Restart still prefers the package copy */ }
+            try { File.Copy(helper, Path.Combine(CacheDirectory, "Update.ps1"), true); }
+            catch (IOException) { }
+        }
         SaveJson(StatePath, new Prepared(pending.Release.Tag, pending.Release.Version.ToString(), root));
         File.Delete(DownloadPath);
         File.Delete(zip);
@@ -294,10 +304,14 @@ internal static class ReleaseInstaller
     internal static void Restart(Prepared ready, bool startCore)
     {
         ValidatePackage(ready.Directory, Version.Parse(ready.Version));
-        // Copy the helper out of the install directory before replacing that directory.
+        // Prefer Update.ps1 from the downloaded package so a rename-era install that still
+        // has Atrium.Settings.exe can be replaced by a helper that accepts that layout.
         string script = Path.Combine(CacheDirectory, "Update.ps1");
+        string fromPackage = Path.Combine(ready.Directory, "Update.ps1");
+        string fromApp = Path.Combine(AppContext.BaseDirectory, "Update.ps1");
+        string source = File.Exists(fromPackage) ? fromPackage : fromApp;
         // Windows PowerShell 5.1 needs a BOM to read the helper's Chinese messages.
-        File.WriteAllText(script, File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Update.ps1")), new System.Text.UTF8Encoding(true));
+        File.WriteAllText(script, File.ReadAllText(source), new System.Text.UTF8Encoding(true));
         var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
             "WindowsPowerShell", "v1.0", "powershell.exe")) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = CacheDirectory };
         foreach (string arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
