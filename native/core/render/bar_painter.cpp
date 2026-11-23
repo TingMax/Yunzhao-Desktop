@@ -15,7 +15,7 @@
 
 #pragma comment(lib, "dxguid.lib") // CLSID_D2D1Shadow
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -851,4 +851,4 @@ void BarPainter::DrawLogo(ID2D1DeviceContext2* d2d, D2D1_RECT_F r, float opacity
     }
 }
 
-} // namespace atrium
+} // namespace yunzhao

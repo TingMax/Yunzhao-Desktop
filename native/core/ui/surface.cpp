@@ -25,7 +25,7 @@
 #pragma comment(lib, "dcomp.lib")
 #pragma comment(lib, "dxguid.lib") // CLSID_D2D1GaussianBlur
 
-namespace atrium {
+namespace yunzhao {
 
 float PopupScale(RECT bar)
 {
@@ -51,7 +51,7 @@ RECT PopupRect(RECT bar, D2D1_SIZE_F sizeDip, PopupAlign align)
 
 namespace {
 
-constexpr wchar_t kClass[] = L"AtriumSurface";
+constexpr wchar_t kClass[] = L"YunzhaoSurface";
 constexpr UINT_PTR kHideTimer = 0x5A01, kGlassWaitTimer = 0x5A03;
 constexpr UINT kHideMs = 140;     // the closing pop (PopVisual) lasts 130 ms
 constexpr double kGlassWaitMs = 300; // then a plain panel stands in for missing glass
@@ -1430,4 +1430,4 @@ void Surface::Present()
         FramePump::Get().Want(hwnd_);
 }
 
-} // namespace atrium
+} // namespace yunzhao

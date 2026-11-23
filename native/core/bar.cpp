@@ -26,7 +26,7 @@
 #include <cwctype>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -40,8 +40,8 @@ constexpr UINT WM_BAR_LAYOUT = WM_APP + 0x71; // defer DPI relayout until SetWin
 using WaitClockFn = DWORD(WINAPI*)(UINT, const HANDLE*, DWORD);
 const WaitClockFn g_waitClock = reinterpret_cast<WaitClockFn>(GetProcAddress(LoadLibraryW(L"dcomp.dll"), "DCompositionWaitForCompositorClock"));
 
-constexpr wchar_t kVisualClass[] = L"AtriumBarVisual";
-constexpr wchar_t kInputClass[] = L"AtriumBarInput";
+constexpr wchar_t kVisualClass[] = L"YunzhaoBarVisual";
+constexpr wchar_t kInputClass[] = L"YunzhaoBarInput";
 constexpr wchar_t kClockKey[] = L"#clock";
 constexpr wchar_t kStartKey[] = L"#start";
 constexpr wchar_t kNotifyKey[] = L"#notify";
@@ -74,7 +74,7 @@ std::map<Bar*, CaptureWindows> g_capturePolicies; // UI-thread only
 
 void ApplyCapturePolicies()
 {
-    // One capture fallback must exclude every Atrium window to prevent feedback.
+    // One capture fallback must exclude every Yunzhao window to prevent feedback.
     const bool visible = std::all_of(g_capturePolicies.begin(), g_capturePolicies.end(), [](const auto& entry) { return entry.second.visible; });
     for (const auto& [bar, windows] : g_capturePolicies) {
         SetCaptureExclusion(windows.visual, visible);
@@ -320,7 +320,7 @@ Bar::Bar(HINSTANCE instance, bool debugCapturable, std::wstring display) : debug
     captureAck_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     captureVisible_ = debugCapturable_;
     if (debugCapturable_)
-        Log(L"bar: --debug-capturable, Atrium shows in screenshots (with Windows.Graphics.Capture, the backdrop freezes after the first frame)");
+        Log(L"bar: --debug-capturable, Yunzhao shows in screenshots (with Windows.Graphics.Capture, the backdrop freezes after the first frame)");
     SetCaptureExclusion(visual_, captureVisible_);
     SetCaptureExclusion(input_, captureVisible_);
     g_capturePolicies[this] = {visual_, input_, debugCapturable_};
@@ -426,7 +426,7 @@ LRESULT CALLBACK Bar::VisualProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     if (m == WM_BAR_CAPTURE && self) {
-        // From the render thread: whether Atrium's windows may show in screenshots.
+        // From the render thread: whether Yunzhao's windows may show in screenshots.
         bool visible = w != 0;
         if (l == 1)
             SetDdaExclusionEnabled(true);
@@ -1786,7 +1786,7 @@ void Bar::ShowOwnWindowsToCapture(bool visible)
     if (WaitForSingleObject(captureAck_, 1000) != WAIT_OBJECT_0)
         Log(L"render: the UI thread did not confirm the capture exclusion in time");
     captureVisible_ = visible;
-    Log(L"render: Atrium %s screenshots", visible ? L"shows in" : L"is kept out of");
+    Log(L"render: Yunzhao %s screenshots", visible ? L"shows in" : L"is kept out of");
 }
 
 void Bar::SetOwnWindowsDdaExclusion(bool exclude)
@@ -1795,7 +1795,7 @@ void Bar::SetOwnWindowsDdaExclusion(bool exclude)
     PostMessageW(visual_, WM_BAR_CAPTURE, (debugCapturable_ || captureVisible_) ? 1 : 0, exclude ? 1 : 2);
     if (WaitForSingleObject(captureAck_, 1000) != WAIT_OBJECT_0)
         Log(L"render: the UI thread did not confirm the capture exclusion in time");
-    Log(L"render: Desktop Duplication %s Atrium", exclude ? L"leaves out" : L"includes");
+    Log(L"render: Desktop Duplication %s Yunzhao", exclude ? L"leaves out" : L"includes");
 }
 
 void Bar::RenderThread()
@@ -1842,7 +1842,7 @@ bool Bar::RenderSession()
     Gpu gpu = Gpu::ForMonitor(snap.hmonitor);
     const HMONITOR captureMonitor = snap.hmonitor;
     const unsigned captureGeneration = snap.displayGeneration;
-    // A wake used to fall back to a capture that hides every Atrium window.
+    // A wake used to fall back to a capture that hides every Yunzhao window.
     // That is the empty desktop. The windows go back on screen before any
     // retry, and they stay there if duplication is still down.
     duplicationFailed_ = false;
@@ -1961,7 +1961,7 @@ bool Bar::RenderSession()
     // for a second after a move the newest frame is kept.
     winrt::com_ptr<ID3D11Texture2D> lastFrame;
     double panelMovedMs = -1e9;
-    // A popup that opens needs it too (Atrium's own windows bring no frame):
+    // A popup that opens needs it too (Yunzhao's own windows bring no frame):
     // otherwise it is kept at most every 100 ms.
     double keptMs = -1e9;
     auto keepFrame = [&](ID3D11Texture2D* frame) {
@@ -2245,7 +2245,7 @@ bool Bar::RenderSession()
 
     HANDLE handles[] = {quit_, wake_, frame_};
     bool panelsMoving = false, barOwed = false;
-    // A clean copy of the monitor from before Atrium's windows were let into
+    // A clean copy of the monitor from before Yunzhao's windows were let into
     // Desktop Duplication. Later frames have those windows pasted back out, so
     // the glass does not sample itself and a remote viewer still sees them.
     winrt::com_ptr<ID3D11Texture2D> cleanTex, patchedTex;
@@ -2275,7 +2275,7 @@ bool Bar::RenderSession()
         return SUCCEEDED(gpu.device->CreateTexture2D(&d, nullptr, dest.put()));
     };
     for (;;) {
-        // Windows.Graphics.Capture hides Atrium from screen capture. After the
+        // Windows.Graphics.Capture hides Yunzhao from screen capture. After the
         // displays are back, return to Desktop Duplication so a remote viewer
         // sees the bar and the widgets again.
         if (capture && !capture->KeepsOwnWindowsOut() && GetTickCount64() - lastDdaProbe >= 2000) {
@@ -2302,7 +2302,7 @@ bool Bar::RenderSession()
             }
             if (back) {
                 duplicationFailed_ = false;
-                Log(L"render: desktop duplication is back; Atrium can show in screenshots again");
+                Log(L"render: desktop duplication is back; Yunzhao can show in screenshots again");
                 return true;
             }
             if (why != lastProbeWhy || GetTickCount64() - lastProbeLog >= 60000) {
@@ -2317,7 +2317,7 @@ bool Bar::RenderSession()
                 Sleep(10);
             SetOwnWindowsDdaExclusion(false);
             handedOff = true;
-            Log(L"render: Atrium stays on screen for capture; the glass uses a clean backdrop");
+            Log(L"render: Yunzhao stays on screen for capture; the glass uses a clean backdrop");
         }
         // Animations, and glass owed a frame (not Ready last time), run on the compositor's
         // clock (D45): one wake-up per composed frame, at the display's rate. A timeout would
@@ -2670,4 +2670,4 @@ bool Bar::RenderSession()
     }
 }
 
-} // namespace atrium
+} // namespace yunzhao

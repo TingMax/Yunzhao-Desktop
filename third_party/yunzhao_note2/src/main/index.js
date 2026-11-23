@@ -44,7 +44,7 @@ import { createShutdownCoordinator } from './application/shutdown-coordinator.js
 import { createMainWindowHost } from './windows/main-window-host.js'
 import { installRendererRecovery } from './windows/renderer-recovery.js'
 import { beginPerformanceOperation } from './logging/operation-performance.js'
-import { atriumInitialBounds, atriumHosted, atriumPeeking, atriumWindowStaysVisible, clampAtriumBounds, noteAtriumBounds, publishAtriumFrame, readAtriumLaunch, startAtriumHost } from './atrium-host.js'
+import { yunzhaoInitialBounds, yunzhaoHosted, yunzhaoPeeking, yunzhaoWindowStaysVisible, clampYunzhaoBounds, noteYunzhaoBounds, publishYunzhaoFrame, readYunzhaoLaunch, startYunzhaoHost } from './yunzhao-host.js'
 import { startCloudSync } from './cloud-sync.js'
 import { createEditingDraftGuard } from './windows/editing-draft-guard.js'
 /**
@@ -247,7 +247,7 @@ if (accountDataPath !== userDataPath) {
 app.setName(APP_NAME)
 app.setPath('userData', accountDataPath)
 if (process.platform === 'win32') {
-  app.setAppUserModelId(atriumHosted() ? 'Atrium.Desktop' : WINDOWS_APP_USER_MODEL_ID)
+  app.setAppUserModelId(yunzhaoHosted() ? 'Yunzhao.Desktop' : WINDOWS_APP_USER_MODEL_ID)
   app.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID)
   const protocolArgs = process.defaultApp && process.argv[1] ? [resolve(process.argv[1])] : []
   // 完整应用集成测试会启动真实主进程，但不应修改开发机的协议关联。
@@ -301,7 +301,7 @@ const viewVisibilityShortcutCaptureSenders = new WeakSet()
 const captureWindowIntegration = createCaptureWindowIntegration({
   getWindow: getMainWindow,
   getWindows: getApplicationWindows,
-  shouldUncover: () => atriumWindowStaysVisible(),
+  shouldUncover: () => yunzhaoWindowStaysVisible(),
   isDockHidden: () => dockRuntime.hidden,
   shouldHide: () => settingsRuntime.values.interaction.hideMainViewDuringScreenshot,
   isQuitting: () => shutdownCoordinator.isQuitting(),
@@ -1117,7 +1117,7 @@ function applyResetSettingsGeometry({ reset }) {
 function applyResetShortcutBindings() {
   if (!viewVisibilityShortcutService || !captureShortcutService)
     return { status: 'deferred', error: '快捷键服务尚未就绪', retryable: true }
-  settingsRuntime.values.shortcuts.enabled = false
+  settingsRuntime.setShortcutsEnabled(false)
   viewVisibilityShortcutService.initialize(settingsRuntime.values.shortcuts.viewVisibility, {
     enabled: false
   })
@@ -1224,30 +1224,30 @@ function createWindow({ preferredDisplay = null } = {}) {
   const creationStartedAt = Date.now()
   // 日历视图首次创建优先沿用列表所在显示器；已有几何信息时仍以持久化位置为准。
   const resolved = resolveActiveViewWindowBounds({ preferredDisplay })
-  const atriumBounds = atriumInitialBounds()
-  const normalBounds = atriumBounds || resolved.bounds
-  const requestedBounds = atriumBounds || resolved.requestedBounds
-  const targetDisplay = atriumBounds ? screen.getDisplayMatching(atriumBounds) : resolved.targetDisplay
-  const saved = atriumBounds ? false : resolved.saved
+  const yunzhaoBounds = yunzhaoInitialBounds()
+  const normalBounds = yunzhaoBounds || resolved.bounds
+  const requestedBounds = yunzhaoBounds || resolved.requestedBounds
+  const targetDisplay = yunzhaoBounds ? screen.getDisplayMatching(yunzhaoBounds) : resolved.targetDisplay
+  const saved = yunzhaoBounds ? false : resolved.saved
   const bounds = normalBounds
 
   // 创建主窗口实例（透明背景 + CSS 圆角）
   mainWindowHost.create({
     ...bounds,
-    minWidth: atriumBounds ? 1 : MAIN_WINDOW_MIN_SIZE,
-    minHeight: atriumBounds ? 1 : MAIN_WINDOW_MIN_SIZE,
-    shadow: !atriumBounds,
+    minWidth: yunzhaoBounds ? 1 : MAIN_WINDOW_MIN_SIZE,
+    minHeight: yunzhaoBounds ? 1 : MAIN_WINDOW_MIN_SIZE,
+    shadow: !yunzhaoBounds,
     show: false,
     frame: false,
-    transparent: !atriumBounds,
+    transparent: !yunzhaoBounds,
     roundedCorners: true,
     // Windows 的默认 thickFrame 会给无边框窗口保留不可见 resize inset。
     // 项目已有自定义缩放手柄，不需要让该 inset 参与高 DPI 边界换算。
     thickFrame: false,
-    backgroundColor: atriumBounds ? '#F6F6F8' : '#00000000',
+    backgroundColor: yunzhaoBounds ? '#F6F6F8' : '#00000000',
     autoHideMenuBar: true,
     skipTaskbar: true,
-    icon: atriumBounds ? join(APP_ROOT, '..', '..', 'assets', 'atrium.ico') : undefined,
+    icon: yunzhaoBounds ? join(APP_ROOT, '..', '..', 'assets', 'yunzhao.ico') : undefined,
     paintWhenInitiallyHidden: true,
     webPreferences: {
       preload: join(PRELOAD_ROOT, 'index.js'),
@@ -1336,11 +1336,11 @@ function createWindow({ preferredDisplay = null } = {}) {
   setWindowLogContext(getMainWindow(), { role: getActiveWindowProfile().logRole })
   geometryPersistence.setStableBounds({ ...normalBounds })
   dockRuntime.attachWindow(getMainWindow())
-  if (atriumBounds) dockRuntime.beginDockInteractionSuspension('atrium')
+  if (yunzhaoBounds) dockRuntime.beginDockInteractionSuspension('yunzhao')
 
   // 日历页和课表都按一套 DIP 排版：窗口矩形等于组件矩形，页面不再额外放大。
   getMainWindow().webContents.setZoomFactor(1.0)
-  if (atriumBounds) {
+  if (yunzhaoBounds) {
     getMainWindow().setMinimumSize(1, 1)
     getMainWindow().setSkipTaskbar(true)
   }
@@ -1380,7 +1380,7 @@ function createWindow({ preferredDisplay = null } = {}) {
     // 保留程序化 resize，供恢复默认尺寸等受控窗口操作使用。
   }
   // ---- 初始化系统模糊 ----
-  if (blurRuntime.caps.supported && !atriumHosted()) {
+  if (blurRuntime.caps.supported && !yunzhaoHosted()) {
     const result = initializeBlurRuntime()
     if (result.success) {
       console.log('[blur] 系统模糊已初始化, 策略:', result.strategy)
@@ -1413,14 +1413,14 @@ function createWindow({ preferredDisplay = null } = {}) {
 
   // 监听窗口大小变化和移动事件，触发防抖保存
   getMainWindow().on('resize', () => {
-    if (atriumHosted()) return
+    if (yunzhaoHosted()) return
     if (dockRuntime.isMoving()) return
     if (presentationRuntime.handleResize(getMainWindow().getBounds())) return
     debouncedSaveGeometry()
     syncVisibleDockSide({ source: 'window-resize' })
   })
   getMainWindow().on('move', () => {
-    if (atriumHosted()) return
+    if (yunzhaoHosted()) return
     if (dockRuntime.isMoving()) return
     if (windowDragController.isActive()) return
     debouncedSaveGeometry()
@@ -1428,7 +1428,7 @@ function createWindow({ preferredDisplay = null } = {}) {
 
   // 【贴边隐藏 - 边缘检测】窗口移动时检测是否靠近屏幕左/右边缘
   getMainWindow().on('move', () => {
-    if (atriumHosted()) return
+    if (yunzhaoHosted()) return
     if (dockRuntime.isMoving()) return
     if (windowDragController.isActive()) return
     syncVisibleDockSide({ source: 'window-move', snap: true })
@@ -1438,7 +1438,7 @@ function createWindow({ preferredDisplay = null } = {}) {
   // 记录了 dockSide，但不能持续抢夺系统拖动。等用户松手后再做一次强制收口，
   // 即使方向未变化，也把窗口吸回精确边缘。
   getMainWindow().on('moved', () => {
-    if (atriumHosted()) return
+    if (yunzhaoHosted()) return
     if (dockRuntime.isMoving()) return
     if (windowDragController.isActive()) return
     syncVisibleDockSide({ source: 'window-moved', snap: true, forceSnap: true })
@@ -1454,7 +1454,7 @@ function createWindow({ preferredDisplay = null } = {}) {
 
   // 窗口显示时恢复模糊（从托盘恢复）
   getMainWindow().on('show', () => {
-    if (atriumHosted()) return
+    if (yunzhaoHosted()) return
     scheduleVisibleBlurRestore(getMainWindow(), 'main-window-show')
   })
 
@@ -1505,7 +1505,7 @@ function createWindow({ preferredDisplay = null } = {}) {
 
 /** 窗口关闭/隐藏时统一执行：隐藏窗口 + 清理贴边 + 禁用系统模糊 */
 function hideToTray() {
-  if (atriumHosted()) return
+  if (yunzhaoHosted()) return
   const visualWindow = getActiveVisualWindow()
   if (!visualWindow || visualWindow.isDestroyed()) return
   mainViewNavigation.noteWindowHiddenByUser(visualWindow)
@@ -1886,8 +1886,8 @@ const applicationBootstrap = createApplicationBootstrap({
       console.warn('[storage] 恢复未完成的存储操作失败:', error)
     }
     checkStartup()
-    const atriumLaunch = readAtriumLaunch()
-    mainViewNavigation.initializeActiveView(atriumLaunch?.view || readApplicationSettings().activeView)
+    const yunzhaoLaunch = readYunzhaoLaunch()
+    mainViewNavigation.initializeActiveView(yunzhaoLaunch?.view || readApplicationSettings().activeView)
     ensureViewSettingsInitialized(mainViewNavigation.mode)
     ensureApplicationWindowSettingsInitialized(mainViewNavigation.mode)
     settingsRuntime.resetForView(mainViewNavigation.mode)
@@ -1898,7 +1898,7 @@ const applicationBootstrap = createApplicationBootstrap({
       logger
     })
     // Temporarily keep global shortcuts off: they steal keys from other apps with no prompt.
-    settingsRuntime.values.shortcuts.enabled = false
+    settingsRuntime.setShortcutsEnabled(false)
     viewVisibilityShortcutService.initialize(settingsRuntime.values.shortcuts.viewVisibility, {
       enabled: false
     })
@@ -2191,16 +2191,16 @@ const applicationBootstrap = createApplicationBootstrap({
       endTitlebarWindowDrag(diagnostics)
     )
     mainWindowIpc.handle('window-resize:end', () => {
-      if (atriumHosted() && !atriumPeeking()) publishAtriumFrame(getMainWindow())
+      if (yunzhaoHosted() && !yunzhaoPeeking()) publishYunzhaoFrame(getMainWindow())
       return finishCompactWindowResize()
     })
     // 【缩放手柄 - 设置边界】根据渲染进程传入的 bounds 调整窗口大小/位置
     ipcMain.on('window-set-bounds', (event, bounds) => {
-      if (atriumPeeking()) return
+      if (yunzhaoPeeking()) return
       const win = BrowserWindow.fromWebContents(event.sender)
       const values = bounds && [bounds.x, bounds.y, bounds.width, bounds.height].map(Number)
       const compact = presentationRuntime.isCompact()
-      const hosted = atriumHosted()
+      const hosted = yunzhaoHosted()
       const minWidth = hosted ? 240 : compact ? COMPACT_WINDOW_LIMITS.minWidth : MAIN_WINDOW_MIN_SIZE
       const minHeight = hosted ? 180 : compact ? COMPACT_WINDOW_LIMITS.minHeight : MAIN_WINDOW_MIN_SIZE
       const maxWidth = compact ? COMPACT_WINDOW_LIMITS.maxWidth : 16_384
@@ -2224,9 +2224,9 @@ const applicationBootstrap = createApplicationBootstrap({
           width: Math.round(values[2]),
           height: Math.round(values[3])
         }
-        const next = hosted ? clampAtriumBounds(raw) : raw
+        const next = hosted ? clampYunzhaoBounds(raw) : raw
         win.setBounds(next)
-        if (hosted) noteAtriumBounds(next)
+        if (hosted) noteYunzhaoBounds(next)
         if (compact) presentationRuntime.handleResize(win.getBounds())
       }
     })
@@ -2448,11 +2448,11 @@ const applicationBootstrap = createApplicationBootstrap({
     app.once('will-quit', disposeWallpaperIpc)
 
     createWindow()
-    startAtriumHost({
+    startYunzhaoHost({
       getWindow: getMainWindow,
       getMode: () => mainViewNavigation.mode,
       switchView: (view) => switchMainView(view),
-      suspendDock: () => dockRuntime.beginDockInteractionSuspension('atrium'),
+      suspendDock: () => dockRuntime.beginDockInteractionSuspension('yunzhao'),
       getSettings: () => settingsRuntime.values,
       applyUiSetting: (id, value) => Promise.resolve(persistSettingValue(id, value))
     })
@@ -2667,7 +2667,7 @@ const applicationBootstrap = createApplicationBootstrap({
           .catch((error) => screenshotService?.report(error))
       }
     })
-    settingsRuntime.values.shortcuts.enabled = false
+    settingsRuntime.setShortcutsEnabled(false)
     captureShortcutService.initialize({
       ...settingsRuntime.values.shortcuts,
       enabled: false,
@@ -2694,7 +2694,7 @@ const applicationBootstrap = createApplicationBootstrap({
     mainWindowIpc.handle('scheduler:health', featureRuntime.schedulerHealth)
 
     // 嵌入桌面时日历是组件，不再单独占一个托盘图标。
-    if (!atriumHosted()) mainTrayController.create()
+    if (!yunzhaoHosted()) mainTrayController.create()
     logger.info('startup', '系统托盘已创建，启动初始化完成')
   },
   onFailure: (error) => {

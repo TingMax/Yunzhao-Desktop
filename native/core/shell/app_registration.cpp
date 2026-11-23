@@ -13,15 +13,18 @@
 
 #include <winrt/base.h>
 
-namespace atrium {
+namespace yunzhao {
 
 bool IsRegisteredApplication(const std::wstring& directory)
 {
     wchar_t value[32768]{};
-    DWORD bytes = sizeof(value);
-    return RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Atrium",
-                        L"InstallLocation", RRF_RT_REG_SZ, nullptr, value, &bytes) == ERROR_SUCCESS &&
-           _wcsicmp(value, directory.c_str()) == 0;
+    auto matches = [&](const wchar_t* key) {
+        DWORD bytes = sizeof(value);
+        return RegGetValueW(HKEY_CURRENT_USER, key, L"InstallLocation", RRF_RT_REG_SZ, nullptr, value, &bytes) == ERROR_SUCCESS &&
+               _wcsicmp(value, directory.c_str()) == 0;
+    };
+    return matches(L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Yunzhao") ||
+           matches(L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Atrium");
 }
 
 void RegisterApplication(const std::wstring& directory)
@@ -30,10 +33,12 @@ void RegisterApplication(const std::wstring& directory)
     const std::wstring exe = directory + L"\\Yunzhao.exe";
     const std::wstring uninstall = directory + L"\\Uninstall.ps1";
     if (GetFileAttributesW(uninstall.c_str()) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW((directory + L"\\Settings\\Yunzhao.Settings.exe").c_str()) == INVALID_FILE_ATTRIBUTES &&
         GetFileAttributesW((directory + L"\\Settings\\Atrium.Settings.exe").c_str()) == INVALID_FILE_ATTRIBUTES)
         return; // a native-only development build is not an installed app
 
-    constexpr auto registration = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Atrium";
+    constexpr auto registration = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Yunzhao";
+    constexpr auto legacyRegistration = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Atrium";
     const std::pair<const wchar_t*, std::wstring> fields[] = {
         {L"DisplayName", L"Yunzhao"}, {L"Publisher", L"Yunzhao"},
         {L"InstallLocation", directory}, {L"DisplayIcon", L"\"" + exe + L"\",0"},
@@ -60,6 +65,14 @@ void RegisterApplication(const std::wstring& directory)
         RegCloseKey(key);
         key = nullptr;
     }
+    if (previousDirectory.empty()) {
+        HKEY legacy = nullptr;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, legacyRegistration, 0, KEY_QUERY_VALUE, &legacy) == ERROR_SUCCESS) {
+            previousDirectory = read(legacy, L"InstallLocation");
+            RegCloseKey(legacy);
+            changed = true;
+        }
+    }
     if (changed) {
         if (RegCreateKeyExW(HKEY_CURRENT_USER, registration, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
             bool ok = true;
@@ -71,9 +84,10 @@ void RegisterApplication(const std::wstring& directory)
             for (const wchar_t* name : {L"NoModify", L"NoRepair"})
                 ok &= RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&one), sizeof(one)) == ERROR_SUCCESS;
             RegCloseKey(key);
-            Log(ok ? L"app: registered Atrium in Installed apps (%s)" : L"app: could not write all application information (%s)", directory.c_str());
+            RegDeleteTreeW(HKEY_CURRENT_USER, legacyRegistration);
+            Log(ok ? L"app: registered Yunzhao in Installed apps (%s)" : L"app: could not write all application information (%s)", directory.c_str());
         } else {
-            Log(L"app: could not register Atrium in Installed apps");
+            Log(L"app: could not register Yunzhao in Installed apps");
         }
     }
 
@@ -90,7 +104,7 @@ void RegisterApplication(const std::wstring& directory)
         const auto slash = path.find_last_of(L"\\/");
         return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
     };
-    // An older copy left its own start-menu shortcut, named Atrium. A shortcut that
+    // Older copies left start-menu shortcuts named Atrium / Atrium.Core. A shortcut that
     // points at another program is left alone.
     PWSTR programs = nullptr;
     HRESULT hr = SHGetKnownFolderPath(FOLDERID_Programs, KF_FLAG_DEFAULT, nullptr, &programs);
@@ -151,10 +165,11 @@ void RegisterApplication(const std::wstring& directory)
 
     if (!retired.empty() && GetFileAttributesW((retired + L"\\Uninstall.ps1").c_str()) != INVALID_FILE_ATTRIBUTES &&
         (GetFileAttributesW((retired + L"\\Yunzhao.exe").c_str()) != INVALID_FILE_ATTRIBUTES ||
-         GetFileAttributesW((retired + L"\\Atrium.exe").c_str()) != INVALID_FILE_ATTRIBUTES)) {
+         GetFileAttributesW((retired + L"\\Yunzhao.exe").c_str()) != INVALID_FILE_ATTRIBUTES)) {
         EnumWindows([](HWND window, LPARAM param) -> BOOL {
             wchar_t cls[64]{};
-            if (!GetClassNameW(window, cls, 64) || wcscmp(cls, L"AtriumCoreHost") != 0)
+            if (!GetClassNameW(window, cls, 64) ||
+                (wcscmp(cls, L"YunzhaoCoreHost") != 0 && wcscmp(cls, L"AtriumCoreHost") != 0))
                 return TRUE;
             DWORD pid = 0;
             GetWindowThreadProcessId(window, &pid);
@@ -205,10 +220,10 @@ void RegisterApplication(const std::wstring& directory)
         for (const std::wstring& path : pending)
             removeTree(path);
         if (RemoveDirectoryW(retired.c_str()))
-            Log(L"app: removed the previous Atrium copy at %s", retired.c_str());
+            Log(L"app: removed the previous Yunzhao copy at %s", retired.c_str());
         else
-            Log(L"app: the previous Atrium copy is still at %s", retired.c_str());
+            Log(L"app: the previous Yunzhao copy is still at %s", retired.c_str());
     }
 }
 
-} // namespace atrium
+} // namespace yunzhao

@@ -5,7 +5,7 @@
            Compressed="yes">
     <MajorUpgrade DowngradeErrorMessage="已经安装了更新的 Yunzhao。" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
-    <Icon Id="AppIcon" SourceFile="..\assets\atrium.ico" />
+    <Icon Id="AppIcon" SourceFile="..\assets\yunzhao.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
@@ -34,7 +34,7 @@
 
   <Fragment>
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
-      <Files Include="..\dist\Atrium\**" />
+      <Files Include="..\dist\Yunzhao\**" />
     </ComponentGroup>
     <Component Id="StartMenu" Directory="MenuFolder" Guid="B1C85E40-7A2D-4E18-9F63-0D4C6A8B2E71">
       <Shortcut Id="Start" Name="Yunzhao" Target="[INSTALLFOLDER]Yunzhao.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" />

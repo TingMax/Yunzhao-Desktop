@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 // A pinned entry as stored in settings.json ("pins", docs/SETTINGS-PROTOCOL.md).
 struct PinnedApp {
@@ -51,10 +51,10 @@ struct TaskItem {
 // thread. COM must be initialised on the calling thread.
 // thumbnail: the picture itself (an image file) rather than its icon.
 bool LoadShellImage(const std::wstring& parsingName, int sizePx, IconImage& out, bool thumbnail = false);
-// Atrium's own programs (Atrium.exe, Atrium.Settings.exe): their icon read from the file
+// Yunzhao's own programs (Yunzhao.exe, Yunzhao.Settings.exe): their icon read from the file
 // itself, not from the shell's icon cache or Explorer's tray snapshot, which keep the icon an
 // earlier build had at the same path. False for any other program.
-bool LoadAtriumIcon(const std::wstring& exePath, int sizePx, IconImage& out);
+bool LoadYunzhaoIcon(const std::wstring& exePath, int sizePx, IconImage& out);
 // Resolves a shortcut and a versioned client's app/ launcher without starting it.
 std::wstring AppExecutable(const std::wstring& path);
 
@@ -124,4 +124,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

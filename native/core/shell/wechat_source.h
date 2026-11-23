@@ -1,4 +1,4 @@
-// WeChat (Weixin) messages as Atrium cards. WeChat does not publish Windows
+// WeChat (Weixin) messages as Yunzhao cards. WeChat does not publish Windows
 // notifications, but its main window's chat list is readable through UI
 // Automation, read only: each row (mmui::ChatSessionCell) names the chat, the
 // unread count "[N条]", the newest message's summary and whether the chat is
@@ -17,7 +17,7 @@
 #include <atomic>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 
 class WeChatSource {
 public:
@@ -37,4 +37,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

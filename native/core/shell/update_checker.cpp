@@ -20,7 +20,7 @@
 #include <vector>
 #include <cwctype>
 
-namespace atrium {
+namespace yunzhao {
 namespace {
 namespace json = winrt::Windows::Data::Json;
 constexpr int64_t kIntervalSeconds = 12 * 60 * 60;
@@ -125,7 +125,7 @@ bool NetworkUp()
 std::wstring SettingsExe()
 {
     std::wstring dir = ExeDirectory();
-    for (const wchar_t* name : {L"\\Settings\\Atrium.Settings.exe", L"\\Atrium.Settings.exe"}) {
+    for (const wchar_t* name : {L"\\Settings\\Yunzhao.Settings.exe", L"\\Yunzhao.Settings.exe"}) {
         std::wstring path = dir + name;
         if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return path;
     }
@@ -251,4 +251,4 @@ void UpdateChecker::NotifyPrepared(Notifications& notifications)
     // The download stays in the background. No card, no error, no about-page prompt.
     notifications.ClearPreparedUpdate();
 }
-} // namespace atrium
+} // namespace yunzhao

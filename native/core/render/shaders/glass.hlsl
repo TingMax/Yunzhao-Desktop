@@ -1,4 +1,4 @@
-// Atrium glass material. One signed-distance shape; Liquid and Frosted are
+// Yunzhao glass material. One signed-distance shape; Liquid and Frosted are
 // parameter presets (docs/DESIGN.md, material presets).
 
 cbuffer GlassParams : register(b0)

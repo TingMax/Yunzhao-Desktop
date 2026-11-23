@@ -97,7 +97,7 @@ async function onPointerDown(event, direction) {
     moved: false
   }
   resizeSession = session
-  void window.api.atriumSizing?.(true)
+  void window.api.yunzhaoSizing?.(true)
   setPointerCapture(session.target, session.pointerId)
   window.addEventListener('pointermove', onPointerMove, true)
   window.addEventListener('pointerup', finishResize, true)
@@ -164,7 +164,7 @@ function finishResize(event) {
   resizeGeneration += 1
   removeResizeListeners()
   releasePointerCapture(session.target, session.pointerId)
-  void window.api.atriumSizing?.(false)
+  void window.api.yunzhaoSizing?.(false)
   if (session.startBounds) void window.api.finishWindowResize()
 }
 

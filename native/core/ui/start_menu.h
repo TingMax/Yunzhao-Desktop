@@ -1,4 +1,4 @@
-// Atrium's own start menu (opened from the logo on the bar, or by the Windows
+// Yunzhao's own start menu (opened from the logo on the bar, or by the Windows
 // key: winKeyStart), a launcher of separate pieces of the bar's glass: a panel
 // with the search field and the tiles, and below it a capsule shaped like the
 // bar with the account, network, volume, battery, the system tray and power.
@@ -32,7 +32,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class StartMenu {
 public:
@@ -260,7 +260,7 @@ private:
     // Account shown on the shelf.
     std::wstring userName_;
     IconImage avatar_;
-    bool private_ = false; // ATRIUM_PRIVACY: no account or network names
+    bool private_ = false; // YUNZHAO_PRIVACY: no account or network names
 };
 
-} // namespace atrium
+} // namespace yunzhao

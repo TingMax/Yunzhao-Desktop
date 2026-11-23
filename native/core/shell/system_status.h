@@ -8,7 +8,7 @@
 #include <string>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 
 struct SystemStatus {
     bool battery = false;   // a system battery is present
@@ -58,4 +58,4 @@ void WatchVolume(HWND hwnd, UINT msg);
 enum class PowerAction { Sleep, Restart, Shutdown };
 bool RunPowerAction(PowerAction action);
 
-} // namespace atrium
+} // namespace yunzhao

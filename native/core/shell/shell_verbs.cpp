@@ -13,7 +13,7 @@
 
 #include <winrt/base.h>
 
-namespace atrium {
+namespace yunzhao {
 
 bool ShowShellProperties(HWND owner, const std::wstring& path)
 {
@@ -108,4 +108,4 @@ std::vector<ShellRecent> ShellDocumentList(const std::wstring& appId, int kind, 
     return out;
 }
 
-} // namespace atrium
+} // namespace yunzhao

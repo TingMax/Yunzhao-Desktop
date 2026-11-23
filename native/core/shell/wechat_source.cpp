@@ -13,7 +13,7 @@
 #include <map>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -357,4 +357,4 @@ void WeChatSource::Run()
     winrt::uninit_apartment();
 }
 
-} // namespace atrium
+} // namespace yunzhao

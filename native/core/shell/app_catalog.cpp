@@ -16,7 +16,7 @@
 #include <cwctype>
 #include <string_view>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -112,7 +112,7 @@ std::wstring ExportStartLayout()
     wchar_t temp[MAX_PATH] = {}, sys[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
     GetSystemDirectoryW(sys, MAX_PATH);
-    std::wstring file = std::wstring(temp) + L"atrium-start-layout-" + std::to_wstring(GetCurrentProcessId()) + L".json";
+    std::wstring file = std::wstring(temp) + L"yunzhao-start-layout-" + std::to_wstring(GetCurrentProcessId()) + L".json";
     std::wstring quoted; // a PowerShell single-quoted string
     for (wchar_t ch : file)
         quoted += ch == L'\'' ? L"''" : std::wstring(1, ch);
@@ -188,7 +188,7 @@ std::vector<std::pair<std::wstring, std::wstring>> JsonStringPairs(const std::ws
 }
 
 // %ALLUSERSPROFILE%, %APPDATA% and the like, from the shell's known folders:
-// the process environment may lack them (Atrium started from a service or a
+// the process environment may lack them (Yunzhao started from a service or a
 // sandbox), and then those pins would seem to point nowhere.
 std::wstring ExpandFolders(const std::wstring& value)
 {
@@ -239,10 +239,10 @@ std::vector<CatalogApp> ResolvePins(const std::vector<std::pair<std::wstring, st
             continue;
         std::wstring expanded = ExpandFolders(value);
         // Start layouts exported before the rename still refer to this shortcut.
-        constexpr std::wstring_view legacy = L"\\Atrium.Core.lnk";
+        constexpr std::wstring_view legacy = L"\\Yunzhao.Core.lnk";
         if (GetFileAttributesW(expanded.c_str()) == INVALID_FILE_ATTRIBUTES && expanded.size() >= legacy.size() &&
             SameText(expanded.substr(expanded.size() - legacy.size()), std::wstring(legacy)))
-            expanded.replace(expanded.size() - legacy.size(), legacy.size(), L"\\Atrium.lnk");
+            expanded.replace(expanded.size() - legacy.size(), legacy.size(), L"\\Yunzhao.lnk");
         if (GetFileAttributesW(expanded.c_str()) == INVALID_FILE_ATTRIBUTES) {
             Log(L"catalog: start pin %s not found", value.c_str());
             continue;
@@ -572,4 +572,4 @@ bool AppCatalog::Matches(const CatalogApp& app, const std::wstring& query)
     return q.size() >= 3 && (Fold(tail(app.id)).find(q) != std::wstring::npos || Fold(tail(app.target)).find(q) != std::wstring::npos);
 }
 
-} // namespace atrium
+} // namespace yunzhao

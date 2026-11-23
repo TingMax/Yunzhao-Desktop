@@ -3,7 +3,7 @@
 // New notices pop up without taking the focus and time out; the bell opens
 // the list, with a capsule like the bar below the cards for its controls,
 // unread marks, dismiss and clear. Senders are internal
-// (tests, Atrium itself) or, experimentally, the Windows notifications read
+// (tests, Yunzhao itself) or, experimentally, the Windows notifications read
 // through UserNotificationListener.
 #pragma once
 
@@ -18,11 +18,11 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct Notice {
     uint64_t id = 0;
-    std::wstring source;     // "test", "atrium", "windows"
+    std::wstring source;     // "test", "yunzhao", "windows"
     std::wstring app;        // sender's display name
     std::wstring appId;      // sender's AUMID, used to activate it
     std::wstring title, body;
@@ -41,11 +41,11 @@ public:
     std::function<RECT()> barRect;
     std::function<void(int unread)> onUnread;
     std::function<bool(const Notice&)> onActivate; // runs the notice's action
-    // True while another of Atrium's panels is open: new cards wait for it to
+    // True while another of Yunzhao's panels is open: new cards wait for it to
     // close instead of overlapping it (checked again until then).
     std::function<bool()> held;
     // True while Do Not Disturb is on only to hide the system's banners
-    // (Atrium's setting): the cards still pop up then.
+    // (Yunzhao's setting): the cards still pop up then.
     std::function<bool()> quietIsOurs;
 
     void Post(Notice n, bool silent = false);
@@ -147,4 +147,4 @@ private:
     bool handoffPopup_ = false; // the popup waits for the list's glass, then goes
 };
 
-} // namespace atrium
+} // namespace yunzhao

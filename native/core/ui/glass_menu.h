@@ -1,4 +1,4 @@
-// Atrium's context menus (D41): a short list on a piece of the bar's glass,
+// Yunzhao's context menus (D41): a short list on a piece of the bar's glass,
 // in place of the system's menus. One at a time; it pops out of the point it
 // was opened at, closes on a pick, Esc or a click elsewhere, and reports the
 // pick afterwards. Rows: text, an optional icon or check mark, disabled
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct MenuEntry {
     std::wstring text; // empty: a separator
@@ -60,4 +60,4 @@ private:
     std::map<int, motion::Follow> hoverAnim_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

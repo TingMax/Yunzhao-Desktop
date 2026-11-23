@@ -14,7 +14,7 @@
 
 namespace json = winrt::Windows::Data::Json;
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -447,4 +447,4 @@ bool WeatherSource::Fetch()
     return true;
 }
 
-} // namespace atrium
+} // namespace yunzhao

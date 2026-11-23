@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
-project(atrium_native VERSION 2.6.9 LANGUAGES CXX RC)
-option(ATRIUM_DEVELOPMENT "Run without changing installed-app registration or Windows startup" ON)
+project(yunzhao_native VERSION 2.6.9 LANGUAGES CXX RC)
+option(YUNZHAO_DEVELOPMENT "Run without changing installed-app registration or Windows startup" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,8 +14,8 @@ add_link_options("$<$<CONFIG:Release>:/DEBUG;/OPT:REF;/OPT:ICF>")
 
 add_subdirectory(core)
 
-option(ATRIUM_BUILD_TESTS "Build native regression checks" OFF)
-if(ATRIUM_BUILD_TESTS)
+option(YUNZHAO_BUILD_TESTS "Build native regression checks" OFF)
+if(YUNZHAO_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

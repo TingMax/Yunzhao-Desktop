@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 // One row of the system menu.
 struct JumpItem {
@@ -48,4 +48,4 @@ bool IsRemotePath(const std::wstring& path);
 // an app's file apart means reading them, which must not happen on a click.
 void StartJumpListIndex(bool enabled);
 
-} // namespace atrium
+} // namespace yunzhao

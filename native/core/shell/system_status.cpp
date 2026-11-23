@@ -19,7 +19,7 @@
 
 #pragma comment(lib, "powrprof.lib")
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -114,7 +114,7 @@ void SystemStatusReader::Refresh() { SetEvent(wake_); }
 
 void SystemStatusReader::Run()
 {
-    SetThreadDescription(GetCurrentThread(), L"Atrium system status");
+    SetThreadDescription(GetCurrentThread(), L"Yunzhao system status");
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     HANDLE events[] = {quit_, wake_};
     std::wstring watched;
@@ -267,4 +267,4 @@ bool RunPowerAction(PowerAction action)
     return ok;
 }
 
-} // namespace atrium
+} // namespace yunzhao

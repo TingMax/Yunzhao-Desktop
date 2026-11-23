@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 enum class WidgetKind { Clock, Calendar, Battery, Digital, System, Notes, Reminders, Photos, Weather, Bluetooth, Schedule, Marks, Focus, Habits };
 enum class WidgetSize { Small, Medium, Large };
@@ -209,4 +209,4 @@ float ReminderScrollMax(const WidgetContent& content, WidgetSize size);
 void PaintWidget(Canvas& c, WidgetKind kind, WidgetSize size, WidgetMaterial material, const WidgetContent& content, const WidgetWorld& world,
                  std::vector<WidgetHit>& hits, const std::wstring& hoverDay = {}, float layoutW = 0, float layoutH = 0);
 
-} // namespace atrium
+} // namespace yunzhao

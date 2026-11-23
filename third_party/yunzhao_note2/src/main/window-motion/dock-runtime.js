@@ -28,7 +28,7 @@ import {
   flushNativeMotionDiagnostics
 } from '../logging/window-motion-diagnostics.js'
 import { constrainMainWindowBounds, getWindowBoundsUpdate } from '../window-bounds.js'
-import { atriumHosted } from '../atrium-host.js'
+import { yunzhaoHosted } from '../yunzhao-host.js'
 
 /** Owns the complete Dock session, motion backend, timers and native/display/power resources. */
 export function createDockRuntime({
@@ -1158,7 +1158,7 @@ export function createDockRuntime({
 
   function handleDockDisplayTopologyChange(change = null) {
     if (stopping) return
-    if (atriumHosted()) return
+    if (yunzhaoHosted()) return
     if (!getMainWindow() || getMainWindow().isDestroyed()) return
     if (isCompactPresentationActive()) {
       reconcilePresentationDisplayGeometry(change)

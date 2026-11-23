@@ -1,13 +1,13 @@
-﻿<#
+<#
 .SYNOPSIS
-  Builds Atrium and assembles a portable folder: dist/Atrium/.
+  Builds Yunzhao and assembles a portable folder: dist/Yunzhao/.
 
 .DESCRIPTION
   native (CMake, MSVC) -> settings (dotnet publish, self-contained WinUI 3) -> dist.
   Layout:
-    dist/Atrium/Yunzhao.exe
-    dist/Atrium/Atrium.Settings.exe and the WinUI runtime
-    dist/Atrium/Fonts/ (MiSans; the core reads it from there)
+    dist/Yunzhao/Yunzhao.exe
+    dist/Yunzhao/Yunzhao.Settings.exe and the WinUI runtime
+    dist/Yunzhao/Fonts/ (MiSans; the core reads it from there)
   -Zip also writes dist/Yunzhao-<version>-win-x64.zip.
 #>
 param(
@@ -17,28 +17,28 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$dist = Join-Path $root $(if ($Development) { "dist/Development/Atrium" } else { "dist/Atrium" })
+$dist = Join-Path $root $(if ($Development) { "dist/Development/Yunzhao" } else { "dist/Yunzhao" })
 $buildDirectory = if ($Development) { 'native/build/development' } else { 'native/build/win-x64' }
 $developmentFlag = if ($Development) { 'ON' } else { 'OFF' }
 
 Push-Location $root
 try {
-    cmake --preset win-x64 -S native -B $buildDirectory "-DATRIUM_DEVELOPMENT=$developmentFlag"
+    cmake --preset win-x64 -S native -B $buildDirectory "-DYUNZHAO_DEVELOPMENT=$developmentFlag"
     if ($LASTEXITCODE) { throw "cmake configure failed" }
     cmake --build $buildDirectory --config $Configuration
     if ($LASTEXITCODE) { throw "native build failed" }
 
     if (Test-Path $dist) {
-        # A running Atrium (or its settings window) locks files: stop before deleting anything.
+        # A running Yunzhao (or its settings window) locks files: stop before deleting anything.
         $full = (Resolve-Path $dist).Path
-        $expected = [IO.Path]::GetFullPath((Join-Path $root $(if ($Development) { 'dist/Development/Atrium' } else { 'dist/Atrium' })))
+        $expected = [IO.Path]::GetFullPath((Join-Path $root $(if ($Development) { 'dist/Development/Yunzhao' } else { 'dist/Yunzhao' })))
         if (![string]::Equals($full, $expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected distribution path' }
         $busy = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($full + '\', [StringComparison]::OrdinalIgnoreCase) })
-        if ($busy) { throw "dist/Atrium is in use by $(($busy | ForEach-Object { "$($_.Name) ($($_.Id))" }) -join ', '); close it first" }
+        if ($busy) { throw "dist/Yunzhao is in use by $(($busy | ForEach-Object { "$($_.Name) ($($_.Id))" }) -join ', '); close it first" }
         Remove-Item -Recurse -Force $dist
     }
     New-Item -ItemType Directory -Force $dist | Out-Null
-    dotnet publish settings/Atrium.Settings/Atrium.Settings.csproj -c $Configuration -p:AtriumDevelopment=$($Development.IsPresent.ToString().ToLowerInvariant()) -o $dist
+    dotnet publish settings/Yunzhao.Settings/Yunzhao.Settings.csproj -c $Configuration -p:YunzhaoDevelopment=$($Development.IsPresent.ToString().ToLowerInvariant()) -o $dist
     if ($LASTEXITCODE) { throw "settings publish failed" }
 
     Copy-Item (Join-Path "$buildDirectory/$Configuration" "Yunzhao.exe") $dist

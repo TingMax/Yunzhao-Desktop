@@ -14,7 +14,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct WeatherHour {
     std::wstring label; // "现在", "14时", or the time of a sunrise / sunset
@@ -69,4 +69,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

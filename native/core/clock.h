@@ -4,7 +4,7 @@
 
 #include <windows.h>
 
-namespace atrium {
+namespace yunzhao {
 
 inline double ClockMs()
 {
@@ -18,4 +18,4 @@ inline double ClockMs()
     return double(now.QuadPart) * 1000.0 / double(freq.QuadPart);
 }
 
-} // namespace atrium
+} // namespace yunzhao

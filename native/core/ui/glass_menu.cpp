@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -254,4 +254,4 @@ bool GlassMenu::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

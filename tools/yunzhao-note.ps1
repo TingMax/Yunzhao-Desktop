@@ -1,4 +1,4 @@
-# Starts the real Yunzhao Note app. Atrium writes yunzhao-place.json to choose the monitor and the view.
+# Starts the real Yunzhao Note app. Yunzhao writes yunzhao-place.json to choose the monitor and the view.
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\third_party\yunzhao_note2')).Path
 $logDir = Join-Path $env:LOCALAPPDATA 'Yunzhao\logs'

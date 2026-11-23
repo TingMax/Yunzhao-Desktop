@@ -1,4 +1,4 @@
-// Feishu (Lark) messages as Atrium cards. Feishu does not publish Windows
+// Feishu (Lark) messages as Yunzhao cards. Feishu does not publish Windows
 // notifications either: it shows its own popup, a small untitled Chromium
 // window (Chrome_WidgetWin_1) at the screen's corner, for about ten seconds.
 // Its text is readable through UI Automation, read only: the first text is
@@ -15,7 +15,7 @@
 #include <atomic>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 
 class FeishuSource {
 public:
@@ -35,4 +35,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

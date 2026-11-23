@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct WirelessDisplay {
     std::wstring id, name;
@@ -43,4 +43,4 @@ enum class ProjectionMode { Unknown, Internal, Clone, Extend, External };
 ProjectionMode CurrentProjectionMode(int* displays);
 bool SetProjectionMode(ProjectionMode mode);
 
-} // namespace atrium
+} // namespace yunzhao

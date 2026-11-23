@@ -1,7 +1,7 @@
 #include <winres.h>
 #include "resource.h"
 
-IDI_ATRIUM ICON "../../assets/atrium.ico"
+IDI_YUNZHAO ICON "../../assets/yunzhao.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 2,6,9,0
@@ -18,7 +18,7 @@ BEGIN
             VALUE "FileVersion", "2.6.9"
             VALUE "InternalName", "Yunzhao"
             VALUE "LegalCopyright", "MIT License"
-            VALUE "OriginalFilename", "Atrium.exe"
+            VALUE "OriginalFilename", "Yunzhao.exe"
             VALUE "ProductName", "Yunzhao"
             VALUE "ProductVersion", "2.6.9"
         END

@@ -1,4 +1,4 @@
-// Named-pipe endpoint for Atrium.Settings (docs/SETTINGS-PROTOCOL.md).
+// Named-pipe endpoint for Yunzhao.Settings (docs/SETTINGS-PROTOCOL.md).
 // One client at a time; previews only change memory, commit writes the file,
 // and a client that disconnects without committing has its preview reverted.
 #pragma once
@@ -13,18 +13,18 @@
 #include <string>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 
 // Posted to the host window when the effective settings changed; lParam is
 // unused, the host reads SettingsServer::Current().
-constexpr UINT WM_ATRIUM_SETTINGS = WM_APP + 1;
+constexpr UINT WM_YUNZHAO_SETTINGS = WM_APP + 1;
 // Sent by the pipe thread: WidgetKind in wParam, WidgetSize in lParam, both
 // scalar values. A timeout must not leave pointers to the sender's stack.
-constexpr UINT WM_ATRIUM_ADD_WIDGET = WM_APP + 9;
+constexpr UINT WM_YUNZHAO_ADD_WIDGET = WM_APP + 9;
 // wParam: calendar size 0..1000 (today .. the whole work area).
-constexpr UINT WM_ATRIUM_SIZE_CALENDAR = WM_APP + 13;
+constexpr UINT WM_YUNZHAO_SIZE_CALENDAR = WM_APP + 13;
 // wParam: 0 close the desktop calendar, 1 open it, 2 ask whether it is open.
-constexpr UINT WM_ATRIUM_CALENDAR = WM_APP + 14;
+constexpr UINT WM_YUNZHAO_CALENDAR = WM_APP + 14;
 
 std::wstring SettingsPipeName();
 
@@ -57,4 +57,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

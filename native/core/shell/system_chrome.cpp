@@ -10,7 +10,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -251,7 +251,7 @@ void SystemChrome::Enforce()
     }
     if (quietOurs_ && QuietProfile() != kQuiet) {
         // The user turned it off (or chose another mode): theirs from now on.
-        Log(L"chrome: Do Not Disturb changed by the user; no longer Atrium's");
+        Log(L"chrome: Do Not Disturb changed by the user; no longer Yunzhao's");
         quietOurs_ = false;
         Save();
     }
@@ -342,4 +342,4 @@ void SystemChrome::Save() const
     WriteTextFile(StatePath(), json);
 }
 
-} // namespace atrium
+} // namespace yunzhao

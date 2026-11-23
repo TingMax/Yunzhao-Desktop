@@ -1,4 +1,4 @@
-// Windows notifications as Atrium cards, through UserNotificationListener
+// Windows notifications as Yunzhao cards, through UserNotificationListener
 // (on by default since v0.6, D24). Unpackaged processes cannot subscribe to its
 // change event, so a worker thread reads the toast list every second and posts
 // new toasts, and toasts whose text changed, to the UI thread. The first read
@@ -17,7 +17,7 @@
 #include <string>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 
 class NotificationListener {
 public:
@@ -36,4 +36,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

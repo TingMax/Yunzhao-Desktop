@@ -10,7 +10,7 @@
 
 #include <map>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace wun = winrt::Windows::UI::Notifications;
 namespace wunm = winrt::Windows::UI::Notifications::Management;
@@ -153,4 +153,4 @@ void NotificationListener::Run()
     winrt::uninit_apartment();
 }
 
-} // namespace atrium
+} // namespace yunzhao

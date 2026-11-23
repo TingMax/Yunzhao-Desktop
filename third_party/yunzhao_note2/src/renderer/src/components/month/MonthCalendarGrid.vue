@@ -72,9 +72,9 @@ const dayPreviewPlacement = ref('right')
 const dayPreviewStyle = reactive({ left: '-9999px', top: '-9999px' })
 const imagePreviewVisible = ref(false)
 const imagePreviewNoteId = ref(null)
-const atriumHosted = ref(false)
+const yunzhaoHosted = ref(false)
 const linkedTodos = ref([])
-let stopAtriumTodos = null
+let stopYunzhaoTodos = null
 function linkedOn(day) {
   const key = day.year * 10000 + day.month * 100 + day.day
   return linkedTodos.value.filter((item) => {
@@ -88,17 +88,17 @@ function linkedOn(day) {
 }
 onMounted(async () => {
   try {
-    atriumHosted.value = Boolean(await window.api.atriumHosted?.())
-    const loaded = await window.api.atriumTodos?.()
+    yunzhaoHosted.value = Boolean(await window.api.yunzhaoHosted?.())
+    const loaded = await window.api.yunzhaoTodos?.()
     linkedTodos.value = Array.isArray(loaded) ? loaded : []
   } catch {
-    atriumHosted.value = false
+    yunzhaoHosted.value = false
   }
-  stopAtriumTodos = window.api.onAtriumTodos?.((items) => {
+  stopYunzhaoTodos = window.api.onYunzhaoTodos?.((items) => {
     linkedTodos.value = items
   })
 })
-onBeforeUnmount(() => stopAtriumTodos?.())
+onBeforeUnmount(() => stopYunzhaoTodos?.())
 const detachedEventBars = new Set()
 const rowCount = computed(() => Math.ceil(props.days.length / 7))
 const capacityByWeek = ref(Array.from({ length: rowCount.value }, () => 0))
@@ -242,15 +242,15 @@ function toggleCountPreview(day, event) {
 function calculateCapacity() {
   return measureRendererLayout('layout.calendar-capacity', () => {
     const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 1
-    const atrium = Boolean(document.documentElement.dataset.atriumDock)
-    // 课表所在的日历格子较矮。横条间距和上下留白要与 atrium 样式一致，否则第三条待办会被藏起来。
-    const headerHeight = (atrium ? 30 : 35) * rem
-    const footerHeight = (atrium ? 16 : 18) * rem
+    const yunzhao = Boolean(document.documentElement.dataset.yunzhaoDock)
+    // 课表所在的日历格子较矮。横条间距和上下留白要与 yunzhao 样式一致，否则第三条待办会被藏起来。
+    const headerHeight = (yunzhao ? 30 : 35) * rem
+    const footerHeight = (yunzhao ? 16 : 18) * rem
     const base =
       Number.parseFloat(
         getComputedStyle(document.documentElement).getPropertyValue('--font-size-base')
       ) || 20
-    const pitch = (atrium ? 17 : Math.max(22, base * 0.72 + 9)) * rem
+    const pitch = (yunzhao ? 17 : Math.max(22, base * 0.72 + 9)) * rem
     const next = weekRefs.value.map((element) => {
       const height = element?.getBoundingClientRect().height || 0
       return Math.max(0, Math.floor((height - headerHeight - footerHeight) / pitch))
@@ -483,7 +483,7 @@ async function openContextMenu(event, target) {
 
 function openDayContextMenu(event, day) {
   if (!isActiveDay(day)) return
-  if (atriumHosted.value) {
+  if (yunzhaoHosted.value) {
     event.preventDefault()
     return
   }
@@ -957,7 +957,7 @@ const protectedDraft = useDraftProtection({
               </span>
             </div>
             <button
-              v-if="!atriumHosted && isActiveDay(day) && activeQuickCreateKey !== day.key"
+              v-if="!yunzhaoHosted && isActiveDay(day) && activeQuickCreateKey !== day.key"
               type="button"
               class="month-day-cell__quick-activate"
               :tabindex="day.key === tabStopKey ? 0 : -1"
@@ -966,7 +966,7 @@ const protectedDraft = useDraftProtection({
               @click.stop="openQuickCreator(day)"
             />
             <form
-              v-if="!atriumHosted && isActiveDay(day)"
+              v-if="!yunzhaoHosted && isActiveDay(day)"
               :ref="(element) => setQuickCreatorRef(element, day.key)"
               class="month-day-cell__quick-create"
               :class="{
@@ -1076,7 +1076,7 @@ const protectedDraft = useDraftProtection({
               </button>
             </template>
             <template v-else>
-              <button v-if="!atriumHosted" role="menuitem" type="button" @click="runContextMenuAction('create')">
+              <button v-if="!yunzhaoHosted" role="menuitem" type="button" @click="runContextMenuAction('create')">
                 新建待办…
               </button>
             </template>

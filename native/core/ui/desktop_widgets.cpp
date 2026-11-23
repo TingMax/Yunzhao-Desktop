@@ -33,7 +33,7 @@
 
 namespace json = winrt::Windows::Data::Json;
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -194,7 +194,7 @@ constexpr UINT_PTR kTickTimer = 1, kGlideTimer = 3, kSafetyTimer = 4, kCaretTime
 constexpr int kSnapPx = 18, kWidgetGapPx = 12;
 constexpr UINT kCaretMs = 530, kSaveMs = 800;
 constexpr ULONGLONG kPhotoMs = 10 * 60 * 1000; // a new photo every ten minutes
-constexpr const wchar_t* kHostClass = L"AtriumWidgetsHost";
+constexpr const wchar_t* kHostClass = L"YunzhaoWidgetsHost";
 constexpr UINT WM_WIDGET_REMOVE = WM_APP + 1;  // lParam Widget*: removed once its own message is done
 constexpr UINT WM_WIDGET_RESTACK = WM_APP + 2; // a burst of window events, one restack
 constexpr UINT WM_WIDGET_PHOTO = WM_APP + 3;   // lParam PhotoRead*: a photo was read
@@ -5610,7 +5610,7 @@ void DesktopWidgets::OpenPomo(Widget& w)
     pomoLeft_ = w.content.pomoLeft;
     if (!pomo_) {
         static bool registered = false;
-        const wchar_t* cls = L"AtriumFocus";
+        const wchar_t* cls = L"YunzhaoFocus";
         if (!registered) {
             WNDCLASSEXW wc{sizeof(wc)};
             wc.hInstance = instance_;
@@ -5697,4 +5697,4 @@ LRESULT CALLBACK DesktopWidgets::PomoProc(HWND hwnd, UINT m, WPARAM wp, LPARAM l
     return DefWindowProcW(hwnd, m, wp, lp);
 }
 
-} // namespace atrium
+} // namespace yunzhao

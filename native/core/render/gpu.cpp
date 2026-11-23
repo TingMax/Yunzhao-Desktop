@@ -4,7 +4,7 @@
 
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -114,4 +114,4 @@ Gpu Gpu::ForMonitor(HMONITOR monitor)
     return Create(factory, nullptr);
 }
 
-} // namespace atrium
+} // namespace yunzhao

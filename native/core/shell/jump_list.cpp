@@ -19,7 +19,7 @@
 #include <mutex>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 namespace {
 
 constexpr BYTE kFooter[4] = {0xAB, 0xFB, 0xBF, 0xBA};
@@ -682,4 +682,4 @@ std::shared_ptr<const JumpListData> LoadJumpList(const std::wstring& appId, cons
     return data;
 }
 
-} // namespace atrium
+} // namespace yunzhao

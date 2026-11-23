@@ -235,18 +235,18 @@ let stopState = null
 let stopNotes = null
 
 onMounted(() => {
-  window.addEventListener('atrium-table-edit', onEdit)
+  window.addEventListener('yunzhao-table-edit', onEdit)
   window.addEventListener('keydown', onWindowKey)
-  void window.api.atriumTable?.().then(applyTable)
-  void window.api.atriumState?.().then((state) => {
+  void window.api.yunzhaoTable?.().then(applyTable)
+  void window.api.yunzhaoState?.().then((state) => {
     focus.value = state?.date || ''
     return loadNotes()
   })
-  stopTable = window.api.onAtriumTable?.(applyTable)
+  stopTable = window.api.onYunzhaoTable?.(applyTable)
   stopNotes = window.api.onNotesChanged?.(() => {
     void loadNotes()
   })
-  stopState = window.api.onAtriumState?.((state) => {
+  stopState = window.api.onYunzhaoState?.((state) => {
     focus.value = state?.date || focus.value
   })
 })
@@ -255,7 +255,7 @@ watch(focus, (key) => {
   void loadNotes()
   if (/^\d{4}-\d{2}-\d{2}$/.test(String(key || ''))) {
     emit('focus', key)
-    void window.api.atriumDaySync?.({ dateKey: key })
+    void window.api.yunzhaoDaySync?.({ dateKey: key })
   }
 })
 
@@ -265,7 +265,7 @@ function askCreate() {
 }
 
 onBeforeUnmount(() => {
-  window.removeEventListener('atrium-table-edit', onEdit)
+  window.removeEventListener('yunzhao-table-edit', onEdit)
   window.removeEventListener('keydown', onWindowKey)
   stopTable?.()
   stopNotes?.()
@@ -274,11 +274,11 @@ onBeforeUnmount(() => {
 
 function pickDay(day) {
   focus.value = dayKey(day)
-  window.api.atriumCommand?.({ cmd: 'focus', y: day.y, m: day.m, d: day.d })
+  window.api.yunzhaoCommand?.({ cmd: 'focus', y: day.y, m: day.m, d: day.d })
 }
 
 function shiftWeek(delta) {
-  window.api.atriumCommand?.({ cmd: 'week', delta })
+  window.api.yunzhaoCommand?.({ cmd: 'week', delta })
 }
 
 function chosen(wd, period) {
@@ -308,7 +308,7 @@ function openCell(day, period) {
 function clearPicked() {
   if (!picked.value) return
   const mon = monday.value
-  window.api.atriumCommand?.({
+  window.api.yunzhaoCommand?.({
     cmd: 'cell',
     wd: picked.value.wd,
     period: picked.value.period,
@@ -326,7 +326,7 @@ function clearPicked() {
 function saveForm() {
   if (!form.value) return
   const mon = monday.value
-  window.api.atriumCommand?.({
+  window.api.yunzhaoCommand?.({
     cmd: 'cell',
     wd: form.value.wd,
     period: form.value.period,
@@ -349,8 +349,8 @@ async function openHandout(day, period) {
   if (editing.value) return
   if (!courseAt(day.wd, period)) return
   const key = handoutKey(day, period)
-  const all = (await window.api.atriumHandouts?.()) || {}
-  await window.api.atriumOpenHandout?.({
+  const all = (await window.api.yunzhaoHandouts?.()) || {}
+  await window.api.yunzhaoOpenHandout?.({
     key,
     title: `${day.m}月${day.d}日 ${names[day.wd] || ''}`,
     html: typeof all[key] === 'string' ? all[key] : ''
@@ -387,7 +387,7 @@ function stepClock(field, delta) {
 
 function saveClock() {
   if (!clock.value) return
-  window.api.atriumCommand?.({ cmd: 'period', row: clock.value.row, s: clock.value.s, e: clock.value.e })
+  window.api.yunzhaoCommand?.({ cmd: 'period', row: clock.value.row, s: clock.value.s, e: clock.value.e })
   clock.value = null
 }
 </script>

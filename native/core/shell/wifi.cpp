@@ -10,7 +10,7 @@
 
 #pragma comment(lib, "wlanapi.lib")
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -156,4 +156,4 @@ bool DisconnectWifi()
     return r == ERROR_SUCCESS;
 }
 
-} // namespace atrium
+} // namespace yunzhao

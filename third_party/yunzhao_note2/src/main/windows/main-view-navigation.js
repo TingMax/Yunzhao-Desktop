@@ -10,7 +10,7 @@ import { setSettingsBatch } from '../db/db-settings-repository.js'
 import { setConfig as blurSetConfig } from '../bridge/blur_bridge.js'
 import { constrainMainWindowBounds, getPersistableWindowBounds } from '../window-bounds.js'
 import { setWindowLogContext } from '../logging/window-capture.js'
-import { atriumWindowStaysVisible } from '../atrium-host.js'
+import { yunzhaoWindowStaysVisible } from '../yunzhao-host.js'
 
 /** Owns active scope, single-window navigation, renderer-ready and the deferred background target. */
 export function createMainViewNavigation({
@@ -467,7 +467,7 @@ export function createMainViewNavigation({
 
   function hideMainWindowForViewNavigation(window) {
     if (!window || window.isDestroyed()) return
-    if (atriumWindowStaysVisible()) return
+    if (yunzhaoWindowStaysVisible()) return
     if (readBlurState().initialized) {
       runBlurRuntimeOperation(
         () => blurSetConfig({ ...readBlurState().config, enabled: false }),

@@ -5,7 +5,7 @@
 
 #include <algorithm>
 
-namespace atrium {
+namespace yunzhao {
 
 std::vector<DisplayInfo> ConnectedDisplays()
 {
@@ -198,4 +198,4 @@ std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, co
     return result;
 }
 
-} // namespace atrium
+} // namespace yunzhao

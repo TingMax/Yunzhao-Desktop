@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class DesktopWidgets {
 public:
@@ -231,4 +231,4 @@ private:
     std::unique_ptr<Surface> toolSurface_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

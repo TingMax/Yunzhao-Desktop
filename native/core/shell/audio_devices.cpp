@@ -18,7 +18,7 @@
 
 #pragma comment(lib, "version.lib")
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -300,4 +300,4 @@ void SetAppMute(const std::wstring& key, bool mute)
     });
 }
 
-} // namespace atrium
+} // namespace yunzhao

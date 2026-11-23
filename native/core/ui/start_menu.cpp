@@ -24,7 +24,7 @@
 #pragma comment(lib, "secur32.lib")
 #pragma comment(lib, "advapi32.lib")
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -239,10 +239,10 @@ void StartMenu::LoadAccount()
 {
     if (!userName_.empty())
         return;
-    // Screenshots and screen recordings: ATRIUM_PRIVACY=1 shows neither the
+    // Screenshots and screen recordings: YUNZHAO_PRIVACY=1 shows neither the
     // account's name and picture nor the network's name.
     wchar_t privacy[8] = {};
-    private_ = GetEnvironmentVariableW(L"ATRIUM_PRIVACY", privacy, 8) && privacy[0] == L'1';
+    private_ = GetEnvironmentVariableW(L"YUNZHAO_PRIVACY", privacy, 8) && privacy[0] == L'1';
     if (private_) {
         userName_ = L"用户"; // 用户
         return;
@@ -2383,4 +2383,4 @@ bool StartMenu::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

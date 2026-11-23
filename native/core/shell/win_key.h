@@ -1,4 +1,4 @@
-// The Windows key alone opens Atrium's start menu (setting winKeyStart), Win +
+// The Windows key alone opens Yunzhao's start menu (setting winKeyStart), Win +
 // 1..9, 0 the bar's apps (winNumbers); both off by default. A low-level
 // keyboard hook on a thread of its own holds the key back as it goes down:
 // when another key follows, the two go on to Windows together (Win + E and
@@ -6,7 +6,7 @@
 // it; when the key comes up alone, Windows never saw it, so its start menu
 // stays shut and `notify` hears of it instead (or, without winKeyStart, the
 // key goes on to Windows after all). Over an elevated window, whose input
-// Atrium may not send to, the key is left alone. Nothing is injected into Explorer.
+// Yunzhao may not send to, the key is left alone. Nothing is injected into Explorer.
 #pragma once
 
 #include <windows.h>
@@ -14,7 +14,7 @@
 #include <atomic>
 #include <thread>
 
-namespace atrium {
+namespace yunzhao {
 
 class WinKey {
 public:
@@ -42,4 +42,4 @@ private:
     std::thread thread_;
 };
 
-} // namespace atrium
+} // namespace yunzhao

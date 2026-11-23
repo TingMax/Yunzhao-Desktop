@@ -13,7 +13,7 @@
 
 namespace json = winrt::Windows::Data::Json;
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -213,4 +213,4 @@ wchar_t IndexLetter(const std::wstring& name)
     return L'#';
 }
 
-} // namespace atrium
+} // namespace yunzhao

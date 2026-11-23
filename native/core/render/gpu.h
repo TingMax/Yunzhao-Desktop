@@ -8,7 +8,7 @@
 
 #include <string>
 
-namespace atrium {
+namespace yunzhao {
 
 struct Gpu {
     winrt::com_ptr<IDXGIFactory2> factory;
@@ -19,4 +19,4 @@ struct Gpu {
     static Gpu ForMonitor(HMONITOR monitor);
 };
 
-} // namespace atrium
+} // namespace yunzhao

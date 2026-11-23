@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 namespace {
 using Handle = std::unique_ptr<void, decltype(&CloseHandle)>;
 
@@ -132,4 +132,4 @@ bool TerminateAppProcesses(std::span<const AppProcessIdentity> apps)
     return success;
 }
 
-} // namespace atrium
+} // namespace yunzhao

@@ -10,7 +10,7 @@
 #include <thread>
 #include <utility>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -255,4 +255,4 @@ std::vector<WindowSnapshots::Result> WindowSnapshots::Take()
     return std::exchange(shared_->done, {});
 }
 
-} // namespace atrium
+} // namespace yunzhao

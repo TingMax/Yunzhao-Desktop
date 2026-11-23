@@ -1,5 +1,5 @@
 // User-adjustable appearance and layout. One flat JSON object, shared with
-// Atrium.Settings (settings/Atrium.Settings/BarSettings.cs) and the pipe
+// Yunzhao.Settings (settings/Yunzhao.Settings/BarSettings.cs) and the pipe
 // protocol (docs/SETTINGS-PROTOCOL.md). Lengths are in DIP.
 #pragma once
 
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct Settings {
     static constexpr int kVersion = 2; // 2: Windows notifications on by default (v1 files are migrated)
@@ -61,14 +61,14 @@ struct Settings {
     // An icon's right-click menu lists the app's own jump list entries (recent
     // places, tasks) and the system's ("run as administrator", "properties").
     bool windowsContextMenu = true;
-    // Notifications (Atrium's own cards above the bell).
+    // Notifications (Yunzhao's own cards above the bell).
     double notifyTimeout = 6;        // seconds a popup stays (3..30)
     std::wstring notifyPlacement = L"dock"; // dock (default) | topRight (system primary)
     bool notifyHideBody = false;     // privacy: no message text; cards excluded from screen capture
-    bool notifyListener = true;      // Windows notifications as Atrium cards (UserNotificationListener)
-    bool notifyFeishu = true;        // Feishu messages as Atrium cards (its own popup, read through UI Automation)
-    bool notifyWeChat = true;        // WeChat messages as Atrium cards (its chat list, read through UI Automation)
-    // Three independent modules: the bar (with its popups and Atrium's notification cards), the
+    bool notifyListener = true;      // Windows notifications as Yunzhao cards (UserNotificationListener)
+    bool notifyFeishu = true;        // Feishu messages as Yunzhao cards (its own popup, read through UI Automation)
+    bool notifyWeChat = true;        // WeChat messages as Yunzhao cards (its chat list, read through UI Automation)
+    // Three independent modules: the bar (with its popups and Yunzhao's notification cards), the
     // desktop widgets and Stage Manager. Any of them may run alone.
     bool bar = true;                 // the glass bar; off: Windows' own taskbar and banners stay in charge
     bool widgets = true;             // desktop widgets (their layout is widgets.json)
@@ -93,9 +93,9 @@ struct Settings {
     double islandHeight = 40;
     std::wstring islandText;         // empty shows the clock
     // Windows' own shell (shell/system_chrome.h): put back when turned off or on exit.
-    bool hideTaskbar = false;        // the system taskbar is hidden while Atrium runs
+    bool hideTaskbar = false;        // the system taskbar is hidden while Yunzhao runs
     bool hideBanners = false;        // Do Not Disturb: no system banners, the notifications still become cards
-    bool winKeyStart = false;        // the Windows key alone opens Atrium's start menu instead of Windows'
+    bool winKeyStart = false;        // the Windows key alone opens Yunzhao's start menu instead of Windows'
     bool winNumbers = false;         // Win + 1..9, 0 open the bar's apps
     bool startOnLogin = true;        // independent of starting/stopping the current session
     // Pinned apps; nullopt = never saved yet (first run imports the Windows pins).
@@ -131,4 +131,4 @@ bool SetStartOnLogin(bool enabled);
 // The Run entry turned off in Task Manager's startup apps.
 bool StartupTurnedOff();
 
-} // namespace atrium
+} // namespace yunzhao

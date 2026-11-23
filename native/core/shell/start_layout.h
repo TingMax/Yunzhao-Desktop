@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct StartTile {
     std::wstring id;   // an app: its catalog id (CatalogApp::id); a folder: "folder:<n>"
@@ -40,4 +40,4 @@ std::wstring NameInitials(const std::wstring& name);
 // The A-Z index's letter of a name: 'A'..'Z', or '#' (digits, symbols, rare characters).
 wchar_t IndexLetter(const std::wstring& name);
 
-} // namespace atrium
+} // namespace yunzhao

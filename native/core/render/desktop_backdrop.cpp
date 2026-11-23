@@ -16,7 +16,7 @@
 namespace wgc = winrt::Windows::Graphics::Capture;
 namespace wgd = winrt::Windows::Graphics::DirectX;
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -311,7 +311,7 @@ void DesktopBackdrop::StopWallpaper()
 
 void DesktopBackdrop::WallpaperLoop()
 {
-    SetThreadDescription(GetCurrentThread(), L"Atrium wallpaper");
+    SetThreadDescription(GetCurrentThread(), L"Yunzhao wallpaper");
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)))
         return;
     std::wstring composed; // what the last picture was made of
@@ -389,4 +389,4 @@ void DesktopBackdrop::WallpaperLoop()
     CoUninitialize();
 }
 
-} // namespace atrium
+} // namespace yunzhao

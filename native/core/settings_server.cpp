@@ -12,7 +12,7 @@
 
 namespace json = winrt::Windows::Data::Json;
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -64,7 +64,7 @@ std::wstring SettingsPipeName()
 {
     DWORD session = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &session);
-    return L"\\\\.\\pipe\\Atrium.Core." + std::to_wstring(session);
+    return L"\\\\.\\pipe\\Yunzhao.Core." + std::to_wstring(session);
 }
 
 SettingsServer::SettingsServer(HWND host, const Settings& saved) : host_(host), saved_(saved), current_(saved)
@@ -118,7 +118,7 @@ void SettingsServer::SetCurrent(const Settings& s)
         std::lock_guard g(lock_);
         current_ = s;
     }
-    PostMessageW(host_, WM_ATRIUM_SETTINGS, 0, 0);
+    PostMessageW(host_, WM_YUNZHAO_SETTINGS, 0, 0);
 }
 
 void SettingsServer::Run()
@@ -219,7 +219,7 @@ std::string SettingsServer::Handle(const std::string& request)
         WidgetSize widgetSize;
         if (!DesktopWidgets::ParseNames(kind, size, widgetKind, widgetSize)) return Reply(L"error", L"unknown widget kind");
         DWORD_PTR added = 0;
-        SendMessageTimeoutW(host_, WM_ATRIUM_ADD_WIDGET, WPARAM(widgetKind), LPARAM(widgetSize), SMTO_ABORTIFHUNG, 3000,
+        SendMessageTimeoutW(host_, WM_YUNZHAO_ADD_WIDGET, WPARAM(widgetKind), LPARAM(widgetSize), SMTO_ABORTIFHUNG, 3000,
                             &added);
         if (added == 3)
             return Reply(L"ok", L"exists");
@@ -227,13 +227,13 @@ std::string SettingsServer::Handle(const std::string& request)
     }
     if (op == L"size-calendar") {
         int milli = std::clamp(int(std::lround(o.GetNamedNumber(L"t", 0.45) * 1000.0)), 0, 1000);
-        SendMessageTimeoutW(host_, WM_ATRIUM_SIZE_CALENDAR, WPARAM(milli), 0, SMTO_ABORTIFHUNG, 3000, nullptr);
+        SendMessageTimeoutW(host_, WM_YUNZHAO_SIZE_CALENDAR, WPARAM(milli), 0, SMTO_ABORTIFHUNG, 3000, nullptr);
         return Reply(L"ok");
     }
     if (op == L"calendar") {
         DWORD_PTR state = 0;
         WPARAM ask = o.HasKey(L"on") ? (o.GetNamedBoolean(L"on") ? 1 : 0) : 2;
-        SendMessageTimeoutW(host_, WM_ATRIUM_CALENDAR, ask, 0, SMTO_ABORTIFHUNG, 8000, &state);
+        SendMessageTimeoutW(host_, WM_YUNZHAO_CALENDAR, ask, 0, SMTO_ABORTIFHUNG, 8000, &state);
         return Reply(L"ok", state ? L"on" : L"off");
     }
 
@@ -290,4 +290,4 @@ std::string SettingsServer::Handle(const std::string& request)
     return Reply(L"error", L"unknown op");
 }
 
-} // namespace atrium
+} // namespace yunzhao

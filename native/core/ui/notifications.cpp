@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -137,7 +137,7 @@ float Notifications::CardHeight() const { return 16 + 16 + 6 + 20 + 4 + 36 + 14;
 
 void Notifications::ClearPreparedUpdate()
 {
-    std::erase_if(notices_, [](const Notice& n) { return n.source == L"atrium-update"; });
+    std::erase_if(notices_, [](const Notice& n) { return n.source == L"yunzhao-update"; });
     std::erase_if(popupIds_, [&](uint64_t id) {
         return std::none_of(notices_.begin(), notices_.end(), [&](const Notice& n) { return n.id == id; });
     });
@@ -1066,4 +1066,4 @@ bool Notifications::Message(Mode mode, UINT m, WPARAM w, LPARAM l, LRESULT& resu
     return false;
 }
 
-} // namespace atrium
+} // namespace yunzhao

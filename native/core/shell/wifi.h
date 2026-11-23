@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 struct WifiState {
     bool adapter = false;   // a Wi-Fi interface exists
@@ -33,4 +33,4 @@ bool ConnectWifi(const WifiNetwork& network);
 bool DisconnectWifi();
 
 
-} // namespace atrium
+} // namespace yunzhao

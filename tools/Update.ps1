@@ -47,7 +47,7 @@ function Get-FileHolders([string]$Path) {
 }
 
 # Moves what is in $From into $To (merging folders). A folder some process is in (its current
-# directory, e.g. an app started from an older Atrium) cannot be moved itself: its contents go, it stays.
+# directory, e.g. an app started from an older Yunzhao) cannot be moved itself: its contents go, it stays.
 # KeepIdentical leaves a locked file in place when it already matches the downloaded package.
 function Move-Tree([string]$From, [string]$To, [switch]$Keep, [switch]$KeepIdentical) {
     if (!(Test-Path -LiteralPath $To)) { New-Item -ItemType Directory -Path $To | Out-Null }
@@ -106,7 +106,7 @@ function Test-AppControlBlock([string]$Message) {
 }
 
 function Start-Verified([string]$Executable, [string]$Kind, [string]$Arguments) {
-    $eventName = "Local\Atrium.Update.$Kind.$suffix"
+    $eventName = "Local\Yunzhao.Update.$Kind.$suffix"
     $ready = New-Object System.Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, $eventName)
     try {
         $startedAt = (Get-Date).AddSeconds(-1)
@@ -116,7 +116,7 @@ function Start-Verified([string]$Executable, [string]$Kind, [string]$Arguments) 
             if (!(Test-AppControlBlock $_.Exception.Message)) { throw }
             # The release is not code-signed; each version's new files have no reputation yet.
             throw ("Windows 应用程序控制阻止了新版 $Kind 运行，已保留旧版本。新版文件没有代码签名，可能被智能应用控制或单位的应用控制策略拦截：" +
-                   "可在 Windows 安全中心 › 应用和浏览器控制 › 智能应用控制中查看；单位电脑请联系管理员放行 Atrium 所在目录。（$($_.Exception.Message.Trim())）")
+                   "可在 Windows 安全中心 › 应用和浏览器控制 › 智能应用控制中查看；单位电脑请联系管理员放行 Yunzhao 所在目录。（$($_.Exception.Message.Trim())）")
         }
         $started.Add($process)
         $until = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
@@ -173,7 +173,7 @@ try {
     Assert-TemporaryPath $backup
     foreach ($root in @($install, $package)) {
         if (!(Test-Path -LiteralPath (Join-Path $root 'Yunzhao.exe')) -or
-            !(Test-Path -LiteralPath (Join-Path $root 'Settings\Atrium.Settings.exe'))) { throw '找不到完整的 Atrium 程序文件。' }
+            !(Test-Path -LiteralPath (Join-Path $root 'Settings\Yunzhao.Settings.exe'))) { throw '找不到完整的 Yunzhao 程序文件。' }
     }
     # Copy before stopping the app; disk/access failures leave the old app running.
     New-Item -ItemType Directory -Path $incoming | Out-Null
@@ -186,7 +186,7 @@ try {
     if ($settingsProcess -and !$settingsProcess.WaitForExit(30000)) { throw '设置中心尚未退出，更新未安装。' }
     $quit = Start-Process -FilePath (Join-Path $install 'Yunzhao.exe') -ArgumentList '--exit' -WindowStyle Hidden -PassThru
     try {
-        if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Atrium 尚未正常退出，更新未安装。' }
+        if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Yunzhao 尚未正常退出，更新未安装。' }
     } finally { $quit.Dispose() }
     $coreStopped = $true
     Stop-InstallTree
@@ -209,7 +209,7 @@ try {
     $swapped = $true
     if ($StartCore -eq '1') { Start-Verified (Join-Path $install 'Yunzhao.exe') 'Core' '' }
     $settingsArguments = if ($StartCore -eq '1') { '--page about --require-core-ready' } else { '--page about' }
-    Start-Verified (Join-Path $install 'Settings\Atrium.Settings.exe') 'Settings' $settingsArguments
+    Start-Verified (Join-Path $install 'Settings\Yunzhao.Settings.exe') 'Settings' $settingsArguments
     foreach ($process in $started) {
         if ($process.HasExited) { throw '新版程序在启动确认期间退出。' }
     }
@@ -246,7 +246,7 @@ try {
         if ($coreStopped -and $StartCore -eq '1') {
             Start-Process -FilePath (Join-Path $install 'Yunzhao.exe') -WorkingDirectory $workingDirectory -WindowStyle Hidden
         }
-        Start-Process -FilePath (Join-Path $install 'Settings\Atrium.Settings.exe') -ArgumentList '--page about' -WorkingDirectory $workingDirectory -WindowStyle Hidden
+        Start-Process -FilePath (Join-Path $install 'Settings\Yunzhao.Settings.exe') -ArgumentList '--page about' -WorkingDirectory $workingDirectory -WindowStyle Hidden
     }
     if ($confirmed) {
         $work = $package

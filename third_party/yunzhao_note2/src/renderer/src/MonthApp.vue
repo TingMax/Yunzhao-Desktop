@@ -39,8 +39,8 @@ const props = defineProps({
   }
 })
 const isWeekView = computed(() => props.viewMode === VIEW_MODES.WEEK)
-const atriumShell = ref(false)
-const atriumLocked = ref(false)
+const yunzhaoShell = ref(false)
+const yunzhaoLocked = ref(false)
 const peekEdge = ref('')
 const peekBox = ref({ thick: 17, long: 151, radius: 6 })
 const peekStyle = computed(() => {
@@ -59,28 +59,28 @@ const peekStyle = computed(() => {
   return { inset: 'auto 0 0 0', height: thick, borderRadius: `0 0 ${radius} ${radius}` }
 })
 function expandPeek() {
-  void window.api?.atriumCommand?.({ cmd: 'expand' })
+  void window.api?.yunzhaoCommand?.({ cmd: 'expand' })
 }
 function hoverPeek(on) {
-  void window.api?.atriumCommand?.({ cmd: 'peek-hover', on })
+  void window.api?.yunzhaoCommand?.({ cmd: 'peek-hover', on })
 }
 const daySurface = new URLSearchParams(window.location.search).get('surface') === 'day'
 const dayKey = new URLSearchParams(window.location.search).get('date') || ''
 onMounted(() => {
   if (daySurface) return
-  void window.api?.atriumHosted?.().then((hosted) => {
-    atriumShell.value = Boolean(hosted)
+  void window.api?.yunzhaoHosted?.().then((hosted) => {
+    yunzhaoShell.value = Boolean(hosted)
     if (!hosted) return
     document.documentElement.style.background = 'transparent'
     document.body.style.background = 'transparent'
   })
-  void window.api?.atriumState?.().then((state) => {
-    atriumLocked.value = state?.lock === true
+  void window.api?.yunzhaoState?.().then((state) => {
+    yunzhaoLocked.value = state?.lock === true
   })
-  window.api?.onAtriumState?.((state) => {
-    atriumLocked.value = state?.lock === true
+  window.api?.onYunzhaoState?.((state) => {
+    yunzhaoLocked.value = state?.lock === true
   })
-  window.api?.onAtriumPeek?.((payload) => {
+  window.api?.onYunzhaoPeek?.((payload) => {
     peekEdge.value = payload?.edge || ''
     if (payload?.thick) {
       peekBox.value = {
@@ -251,9 +251,9 @@ function releaseSettingsBlur() {
   <div v-if="daySurface" class="month-root app-bg day-surface">
     <MonthWorkspace day-surface :day-key="dayKey" @ready="onCalendarWorkspaceReady" />
   </div>
-  <div v-else class="month-root app-bg" :class="{ 'is-week-view': isWeekView, 'atrium-shell': atriumShell, 'is-peek': peekEdge }">
+  <div v-else class="month-root app-bg" :class="{ 'is-week-view': isWeekView, 'yunzhao-shell': yunzhaoShell, 'is-peek': peekEdge }">
     <Transition name="month-wallpaper" v-bind="wallpaper.transitionHooks()">
-      <div v-if="wallpaperVisible && !atriumShell" :key="wallpaperRenderKey" class="month-wallpaper">
+      <div v-if="wallpaperVisible && !yunzhaoShell" :key="wallpaperRenderKey" class="month-wallpaper">
         <div
           class="month-wallpaper-image"
           :style="{
@@ -276,7 +276,7 @@ function releaseSettingsBlur() {
     >
       <span />
     </button>
-    <ResizeHandles v-show="!peekEdge" :locked="atriumShell ? atriumLocked : locked" :mode="presentationMode.displayMode.value" />
+    <ResizeHandles v-show="!peekEdge" :locked="yunzhaoShell ? yunzhaoLocked : locked" :mode="presentationMode.displayMode.value" />
     <WindowPresentation
       v-show="!peekEdge"
       :mode="presentationMode.mode.value"
@@ -451,13 +451,13 @@ function releaseSettingsBlur() {
 .month-root.day-surface {
   background: #f6f6f8;
 }
-.month-root.atrium-shell,
-.month-root.atrium-shell .month-scene {
+.month-root.yunzhao-shell,
+.month-root.yunzhao-shell .month-scene {
   border-radius: 8px;
   overflow: hidden;
   background: #f6f6f8;
 }
-.month-root.atrium-shell.is-peek {
+.month-root.yunzhao-shell.is-peek {
   background: transparent;
 }
 .calendar-peek {
@@ -588,58 +588,58 @@ function releaseSettingsBlur() {
 </style>
 
 <style>
-html[data-atrium-dock],
-html[data-atrium-dock] body {
+html[data-yunzhao-dock],
+html[data-yunzhao-dock] body {
   overflow: hidden;
   background: #f6f6f8;
 }
-html[data-atrium-dock] .month-root.atrium-shell,
-html[data-atrium-dock] .month-root.atrium-shell .month-scene {
-  width: var(--atrium-home-w);
-  height: var(--atrium-home-h);
+html[data-yunzhao-dock] .month-root.yunzhao-shell,
+html[data-yunzhao-dock] .month-root.yunzhao-shell .month-scene {
+  width: var(--yunzhao-home-w);
+  height: var(--yunzhao-home-h);
   min-width: 0;
   min-height: 0;
   max-width: none;
-  transform: translate3d(var(--atrium-shift-x, 0px), var(--atrium-shift-y, 0px), 0);
+  transform: translate3d(var(--yunzhao-shift-x, 0px), var(--yunzhao-shift-y, 0px), 0);
   border-radius: 0;
 }
-.month-root.atrium-shell .month-workspace__calendar-body {
+.month-root.yunzhao-shell .month-workspace__calendar-body {
   flex-direction: column;
   overflow: hidden;
 }
-.month-root.atrium-shell .month-grid {
+.month-root.yunzhao-shell .month-grid {
   width: 100%;
   min-width: 0;
   min-height: 0;
   height: 100%;
   --calendar-row-min-height: 0px;
 }
-.month-root.atrium-shell .month-grid__weeks {
+.month-root.yunzhao-shell .month-grid__weeks {
   grid-template-rows: repeat(var(--calendar-rows), minmax(0, 1fr));
 }
-.month-root.atrium-shell .month-toolbar {
+.month-root.yunzhao-shell .month-toolbar {
   min-height: 36rem;
   grid-template-areas: none;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   grid-template-rows: auto;
   row-gap: 0;
 }
-.month-root.atrium-shell .month-toolbar__leading,
-.month-root.atrium-shell .month-toolbar__navigation,
-.month-root.atrium-shell .month-toolbar__trailing {
+.month-root.yunzhao-shell .month-toolbar__leading,
+.month-root.yunzhao-shell .month-toolbar__navigation,
+.month-root.yunzhao-shell .month-toolbar__trailing {
   grid-area: auto;
 }
-.month-root.atrium-shell .month-week__events {
+.month-root.yunzhao-shell .month-week__events {
   top: 30rem;
   bottom: 16rem;
 }
-.month-root.atrium-shell .month-event-bar {
+.month-root.yunzhao-shell .month-event-bar {
   height: 16rem;
   font-size: calc(var(--fs-month-event) * 0.85);
   transform: translateY(calc(var(--event-lane) * 17rem));
 }
-.month-root.atrium-shell .month-day-cell,
-.month-root.atrium-shell .month-week {
+.month-root.yunzhao-shell .month-day-cell,
+.month-root.yunzhao-shell .month-week {
   min-height: 0;
   overflow: hidden;
 }

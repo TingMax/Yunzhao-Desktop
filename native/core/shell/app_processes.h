@@ -6,7 +6,7 @@
 #include <span>
 #include <string>
 
-namespace atrium {
+namespace yunzhao {
 
 struct AppProcessIdentity {
     std::wstring exePath;
@@ -17,4 +17,4 @@ struct AppProcessIdentity {
 bool CanTerminateApp(const AppProcessIdentity& app);
 bool TerminateAppProcesses(std::span<const AppProcessIdentity> apps);
 
-} // namespace atrium
+} // namespace yunzhao

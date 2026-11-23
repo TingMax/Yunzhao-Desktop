@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atrium {
+namespace yunzhao {
 
 namespace {
 
@@ -530,4 +530,4 @@ bool GlassRenderer::Present(const std::vector<GlassParams>& shapes, const std::f
     return hr != DXGI_ERROR_DEVICE_REMOVED && hr != DXGI_ERROR_DEVICE_RESET;
 }
 
-} // namespace atrium
+} // namespace yunzhao

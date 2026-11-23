@@ -11,7 +11,7 @@
 #include <thread>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 enum class BluetoothKind { Other, Headset, Gamepad, Keyboard, Mouse, Pen, Phone };
 
@@ -48,4 +48,4 @@ private:
 // The connected devices that report a battery, by name.
 std::vector<BluetoothBattery> ReadBluetoothBatteries();
 
-} // namespace atrium
+} // namespace yunzhao

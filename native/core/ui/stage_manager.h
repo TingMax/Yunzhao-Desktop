@@ -6,11 +6,11 @@
 // notification) changes the stage too.
 //
 // Waiting windows are minimized without activation: Windows' own state, so nothing is lost if
-// Atrium goes away. A minimized window has no picture, so one is taken just before
+// Yunzhao goes away. A minimized window has no picture, so one is taken just before
 // (ui/window_snapshot.h). The window then goes at once (its own minimize animation turned off) and
 // its picture flies from where it was into its place in the strip; picked there, the picture flies
-// back and the window comes up under it as it lands. Which windows Atrium put away is kept in %LOCALAPPDATA%\Yunzhao\stage.json,
-// so that a restart picks them up again; turning Stage Manager off or quitting Atrium brings them
+// back and the window comes up under it as it lands. Which windows Yunzhao put away is kept in %LOCALAPPDATA%\Yunzhao\stage.json,
+// so that a restart picks them up again; turning Stage Manager off or quitting Yunzhao brings them
 // all back.
 //
 // Only the selected desktop display is managed. Always shown, a window taking the stage over the
@@ -33,7 +33,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace atrium {
+namespace yunzhao {
 
 class StageManager {
 public:
@@ -193,4 +193,4 @@ private:
     ULONGLONG coveredAt_ = 0;
 };
 
-} // namespace atrium
+} // namespace yunzhao

@@ -2,7 +2,7 @@
 
 #include <windows.h>
 
-namespace atrium {
+namespace yunzhao {
 
 // Windows 11 is build 22000. Later checks keep the current Windows 11 path.
 inline bool Windows11()
