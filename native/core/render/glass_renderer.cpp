@@ -77,11 +77,10 @@ void GlassRenderer::Pop(bool open, float cx, float cy) { PopVisual(dcomp_.get(),
 GlassRenderer::GlassRenderer(const Gpu& gpu, HWND hwnd, int width, int height, bool topmost, bool overlay, bool alignedBackdrop)
     : gpu_(gpu), w_(width), h_(height), alignedBackdrop_(alignedBackdrop)
 {
-    // Ready() already waits on the frame-latency object until the previous frame
-    // has been taken for the screen. Present(1) would then block for another vsync,
-    // so magnification follows the pointer a beat late — especially on Windows 10,
-    // which has no DCompositionWaitForCompositorClock to align the wait.
-    sync_ = 0;
+    // Upstream pacing: Ready() takes the latency signal without waiting, then
+    // Present(1) blocks for the frame after it. Waiting on the latency object in
+    // the render loop instead (or here) deadlocks: see the wait in RenderSession.
+    sync_ = overlay ? 1 : 0; // the bar draws its content over the glass; a popup's content is its own
     auto* dev = gpu_.device.get();
     Check(dev->CreateVertexShader(g_GlassVS, sizeof(g_GlassVS), nullptr, vs_.put()));
     Check(dev->CreatePixelShader(g_GlassPS, sizeof(g_GlassPS), nullptr, ps_.put()));

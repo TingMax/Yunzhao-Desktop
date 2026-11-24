@@ -2473,6 +2473,8 @@ watch(
   right: 0;
   bottom: 0;
   left: auto;
+  /* Docked in the settings window this fills the surface; as a side sheet of the
+     calendar it keeps the 40% column. `hosted` marks the former. */
   width: 40%;
   min-width: min(300px, 100%);
   height: 100%;
@@ -2714,7 +2716,9 @@ watch(
   display: flex;
   flex-wrap: wrap;
   width: max-content;
-  min-width: min(136rem, 100%);
+  /* Was min(136rem, 100%): below 136rem the row stopped shrinking, so the settings
+     page looked frozen while the window kept getting smaller. It wraps instead. */
+  min-width: 0;
   max-width: 100%;
   flex-shrink: 0;
   gap: 2rem;

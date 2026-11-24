@@ -6,6 +6,9 @@ export function createMainTrayController({
   Tray,
   Menu,
   icon,
+  // Yunzhao starts this program as part of its own desktop and owns the only tray icon,
+  // so a second one would show the calendar as a separate app. Hosted means no tray.
+  trayEnabled = true,
   getShortcutsEnabled,
   getViewMode,
   getStickyCommands,
@@ -117,6 +120,7 @@ export function createMainTrayController({
   return Object.freeze({
     create() {
       if (disposed) throw new Error('托盘服务已退出')
+      if (!trayEnabled) return false // hosted by Yunzhao: its tray icon is the only one
       if (tray) return false
       try {
         images = createShortcutImages(icon)

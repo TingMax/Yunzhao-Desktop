@@ -69,13 +69,13 @@ IDWriteTextFormat* BarPainter::Format(float px, DWRITE_FONT_WEIGHT weight, const
     return f.get();
 }
 
-ID2D1Bitmap1* BarPainter::BitmapFor(ID2D1DeviceContext2* d2d, const std::shared_ptr<const IconImage>& image, uint64_t id)
+ID2D1Bitmap1* BarPainter::BitmapFor(ID2D1DeviceContext2* d2d, const SceneItem& item)
 {
-    if (!image || image->empty())
+    if (!item.image || item.image->empty())
         return nullptr;
-    auto& b = bitmaps_[id];
+    auto& b = bitmaps_[item.imageId];
     if (!b) {
-        const IconImage& img = *image;
+        const IconImage& img = *item.image;
         D2D1_BITMAP_PROPERTIES1 bp =
             D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
         d2d->CreateBitmap(D2D1::SizeU(UINT32(img.width), UINT32(img.height)), img.bgra.data(), UINT32(img.width * 4), &bp, b.put());
@@ -96,37 +96,18 @@ float WaveArea(float x)
     return x / 2 + std::sin(pi * x) / (2 * pi);
 }
 
-// Raised cosine over [-1, 1]: 1 under the pointer, 0 at the wave's edge.
-float Wave(float x)
-{
-    constexpr float pi = 3.14159265f;
-    if (x <= -1 || x >= 1)
-        return 0;
-    return 0.5f * (1 + std::cos(pi * x));
-}
-
 } // namespace
 
-// Displayed position of an application icon's base position u. Integrating the
-// local scale from the pointer keeps the point under the pointer fixed, so the
-// icon under the pointer is shown under it and its neighbours spread aside.
-// Only the app strip uses this: the tray, the status icon and the clock never move.
+// Displayed position of base position u. The local scale is 1 + (mag-1) *
+// amount * wave((t - centre) / range); integrating it from the pointer keeps
+// the point under the pointer fixed, so the icon under the pointer in the base
+// layout is the one shown under it, and the neighbours spread out like a wave.
 float BarPainter::MapX(float u) const
 {
-    const float k = (mag_ - 1) * amount_;
+    float k = (mag_ - 1) * amount_;
     if (k <= 0)
         return u;
     return u + k * range_ * WaveArea((u - centre_) / range_);
-}
-
-// One icon's own scale at base position x (1 = as is). This is the derivative of
-// MapX, so an icon is drawn exactly as wide as the wave spread it.
-float BarPainter::WaveGrow(float x) const
-{
-    const float k = (mag_ - 1) * amount_;
-    if (k <= 0)
-        return 1.f;
-    return 1.f + k * Wave((x - centre_) / range_);
 }
 
 bool BarPainter::Animate(const BarScene& scene, double nowMs)
@@ -162,10 +143,8 @@ bool BarPainter::Animate(const BarScene& scene, double nowMs)
     bool hovering = scene.pointerX >= 0 && scene.dragKey.empty() && scene.magnify > 1.001f;
     mag_ = std::max(1.f, scene.magnify);
     range_ = std::max(1.f, scene.magnifyRange);
-    if (hovering) {
-        moving |= centre_ != scene.pointerX;
+    if (hovering)
         centre_ = scene.pointerX;
-    }
     float amount = Approach(amount_, hovering ? 1.f : 0.f, dt, 13);
     moving |= amount != amount_;
     amount_ = amount;
@@ -312,11 +291,11 @@ bool BarPainter::Animate(const BarScene& scene, double nowMs)
     }
     frame_.slideY = slide_ * std::max(0.f, scene.windowH - scene.bar.top);
 
-    // What the glass shows this frame: the shape and the ripple. The shape does not
-    // stretch with the wave, so the right group keeps exactly its drawn place.
-    frame_.shape = D2D1::RectF(barL_, scene.bar.top + frame_.slideY, barR_, scene.bar.bottom + frame_.slideY);
+    // What the glass shows this frame: the stretched shape and the ripple.
+    frame_.shape = D2D1::RectF(MapX(barL_), scene.bar.top + frame_.slideY, MapX(barR_), scene.bar.bottom + frame_.slideY);
+    // Share the icons' wave and easing; its support widens with the stretched bar.
     frame_.waveX = centre_;
-    frame_.waveWidth = range_;
+    frame_.waveWidth = range_ * (1 + (mag_ - 1) * amount_ / 2);
     frame_.waveHeight = scene.magnifyLift * amount_;
     frame_.rippleA = 0;
     if (scene.rippleMs > 0) {
@@ -324,7 +303,7 @@ bool BarPainter::Animate(const BarScene& scene, double nowMs)
         double t = nowMs - scene.rippleMs;
         if (t >= 0 && t < kRippleMs) {
             float u = float(t / kRippleMs);
-            frame_.rippleX = scene.rippleX;
+            frame_.rippleX = MapX(scene.rippleX);
             frame_.rippleY = scene.rippleY + frame_.slideY;
             frame_.rippleR = (scene.bar.bottom - scene.bar.top) * 1.5f * motion::EaseOut(u);
             frame_.rippleA = 0.9f * (1 - u) * (1 - u);
@@ -442,14 +421,16 @@ void BarPainter::DrawContent(ID2D1DeviceContext2* d2d, const BarScene& scene, In
         D2D1_COLOR_F c = inkFor(darkText);
         c.a = 0.30f + (0.18f - 0.30f) * darkText;
         brush->SetColor(c);
-        float h = (scene.bar.bottom - scene.bar.top) * 0.46f, mid = (scene.bar.top + scene.bar.bottom) / 2, x = sepX_;
+        float h = (scene.bar.bottom - scene.bar.top) * 0.46f, mid = (scene.bar.top + scene.bar.bottom) / 2, x = MapX(sepX_);
         d2d->FillRectangle(D2D1::RectF(x - 0.5f * s, mid - h / 2, x + 0.5f * s, mid + h / 2), brush.get());
     }
 
     if (scene.clock.right > scene.clock.left) {
         const Motion& m = motion_[L"#clock"];
         ink = inkFor(darkText);
-        // The clock does not grow or move with the wave; only its hover plate reacts.
+        // The clock does not grow; it moves with the stretched bar.
+        float shift = MapX(clockX_) - (scene.clock.left + scene.clock.right) / 2;
+        d2d->SetTransform(D2D1::Matrix3x2F::Translation(shift, 0));
         if (m.hover > 0.001f) {
             D2D1_COLOR_F c = washFor(darkText);
             c.a *= motion::EaseOut(m.hover);
@@ -479,11 +460,7 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
 {
     const float s = scene.scale;
     const Motion& m = motion_[it.key];
-    // Every entry reacts to the pointer. Only application icons grow; the tray,
-    // the volume/status icon, the logo and the overflow button get the plate wash
-    // instead, so they respond without moving (as on the system taskbar).
-    const bool isApp = !it.key.empty() && it.key.front() != L'#';
-    const bool magnifying = mag_ > 1.001f && isApp;
+    const bool magnifying = mag_ > 1.001f;
     // Base position: everything of the item slides with its plate (reordering,
     // drag and drop). Displayed position: the base one under the magnification.
     float dx = m.placed ? m.x - (it.plate.left + it.plate.right) / 2 : 0;
@@ -491,16 +468,13 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
     D2D1_RECT_F icon = D2D1::RectF(it.icon.left + dx, it.icon.top, it.icon.right + dx, it.icon.bottom);
     float size = icon.right - icon.left;
     float bx = (icon.left + icon.right) / 2, bottom = icon.bottom;
-    float grow = magnifying ? WaveGrow(bx) : 1.f; // this icon's own scale
-    // Application icons spread with the wave; every other entry keeps its place.
-    float cx = isApp ? MapX(bx) : bx;
+    float pw = std::max(1.f, plate.right - plate.left);
+    float grow = (MapX(bx + pw / 2) - MapX(bx - pw / 2)) / pw; // local magnification
+    float cx = MapX(bx);
     float hover = motion::EaseOut(m.hover), lift = motion::EaseOut(m.lift);
-    // A still icon uses its resting bitmap; a reduced one (a neighbour of the
-    // wave shrinking back) uses it too, so nothing is a downscaled big bitmap.
-    const bool useRestBitmap = grow < 1.005f;
 
-    // 底板响应悬停和拖动。被放大到更大的图标不需要底板（它会跟着一起放大）；
-    // 其余入口（托盘、状态、开始、更多）没有放大，靠底板表示悬停。
+    // 底板仅响应悬停（关闭放大时）和拖动，按下仅缩放图标。
+    // Its corners are concentric with the bar's.
     float plateA = (magnifying ? 0.f : hover) + 0.4f * lift;
     if (plateA > 0.001f) {
         D2D1_COLOR_F c = wash;
@@ -533,8 +507,8 @@ void BarPainter::DrawItem(ID2D1DeviceContext2* d2d, const BarScene& scene, const
             brush->SetColor(ink);
             d2d->DrawText(it.glyph.c_str(), UINT32(it.glyph.size()), f, icon, brush);
         }
-    } else if (ID2D1Bitmap1* bmp = BitmapFor(d2d, useRestBitmap ? it.imageRest : it.image, useRestBitmap ? it.imageRestId : it.imageId)) {
-        usedBitmaps_.push_back(useRestBitmap ? it.imageRestId : it.imageId);
+    } else if (ID2D1Bitmap1* bmp = BitmapFor(d2d, it)) {
+        usedBitmaps_.push_back(it.imageId);
         shadow_->SetInput(0, bmp);
         shadow_->SetValue(D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, (1.6f + 1.6f * lift + 1.2f * m.hop) * s);
         shadow_->SetValue(D2D1_SHADOW_PROP_COLOR, D2D1::Vector4F(0, 0, 0, (0.38f + 0.12f * lift) * m.appear));

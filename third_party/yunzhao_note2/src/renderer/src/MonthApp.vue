@@ -150,6 +150,27 @@ const {
 } = notices
 
 const showSettings = ref(false)
+
+// Pull the account's data from the server again. The window reloads afterwards, so
+// the spinner keeps going until the reload starts rather than stopping early on a
+// machine that answers quickly.
+const pullingData = ref(false)
+const pullFailed = ref(false)
+const pullData = async () => {
+  if (pullingData.value) return
+  pullingData.value = true
+  pullFailed.value = false
+  try {
+    const result = await window.api.pullCloudNow()
+    if (result?.ok === false) throw new Error(result.error || '拉取失败')
+  } catch (error) {
+    pullFailed.value = true
+    console.warn('[MonthApp] 刷新数据失败:', error)
+    setTimeout(() => { pullFailed.value = false }, 2400)
+  } finally {
+    setTimeout(() => { pullingData.value = false }, 1200)
+  }
+}
 const reportQueue = useModalRequest()
 const showDailyReportDialog = reportQueue.requested
 const almanacQueue = useModalRequest()
@@ -330,6 +351,24 @@ function releaseSettingsBlur() {
               <AppIcon class="btn-icon" name="recurrence" alt="循环模板" />
             </button>
             <button
+              class="titlebar-btn titlebar-btn-refresh month-titlebar-btn"
+              :class="{ 'is-pulling': pullingData, 'is-failed': pullFailed }"
+              :title="pullFailed ? '刷新失败，请稍后重试' : pullingData ? '正在从服务器刷新数据' : '从服务器刷新数据'"
+              :disabled="pullingData"
+              @click="pullData"
+            >
+              <svg class="btn-icon refresh-glyph" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M21 12a9 9 0 1 1-2.6-6.3M21 3v6h-6"
+                />
+              </svg>
+            </button>
+            <button
               class="titlebar-btn titlebar-btn-settings month-titlebar-btn"
               title="设置"
               @click="openSettings"
@@ -456,6 +495,31 @@ function releaseSettingsBlur() {
   height: 100vh;
   overflow: hidden;
   border-radius: var(--window-radius);
+}
+
+/* 从服务器刷新数据：点击后图标转圈，失败时变红。 */
+.titlebar-btn-refresh .refresh-glyph {
+  color: inherit;
+}
+
+.titlebar-btn-refresh.is-pulling .refresh-glyph {
+  animation: month-refresh-spin 900ms linear infinite;
+}
+
+.titlebar-btn-refresh.is-failed {
+  color: #ff453a;
+}
+
+@keyframes month-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .titlebar-btn-refresh.is-pulling .refresh-glyph {
+    animation-duration: 2s;
+  }
 }
 
 .month-root.day-surface {

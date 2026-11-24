@@ -66,8 +66,23 @@ async function writeSession(data) {
   writeFileSync(sessionPath(), sealed)
 }
 
+// Every request carries a deadline: without one a blocked network left the calendar
+// spinning on its loading overlay forever, which is what happened on a machine whose
+// route to the server was interrupted.
+const REQUEST_TIMEOUT_MS = 15000
+
+async function request(url, options = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function refresh(session) {
-  const response = await fetch(`${HOST}/api/auth/refresh`, {
+  const response = await request(`${HOST}/api/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh_token: session.refresh_token })
@@ -85,7 +100,7 @@ async function refresh(session) {
 
 async function send(session, method, path, payload) {
   const once = () =>
-    fetch(HOST + path, {
+    request(HOST + path, {
       method,
       headers: {
         'Content-Type': 'application/json',
@@ -227,12 +242,15 @@ export async function pullPending() {
   return existsSync(join(accountDir(session.id), 'pull-notes.once'))
 }
 
-export async function pullCloudNow() {
+// `force` ignores the once-per-start flag: the titlebar's refresh asks for the
+// server's copy again on demand, which is the only way to recover data that a
+// machine missed while it was offline.
+export async function pullCloudNow({ force = false } = {}) {
   const db = getDb()
   const session = await readSession()
   if (!db || !session) return false
   const flag = join(accountDir(session.id), 'pull-notes.once')
-  if (!existsSync(flag)) return false
+  if (!force && !existsSync(flag)) return false
   const listed = await send(session, 'GET', '/items?kind=notes&limit=1')
   if (!listed.ok) return false
   const page = await listed.json()

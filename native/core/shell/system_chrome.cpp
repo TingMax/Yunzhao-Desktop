@@ -276,32 +276,15 @@ void SystemChrome::RehideTaskbars()
     HideTaskbars();
 }
 
+// A hidden taskbar is switched off, never moved. SetWindowPos makes Explorer
+// re-lay out the whole bar (work area, notification area) across processes, and
+// run once a second it pushes mouse input behind it: the bar then follows the
+// pointer a beat late. Original upstream behaviour, cheap and stable.
 void SystemChrome::HideTaskbars()
 {
-    for (HWND w : Taskbars()) {
-        if (!IsWindow(w))
-            continue;
-        RECT r{};
-        HMONITOR mon = MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi{sizeof(mi)};
-        if (!GetWindowRect(w, &r) || !GetMonitorInfoW(mon, &mi)) {
+    for (HWND w : Taskbars())
+        if (IsWindowVisible(w))
             ShowWindow(w, SW_HIDE);
-            continue;
-        }
-        // Windows 10 slides an auto-hidden taskbar back on screen when the pointer
-        // hits the edge, and that slide often never sends a show event. If any of
-        // it is on the monitor, park it just past the far edge and hide it.
-        const bool onScreen = r.bottom > mi.rcMonitor.top && r.top < mi.rcMonitor.bottom && r.right > mi.rcMonitor.left &&
-                              r.left < mi.rcMonitor.right;
-        if (!onScreen)
-            continue;
-        const int width = std::max(1L, r.right - r.left);
-        const int height = std::max(1L, r.bottom - r.top);
-        // Keep the window alive and off the monitor. Hiding it removes the notification
-        // icons with it, so a program closed to the tray has nowhere to go.
-        SetWindowPos(w, HWND_BOTTOM, r.left, mi.rcMonitor.bottom + height, width, height,
-                     SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
-    }
 }
 
 void SystemChrome::Watch()
@@ -314,16 +297,18 @@ void SystemChrome::Watch()
         return;
     if (hook_)
         UnhookWinEvent(hook_);
-    // SHOW only. LOCATIONCHANGE fires for every pixel of Explorer's slide and
-    // SetWindowPos on the system taskbar then stalls the whole desktop.
+    // SHOW only. LOCATIONCHANGE fires for every pixel of Explorer's slide, which
+    // would turn into a storm of hide calls.
     hook_ = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, nullptr, OnShow, pid, 0, WINEVENT_OUTOFCONTEXT);
     hookedPid_ = hook_ ? pid : 0;
 }
 
 void CALLBACK SystemChrome::OnShow(HWINEVENTHOOK, DWORD, HWND w, LONG obj, LONG, DWORD, DWORD)
 {
-    if (obj == OBJID_WINDOW && g_chrome && g_chrome->taskbarHidden_ && w && IsTaskbar(w))
-        g_chrome->HideTaskbars();
+    if (obj == OBJID_WINDOW && g_chrome && g_chrome->taskbarHidden_ && w && IsTaskbar(w) && IsWindowVisible(w)) {
+        ShowWindow(w, SW_HIDE);
+        Log(L"chrome: Explorer showed its taskbar; hidden again");
+    }
 }
 
 void SystemChrome::Save() const

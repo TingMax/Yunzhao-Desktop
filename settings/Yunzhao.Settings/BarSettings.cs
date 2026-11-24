@@ -86,7 +86,7 @@ internal sealed class BarSettings
     public double IslandWidth { get; set; } = 180;
     public double IslandHeight { get; set; } = 40;
     public string IslandText { get; set; } = "";
-    public bool HideTaskbar { get; set; }              // the system taskbar is hidden while Yunzhao runs
+    public bool HideTaskbar { get; set; } = true;      // the system taskbar is hidden while Yunzhao runs
     public bool HideBanners { get; set; }              // Do Not Disturb: no system banners, notifications still become cards
     public bool WinKeyStart { get; set; }              // the Windows key alone opens Yunzhao's start menu
     public bool WinNumbers { get; set; }               // Win + 1..9, 0 open the bar's apps

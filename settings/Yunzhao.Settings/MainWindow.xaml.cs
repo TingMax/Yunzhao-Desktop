@@ -757,11 +757,15 @@ public sealed partial class MainWindow : Window
         bool ready = _preparedRelease != null;
         bool transferring = _transferStatus != null && !ready;
         bool offer = ready || transferring || HasNewerRelease();
-        CheckUpdateButton.Content = ready ? "点击安装" : transferring && _transferStatus!.CanRetry ? "重试" : transferring ? "正在下载" : offer ? "点击安装" : "检查更新";
+        // A failed transfer retries from the manifest again: the package it was
+        // fetching may have been replaced on the server since (404 on resume).
+        bool retry = transferring && _transferStatus!.CanRetry;
+        CheckUpdateButton.Content = ready ? "点击安装" : retry ? "重新下载" : transferring ? "正在下载" : offer ? "点击安装" : "检查更新";
         CheckUpdateButton.IsEnabled = _updateCheck == null && !_queueingDownload && !(transferring && !_transferStatus!.CanRetry);
         UpdateAvailableButton.Visibility = offer ? Visibility.Visible : Visibility.Collapsed;
         if (!string.IsNullOrEmpty(_updateError)) UpdateStatus.Text = _updateError;
         else if (ready) UpdateStatus.Text = "新版本已准备好，点击安装";
+        else if (retry) UpdateStatus.Text = _transferStatus!.Text + "，点击重新下载";
         else if (transferring) UpdateStatus.Text = _transferStatus!.Text;
         else if (offer) UpdateStatus.Text = $"发现新版本 {_latestRelease!.Version.ToString(3)}，点击安装开始下载";
     }
@@ -844,6 +848,13 @@ public sealed partial class MainWindow : Window
             await CloseRequestedAsync();
             return;
         }
+        // A failed transfer restarts from the manifest: the package it was
+        // fetching may already be gone from the server (its zip was replaced).
+        if (_transferStatus is { CanRetry: true })
+        {
+            await CheckForUpdatesAsync(startDownload: true);
+            return;
+        }
         if (_latestRelease?.Download == null && _transferStatus == null) return;
         await QueueDownloadAsync(_latestRelease);
     }
@@ -857,10 +868,10 @@ public sealed partial class MainWindow : Window
             OnInstallRelease(sender, e);
             return;
         }
-        await CheckForUpdatesAsync();
+        await CheckForUpdatesAsync(startDownload: true);
     }
 
-    private async Task CheckForUpdatesAsync()
+    private async Task CheckForUpdatesAsync(bool startDownload = false)
     {
         if (_updateCheck != null) return;
         _updateError = null;
@@ -891,6 +902,9 @@ public sealed partial class MainWindow : Window
                 return;
             }
             ShowInstallAction();
+            // A retry of a failed transfer goes straight on to downloading the
+            // package the manifest now names, instead of asking again.
+            if (startDownload && _latestRelease?.Download != null) QueueDownloadAsync(_latestRelease);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException
             or JsonException or FormatException or InvalidOperationException or KeyNotFoundException or IOException or UnauthorizedAccessException)

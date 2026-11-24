@@ -182,8 +182,7 @@ private:
     bool filterTasks_ = false;
     bool layoutPending_ = false; // coalesce window-move events
     bool coverPending_ = false; // a look at what covers the monitor is due (kCoverTimer)
-    std::map<std::wstring, CachedIcon> icons_;     // at the magnified size
-    std::map<std::wstring, CachedIcon> iconsRest_; // at the resting size (drawn when not grown)
+    std::map<std::wstring, CachedIcon> icons_;
     uint64_t nextIconId_ = 1;
     BarScene scene_;
     std::vector<Hit> hits_;
@@ -225,6 +224,7 @@ private:
     bool covered_ = false, revealed_ = false, tucked_ = false, slidOut_ = false;
     ULONGLONG leftAt_ = 0; // when the pointer left a revealed bar
     ULONGLONG revealAt_ = 0; // when the pointer arrived at the bottom edge
+    ULONGLONG revealLogged_ = 0; // last "held away" log, so a stuck full-screen report is not spammed
     std::map<HWND, std::pair<int, ULONGLONG>> raises_; // windows we were raised over: count, first time
     HWND lastCover_ = nullptr;
     ULONGLONG yieldUntil_ = 0; // a game is taking the screen; do not raise or reveal until then

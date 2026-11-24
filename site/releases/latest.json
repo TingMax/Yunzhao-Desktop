@@ -1,9 +1,9 @@
 {
-  "version": "2.6.15",
-  "tag": "v2.6.15",
+  "version": "2.6.27",
+  "tag": "v2.6.27",
   "channel": "main",
   "page": "https://yunzhao-desktop.com/",
-  "name": "Yunzhao-2.6.15-win-x64.zip",
-  "url": "https://yunzhao-desktop.com/releases/Yunzhao-2.6.15-win-x64.zip",
-  "digest": "sha256:a85cfe44e49af306d0a768411c7bae5ffe23b0fa35ce892b27b1731c234b4f8c"
+  "name": "Yunzhao-2.6.27-win-x64.zip",
+  "url": "https://yunzhao-desktop.com/releases/Yunzhao-2.6.27-win-x64.zip",
+  "digest": "sha256:fffa74ff7ed9d0321ebc619cb9d059ccc261324fefd9fc1aec193536bd0ef9ec"
 }

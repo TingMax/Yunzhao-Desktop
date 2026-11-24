@@ -93,7 +93,9 @@ struct Settings {
     double islandHeight = 40;
     std::wstring islandText;         // empty shows the clock
     // Windows' own shell (shell/system_chrome.h): put back when turned off or on exit.
-    bool hideTaskbar = false;        // the system taskbar is hidden while Yunzhao runs
+    // On by default: two taskbars overlap and neither is usable, so starting Yunzhao
+    // takes the system one away (its auto-hide state is recorded and restored on exit).
+    bool hideTaskbar = true;         // the system taskbar is hidden while Yunzhao runs
     bool hideBanners = false;        // Do Not Disturb: no system banners, the notifications still become cards
     bool winKeyStart = false;        // the Windows key alone opens Yunzhao's start menu instead of Windows'
     bool winNumbers = false;         // Win + 1..9, 0 open the bar's apps

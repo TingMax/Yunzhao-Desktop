@@ -99,7 +99,6 @@ public:
     // taken it holds until Present); the render thread draws a surface only when it is ready,
     // so it never waits for one surface while others have frames to draw.
     bool Ready();
-    HANDLE Waitable() const { return waitable_; }
     ID2D1DeviceContext2* D2D() const { return d2d_.get(); }
     IDWriteFactory3* DWrite() const { return dwrite_.get(); }
 
@@ -154,8 +153,8 @@ private:
     winrt::com_ptr<ID3D11Texture2D> roi_, presented_;
     winrt::com_ptr<ID3D11ShaderResourceView> roiSrv_, presentedSrv_;
     bool hasPresented_ = false;
-    // Always 0: pacing is Ready()'s frame-latency waitable, not Present(1).
-    UINT sync_ = 0;
+    // Always overlay-paced: pacing is the frame-latency waitable plus Present(sync_).
+    UINT sync_ = 1;
     bool hasBackdrop_ = false;
     HANDLE waitable_ = nullptr;
     bool ready_ = false;

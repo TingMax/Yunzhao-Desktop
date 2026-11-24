@@ -13,11 +13,8 @@
 #include <psapi.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
-#include <timeapi.h>
 #include <windowsx.h>
 #include <winrt/Windows.Foundation.h>
-
-#pragma comment(lib, "winmm.lib")
 
 #include <algorithm>
 #include <atomic>
@@ -516,10 +513,7 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                     SetTimer(h, kTooltipTimer, quick ? kPreviewSwapMs : kTooltipDelayMs, nullptr);
             }
             scene_.pointerX = float(pt.x);
-            // Hover / magnify tracking never bumps the layout generation: a fresh desktop
-            // copy and mip chain on every move (or every icon crossed) is what makes the
-            // magnification wave feel a beat late, especially on Win10.
-            Publish(false);
+            Publish();
         }
         return 0;
     }
@@ -1100,11 +1094,9 @@ void Bar::Relayout()
     const int appsLeft = appsMin + std::max(0, (rightLeft - 2 * groupGap - appsMin - appsW) / 2);
     scene.extras.push_back(entry(kStartKey, startLeft, L""));
     hits_.push_back({kStartKey, RECT{insetX, hitTop, appsMin - gap / 2, hitBottom}});
-    // Icons are rendered for their magnified size, so they stay sharp when they grow;
-    // the resting size is kept too, so a still icon is not a downscaled big bitmap.
+    // Icons are rendered for their magnified size, so they stay sharp when they grow.
     const int iconPx = int(std::lround(float(icon) * mag));
-    const int iconPxRest = icon;
-    std::map<std::wstring, CachedIcon> keep, keepRest;
+    std::map<std::wstring, CachedIcon> keep;
     for (int k = 0; k < n; ++k) {
         const int i = order[size_t(k)];
         const TaskItem& t = items_[size_t(i)];
@@ -1136,20 +1128,6 @@ void Bar::Relayout()
             it.imageId = c.id;
             keep[t.key] = c;
         }
-        if (iconProvider && iconPxRest != iconPx) {
-            if (auto f = iconsRest_.find(t.key); f != iconsRest_.end() && f->second.version == t.iconVersion && f->second.px == iconPxRest && f->second.image)
-                c = f->second;
-            else {
-                IconImage img = iconProvider(t.key, iconPxRest);
-                if (!img.empty())
-                    c = {t.iconVersion, iconPxRest, nextIconId_++, std::make_shared<const IconImage>(std::move(img))};
-            }
-            if (c.image) {
-                it.imageRest = c.image;
-                it.imageRestId = c.id;
-                keepRest[t.key] = c;
-            }
-        }
         scene.items.push_back(std::move(it));
         // Hit cells split the gaps; the last one reaches the separator.
         int hl = k == 0 ? appsMin - gap / 2 : appsLeft + k * pitch - gap / 2;
@@ -1162,7 +1140,6 @@ void Bar::Relayout()
         hits_.push_back({kMoreKey, RECT{n ? left - gap / 2 : appsMin - gap / 2, hitTop, rightLeft - groupGap, hitBottom}});
     }
     icons_ = std::move(keep);
-    iconsRest_ = std::move(keepRest);
     appsLeft_ = appsLeft;
     pitch_ = pitch;
     plate_ = plate;
@@ -1371,8 +1348,16 @@ void Bar::UpdateCover()
     // Apply the hide mode independently on each display.
     const std::wstring& mode = settings_.autoHide;
     bool covered = mode == L"always" || (mode != L"never" && MonitorCoveredByApp());
-    if (covered == covered_)
+    if (covered == covered_) {
+        // Same state, but the poll can be gone (a window move, a display change, a
+        // message loop restart). Re-arming it here is what keeps a hidden bar able to
+        // come back; earlier this returned early and the bar stayed hidden until restart.
+        if (covered_)
+            SetTimer(input_, kPointerTimer, kPointerMs, nullptr);
+        else
+            KillTimer(input_, kPointerTimer);
         return;
+    }
     covered_ = covered;
     // Maximizing with the pointer on the bar keeps it up until the pointer leaves.
     POINT p{};
@@ -1434,15 +1419,31 @@ void Bar::WatchPointer()
     if (!revealed_) {
         // The bar is hidden, so the pointer has to rest on this screen's bottom strip, not on a
         // two-pixel line. A two-pixel line cannot be held for the reveal delay.
-        const int band = std::max(int(std::lround(48 * scale_)), int(scene_.bar.bottom - scene_.bar.top));
         MONITORINFO hot{sizeof(hot)};
         GetMonitorInfoW(hmonitor_, &hot);
+        // A stale or failed scale would make the strip unusably thin, which is exactly
+        // how a bar becomes impossible to bring back on an unfamiliar machine. Clamp it.
+        const float sc = scale_ > 0.25f && scale_ < 8.f ? scale_ : 1.f;
+        const int barH = int(scene_.bar.bottom - scene_.bar.top);
+        const int band = std::max(96, std::max(int(std::lround(64 * sc)), barH + int(std::lround(32 * sc))));
         // The pointer on Windows 10 often cannot cross into a hidden taskbar's
-        // strip, so the work area's own bottom edge has to count as well.
-        const bool onScreen = p.x >= monitor_.left && p.x < monitor_.right;
-        const bool atBottom = onScreen && ((p.y >= monitor_.bottom - band && p.y < monitor_.bottom) ||
-                                           (p.y >= hot.rcWork.bottom - band && p.y < hot.rcWork.bottom));
-        if (atBottom && !FullScreenInFront(hmonitor_) && now >= yieldUntil_) {
+        // strip, so the work area's own bottom edge has to count as well. The monitor
+        // rectangle from the last layout can be stale (a resolution change, a moved
+        // display), so the live one is asked for here.
+        const RECT& m = hot.rcMonitor;
+        const bool onScreen = p.x >= m.left && p.x < m.right;
+        const bool nearBottom = p.y >= m.bottom - band || p.y >= hot.rcWork.bottom - band;
+        const bool atBottom = onScreen && nearBottom;
+        // With auto-hide "always" the user asked for this bar, so a full-screen report
+        // (a game, a browser in fullscreen, a stale UIA answer) must not lock it away.
+        const bool allowReveal = settings_.autoHide == L"always" || !FullScreenInFront(hmonitor_);
+        // A bar that cannot be brought back is unrecoverable for the user, so the decision
+        // is logged (rate-limited) whenever the pointer rests on the strip but nothing happens.
+        if (atBottom && !allowReveal && now - revealLogged_ > 5000) {
+            revealLogged_ = now;
+            Log(L"bar: pointer at the edge (%ld,%ld) but a full-screen window holds the bar away", p.x, p.y);
+        }
+        if (atBottom && allowReveal && now >= yieldUntil_) {
             if (!revealAt_)
                 revealAt_ = now;
             else if (now - revealAt_ >= revealMs) {
@@ -1818,9 +1819,6 @@ void Bar::SetOwnWindowsDdaExclusion(bool exclude)
 void Bar::RenderThread()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    // Without this, WaitForMultipleObjects timeouts round up to ~15.6 ms on Windows 10,
-    // so magnification behind the pointer feels late when the compositor clock is absent.
-    timeBeginPeriod(1);
     while (WaitForSingleObject(quit_, 0) == WAIT_TIMEOUT) {
         bool rebuild = false;
         try {
@@ -1832,7 +1830,6 @@ void Bar::RenderThread()
         if (!rebuild || WaitForSingleObject(quit_, 1000) != WAIT_TIMEOUT)
             break;
     }
-    timeEndPeriod(1);
     winrt::uninit_apartment();
 }
 
@@ -1923,8 +1920,7 @@ bool Bar::RenderSession()
     BarPainter painter(renderer.D2D(), renderer.DWrite());
 
     unsigned drawnGeneration = 0;
-    std::wstring drawnText, drawnHoverKey;
-    float drawnPointerX = -2; // not equal to any real pointer; forces the first follow
+    std::wstring drawnText;
     bool darkClock = false, darkApps = false, drawnDark = false, drawnDarkIcons = false, animating = false;
     InkFade clockInk, appsInk; // the inks fade to a new colour, not switch
     Readback dotBackdrop; // newest completed luminance grid, reused while the desktop is still
@@ -2060,9 +2056,16 @@ bool Bar::RenderSession()
         bool offMonitor = std::any_of(snap.panels.begin(), snap.panels.end(), [&](const GlassPanel& p) {
             return !p.desktop && p.visible && MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST) != captureMonitor;
         });
-        std::wstring backdropMode = widgets ? snap.settings.widgetBackdrop : std::wstring(L"off");
-        if (offMonitor && (backdropMode.empty() || backdropMode == L"off"))
+        // A panel on a monitor this session cannot capture needs the desktop picture too,
+        // and so does the visible bar: it must not sample a frame that contains itself.
+        // Both call sites below must agree on the mode — alternating "off"/"desktop"
+        // tore the wallpaper worker down and rebuilt it on every single frame.
+        const bool needDesktop = widgets || offMonitor || snap.visible;
+        std::wstring backdropMode = needDesktop ? snap.settings.widgetBackdrop : std::wstring();
+        if (needDesktop && (backdropMode.empty() || backdropMode == L"off"))
             backdropMode = L"desktop";
+        if (!needDesktop)
+            backdropMode = L"off";
         desktop.Update(backdropMode);
         deskMode = backdropMode;
         deskLive = desktop.Texture() != nullptr;
@@ -2340,31 +2343,26 @@ bool Bar::RenderSession()
         // Animations, and glass owed a frame (not Ready last time), run on the compositor's
         // clock (D45): one wake-up per composed frame, at the display's rate. A timeout would
         // be rounded up to 15.6 ms, and the popups' latency objects (no vsync) would spin.
-        // Pending readbacks are polled soon. When the bar owes a frame, also wait on its
-        // latency object so Win10 (no compositor clock) presents the latest pointer ASAP.
+        // Pending readbacks are polled soon.
         bool owed = barOwed || std::any_of(panels.begin(), panels.end(), [](const auto& e) { return e.second.owed; });
         bool paced = animating || panelsMoving || owed;
         bool readback = renderer.ReadbackPending() || std::any_of(panels.begin(), panels.end(), [](const auto& e) {
             return e.second.renderer && e.second.renderer->ReadbackPending();
         });
-        HANDLE waitSet[4] = {handles[0], handles[1], handles[2], nullptr};
-        DWORD waitCount = 3;
-        if (barOwed && renderer.Waitable()) {
-            waitSet[waitCount++] = renderer.Waitable();
-        }
+        // Never wait on the swap chain's latency object here: it is auto-reset, so
+        // consuming its signal leaves Ready() false, nothing presents, and the bar
+        // freezes while still accepting clicks.
         DWORD w = WAIT_FAILED;
         if (paced && g_waitClock) {
-            w = g_waitClock(waitCount, waitSet, 100);
-            if (w == WAIT_OBJECT_0 + waitCount || w == WAIT_TIMEOUT) {
+            w = g_waitClock(3, handles, 100);
+            if (w == WAIT_OBJECT_0 + 3 || w == WAIT_TIMEOUT) {
                 ++tick;
-            } else if (w > WAIT_OBJECT_0 + waitCount) {
-                w = WaitForMultipleObjects(waitCount, waitSet, FALSE, 6); // no clock (the display is off)
+            } else if (w > WAIT_OBJECT_0 + 3) {
+                w = WaitForMultipleObjects(3, handles, FALSE, 6); // no clock (the display is off)
                 ++tick;
             }
         } else {
-            // Win10: no compositor clock. Keep the timeout short while following the pointer
-            // so WaitForMultipleObjects does not round up toward the 15.6 ms timer quantum.
-            w = WaitForMultipleObjects(waitCount, waitSet, FALSE, paced ? 4 : readback ? 3 : 1000);
+            w = WaitForMultipleObjects(3, handles, FALSE, paced ? 6 : readback ? 3 : 1000);
             ++tick;
         }
         if (w == WAIT_OBJECT_0)
@@ -2398,57 +2396,6 @@ bool Bar::RenderSession()
         {
             std::lock_guard g(lock_);
             snap = snapshot_;
-        }
-        // Pointer / hover follow only: skip Desktop Duplication, panels and backdrop copy.
-        // Those steps were dominating the gap between WM_MOUSEMOVE and the drawn wave on Win10.
-        const bool pointerFollowOnly = renderer.HasPresented() && snap.generation == drawnGeneration && snap.visible &&
-                                       snap.panels.empty() && !panelsMoving &&
-                                       (snap.scene.pointerX != drawnPointerX || snap.scene.hoverKey != drawnHoverKey);
-        if (pointerFollowOnly) {
-            std::wstring time, date;
-            if (snap.settings.showClock)
-                ClockStrings(time, date);
-            const double nowMs = ClockMs();
-            animating = painter.Animate(snap.scene, nowMs);
-            animating |= painter.UpdateDotInk(snap.scene, dotBackdrop, snap.settings, nowMs);
-            animating |= clockInk.Moving(nowMs) || appsInk.Moving(nowMs);
-            const Ink inks{clockInk.Value(nowMs), appsInk.Value(nowMs)};
-            if (!renderer.Ready()) {
-                barOwed = true;
-                continue;
-            }
-            barOwed = false;
-            GlassParams params = ParamsFor(snap.settings, snap.scale);
-            const BarFrame& bf = painter.Frame();
-            params.radius = std::min(params.radius, (bf.shape.bottom - bf.shape.top) / 2);
-            params.shapeL = bf.shape.left;
-            params.shapeT = bf.shape.top;
-            params.shapeR = bf.shape.right;
-            params.shapeB = bf.shape.bottom;
-            params.rippleX = bf.rippleX;
-            params.rippleY = bf.rippleY;
-            params.rippleR = bf.rippleR;
-            params.rippleA = bf.rippleA;
-            params.waveX = bf.waveX;
-            params.waveWidth = bf.waveWidth;
-            params.waveHeight = bf.waveHeight;
-            const bool pointerMoved = true;
-            bool ok = renderer.Present(params, [&](ID2D1DeviceContext2* d2d) {
-                painter.Draw(d2d, snap.scene, inks, time, date,
-                             std::to_wstring(snap.generation) + time + L"|" + date + (drawnDark ? L"d" : L"l") + (drawnDarkIcons ? L"d" : L"l"),
-                             animating || pointerMoved);
-            });
-            if (!ok) {
-                Log(L"render: device lost");
-                return true;
-            }
-            ++presents;
-            workMs.push_back(elapsedMs());
-            presentMs.push_back(workMs.back());
-            drawnPointerX = snap.scene.pointerX;
-            drawnHoverKey = snap.scene.hoverKey;
-            lastPresent = GetTickCount64();
-            continue;
         }
         ID3D11Texture2D* frame = capture->Acquire();
         if (capture->Lost())
@@ -2624,25 +2571,16 @@ bool Bar::RenderSession()
         bool hadBackdrop = source != nullptr;
         // The bar's glass samples the desktop window, which does not contain the bar.
         // Sampling the live capture here feeds the bar its own pixels and the glass turns into bands.
-        if (snap.visible) {
-            std::wstring mode = snap.settings.widgetBackdrop;
-            if (mode.empty() || mode == L"off")
-                mode = L"desktop";
-            if (!(deskLive && mode == deskMode))
-                desktop.Update(mode);
-            deskMode = mode;
-            deskLive = desktop.Texture() != nullptr;
-        }
-        const bool layoutChange = snap.generation != drawnGeneration;
-        // A static desktop picture does not need a fresh copy and mip chain on every
-        // pointer step. Live capture still refreshes when a frame arrived.
-        const bool needBackdrop = !renderer.HasPresented() || layoutChange || (!deskLive && hadBackdrop);
-        if (needBackdrop) {
-            if (ID3D11Texture2D* desk = desktop.Texture())
-                renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
-            else if (source)
-                renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
-        }
+        // The mode was chosen once this frame (see renderPanels) and is only re-applied
+        // when the capture behind it is not live yet. A failed capture backs off for
+        // kRetryMs inside Update, so this cannot turn into a per-frame retry.
+        if (!deskLive)
+            desktop.Update(deskMode);
+        deskLive = desktop.Texture() != nullptr;
+        if (ID3D11Texture2D* desk = desktop.Texture())
+            renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
+        else if (source)
+            renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
         {
             bool lost = false;
             if (!freeze)
@@ -2699,10 +2637,7 @@ bool Bar::RenderSession()
         animating |= clockInk.Moving(nowMs) || appsInk.Moving(nowMs);
         const Ink inks{clockInk.Value(nowMs), appsInk.Value(nowMs)};
         ULONGLONG now = GetTickCount64();
-        // Magnification and hover washes live only in the scene: they must still force a
-        // present when the layout generation did not change.
-        const bool pointerMoved = snap.scene.pointerX != drawnPointerX || snap.scene.hoverKey != drawnHoverKey;
-        bool force = layoutChange || pointerMoved || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
+        bool force = snap.generation != drawnGeneration || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
                      animating || barOwed || now - lastPresent > kStaleMs;
         if (!changed && !force) {
             ++skipped; // echo of our own present, or nothing new under the glass
@@ -2733,7 +2668,7 @@ bool Bar::RenderSession()
                                    [&](ID2D1DeviceContext2* d2d) {
                                        painter.Draw(d2d, snap.scene, inks, time, date,
                                                     std::to_wstring(snap.generation) + textKey + (dark ? L"d" : L"l") + (darkIcons ? L"d" : L"l"),
-                                                    animating || pointerMoved);
+                                                    animating);
                                    });
         if (!ok) {
             Log(L"render: device lost");
@@ -2746,8 +2681,6 @@ bool Bar::RenderSession()
         drawnText = textKey;
         drawnDark = dark;
         drawnDarkIcons = darkIcons;
-        drawnPointerX = snap.scene.pointerX;
-        drawnHoverKey = snap.scene.hoverKey;
         lastPresent = now;
     }
 }

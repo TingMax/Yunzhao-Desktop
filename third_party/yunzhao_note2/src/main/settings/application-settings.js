@@ -81,6 +81,10 @@ export function readApplicationSettings() {
   const projected = projectApplicationSettings(applicationResolved)
   // Preserve this read API's default session gate; runtime applies the actual
   // current-session value last. It is never a persistent application setting.
+  // `projectApplicationSettings` copies, but a frozen shortcut block (schema
+  // defaults are deep-frozen) would still reject the write below.
+  if (!projected.shortcuts) projected.shortcuts = {}
+  if (Object.isFrozen(projected.shortcuts)) projected.shortcuts = { ...projected.shortcuts }
   projected.shortcuts.enabled = DEFAULT_SETTINGS.shortcuts.enabled
 
   return {

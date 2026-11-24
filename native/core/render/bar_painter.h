@@ -28,12 +28,8 @@ struct SceneItem {
     std::wstring key;
     D2D1_RECT_F icon{};        // icon square, window px
     D2D1_RECT_F plate{};       // hover/active plate around the icon, same centre
-    std::shared_ptr<const IconImage> image; // may be null while loading; drawn at full magnification
+    std::shared_ptr<const IconImage> image; // may be null while loading
     uint64_t imageId = 0;      // identity of `image` for the bitmap cache
-    // The icon at its resting size: drawn whenever the wave does not grow it, so
-    // a still icon is never a downscaled magnified bitmap (which looks soft).
-    std::shared_ptr<const IconImage> imageRest;
-    uint64_t imageRestId = 0;
     bool running = false;
     bool active = false;
     bool attention = false;
@@ -49,7 +45,7 @@ struct BarScene {
     bool tucked = false;       // auto-hide: the bar slides down off the screen
     float scale = 1;
     std::vector<SceneItem> items;  // apps only (drag and drop works on these)
-    std::vector<SceneItem> extras; // Yunzhao logo (#start), overflow (#more), tray (#tray), status (#status), notifications (#notify)
+    std::vector<SceneItem> extras; // Atrium logo (#start), overflow (#more), tray (#tray), status (#status), notifications (#notify)
     SystemStatus status;           // drawn by the #status entry
     bool statusIcons = false;      // as the Windows taskbar's three icons rather than the ring (statusStyle)
     float separatorX = -1;     // < 0: none
@@ -105,7 +101,7 @@ public:
 
 private:
     void DrawContent(ID2D1DeviceContext2* d2d, const BarScene& scene, Ink ink, const std::wstring& time, const std::wstring& date);
-    ID2D1Bitmap1* BitmapFor(ID2D1DeviceContext2* d2d, const std::shared_ptr<const IconImage>& image, uint64_t id);
+    ID2D1Bitmap1* BitmapFor(ID2D1DeviceContext2* d2d, const SceneItem& item);
     IDWriteTextFormat* Format(float px, DWRITE_FONT_WEIGHT weight, const wchar_t* family = nullptr); // nullptr: the interface face
     void DrawLogo(ID2D1DeviceContext2* d2d, D2D1_RECT_F r, float opacity);
     // The status icon in `r` (icon height): a ring open at the bottom with the
@@ -116,9 +112,7 @@ private:
     // The same as the Windows taskbar shows it: the network, the speaker and the battery side by
     // side in `r` (its height the icons'), redrawn in the bar's ink.
     void DrawStatusIcons(ID2D1DeviceContext2* d2d, const SystemStatus& st, D2D1_RECT_F r, ID2D1SolidColorBrush* brush, D2D1_COLOR_F ink, bool darkInk);
-    float MapX(float u) const; // base x -> displayed x (the wave no longer displaces)
-    // This icon's own scale under the magnification wave at window x `x` (1 = as is).
-    float WaveGrow(float x) const;
+    float MapX(float u) const; // base x -> displayed x under the magnification
 
     struct Motion {
         float hover = 0;   // 0..1

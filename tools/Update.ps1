@@ -56,13 +56,14 @@ function Get-SettingsExe([string]$Root) {
 }
 
 # ---- The desktop progress window -------------------------------------------------
-# Shown for the whole install so the update is visible after the settings window goes.
-# The percentage comes from real work: files copied, files replaced, then the verify.
+# Shown for the whole install, so the update stays visible after the settings window
+# goes away. Cartoon-soft, macOS-sheet-like: a springy bar, a bobbing icon tile and a
+# rotating ring. The percentage comes from real work (files copied, files replaced,
+# then the start-up verify), never from a timer.
 
 $script:uiPercent = 0
 $script:uiText = '正在准备更新…'
 $script:uiForm = $null
-$script:uiBar = $null
 $script:uiFailed = $false
 
 function Show-UpdateWindow([string]$Version) {
@@ -72,8 +73,10 @@ function Show-UpdateWindow([string]$Version) {
         if (-not ('YunzhaoUpdateWindow' -as [type])) {
             Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -82,122 +85,253 @@ public class YunzhaoUpdateWindow : Form
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int cmd);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
-    readonly Label title = new Label();
-    readonly Label detail = new Label();
-    public readonly ProgressPanel bar = new ProgressPanel();
+    readonly string version;
+    readonly Timer timer = new Timer();
+    readonly Stopwatch clock = Stopwatch.StartNew();
+    float target;               // the percentage the install asked for
+    float shown;                // what the bar shows (springs towards target)
+    float velocity;
+    bool failed;
+    bool done;                  // 100%: the check marks pops in
+    float doneScale;
+    string status = "正在准备更新…";
+    float statusFade = 1f;
 
     public YunzhaoUpdateWindow(string version)
     {
+        this.version = version;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(380, 176);
-        BackColor = Color.FromArgb(22, 24, 30);
+        ClientSize = new Size(400, 150);
         ShowInTaskbar = false;
+        AutoScaleMode = AutoScaleMode.None;
+        BackColor = Color.FromArgb(18, 20, 26);
         DoubleBuffered = true;
-        using (var path = Rounded(ClientRectangle, 16))
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+        using (GraphicsPath path = Rounded(new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), 18))
             Region = new Region(path);
-
-        title.Text = "正在安装 Yunzhao " + version;
-        title.ForeColor = Color.FromArgb(245, 245, 247);
-        title.Font = new Font("Microsoft YaHei UI", 12f, FontStyle.Bold);
-        title.AutoSize = false;
-        title.Bounds = new Rectangle(28, 30, 324, 30);
-
-        detail.Text = "正在准备更新…";
-        detail.ForeColor = Color.FromArgb(161, 161, 170);
-        detail.Font = new Font("Microsoft YaHei UI", 9f);
-        detail.Bounds = new Rectangle(28, 66, 324, 22);
-
-        bar.Bounds = new Rectangle(28, 104, 324, 6);
-        bar.Percent = 0;
-        bar.Failed = false;
-
-        Controls.Add(title);
-        Controls.Add(detail);
-        Controls.Add(bar);
+        timer.Interval = 16;
+        timer.Tick += delegate { Step(); };
+        timer.Start();
     }
 
-    public string Detail
+    public void SetProgress(int percent, string text)
     {
-        get { return detail.Text; }
-        set { detail.Text = value; }
+        if (percent < 0) percent = 0;
+        if (percent > 100) percent = 100;
+        if (percent > target) target = percent;
+        if (!string.IsNullOrEmpty(text) && text != status) { status = text; statusFade = 0f; }
+        if (percent >= 100) done = true;
+        Invalidate();
     }
 
-    // Show without taking the focus from whatever the user is doing.
+    public void SetFailed(string text)
+    {
+        failed = true;
+        status = text;
+        statusFade = 0f;
+        Invalidate();
+    }
+
+    // A little overshoot and settle, so the bar feels drawn rather than timed.
+    void Step()
+    {
+        const float dt = 0.016f, stiffness = 120f, damping = 18f;
+        velocity += (target - shown) * stiffness * dt - velocity * damping * dt;
+        shown += velocity * dt;
+        if (shown > 100f) { shown = 100f; velocity = 0f; }
+        if (shown < 0f) { shown = 0f; velocity = 0f; }
+        if (Math.Abs(target - shown) < 0.05f && Math.Abs(velocity) < 0.6f) { shown = target; velocity = 0f; }
+        if (statusFade < 1f) { statusFade += dt * 5f; if (statusFade > 1f) statusFade = 1f; }
+        // Fade the sheet in, like a macOS sheet sliding down.
+        if (Opacity < 1.0) Opacity = Math.Min(1.0, Opacity + 0.14);
+        // The check pops in with a cartoon overshoot once the bar is full.
+        if (done && shown >= 99.5f && doneScale < 1f)
+        {
+            doneScale += dt * 3.2f;
+            if (doneScale > 1f) doneScale = 1f;
+        }
+        Invalidate();
+    }
+
+    // Shown without taking the focus from whatever the user is doing.
     public void ShowQuiet()
     {
+        Opacity = 0.0; // fades in on the first ticks
         Show();
         ShowWindow(Handle, 4 /* SW_SHOWNOACTIVATE */);
-        SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 /* NOSIZE|NOMOVE|NOACTIVATE */);
-    }
-
-    static GraphicsPath Rounded(Rectangle r, int radius)
-    {
-        int d = radius * 2;
-        var path = new GraphicsPath();
-        path.AddArc(r.X, r.Y, d, d, 180, 90);
-        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-        path.CloseFigure();
-        return path;
+        SetWindowPos(Handle, new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        base.OnPaint(e);
-        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var pen = new Pen(Color.FromArgb(48, 255, 255, 255), 1f))
-        using (var path = Rounded(new Rectangle(0, 0, ClientSize.Width - 1, ClientSize.Height - 1), 16))
-            e.Graphics.DrawPath(pen, path);
-    }
-}
-
-public class ProgressPanel : Panel
-{
-    public int Percent;
-    public bool Failed;
-
-    public ProgressPanel()
-    {
-        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
-        BackColor = Color.Transparent;
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        var g = e.Graphics;
+        Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var track = new Rectangle(0, 0, Width, Height);
-        using (var path = Rounded(track, Height / 2))
-        using (var brush = new SolidBrush(Color.FromArgb(38, 255, 255, 255)))
-            g.FillPath(brush, path);
-        int percent = Percent < 0 ? 0 : (Percent > 100 ? 100 : Percent);
-        int w = Math.Max(Height, (int)Math.Round(Width * percent / 100.0));
-        if (Percent > 0)
+        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+        float t = (float)clock.Elapsed.TotalSeconds;
+
+        // The sheet: a dark gradient, a soft glow in the corner, a hairline border.
+        using (GraphicsPath shell = Rounded(new Rectangle(0, 0, ClientSize.Width - 1, ClientSize.Height - 1), 18))
         {
-            var fill = new Rectangle(0, 0, w, Height);
-            using (var path = Rounded(fill, Height / 2))
-            using (var brush = new SolidBrush(Failed ? Color.FromArgb(255, 96, 92) : Color.FromArgb(10, 132, 255)))
-                g.FillPath(brush, path);
+            using (LinearGradientBrush bg = new LinearGradientBrush(
+                       new Rectangle(0, 0, ClientSize.Width, ClientSize.Height),
+                       Color.FromArgb(31, 34, 44), Color.FromArgb(14, 15, 20), 90f))
+                g.FillPath(bg, shell);
+            using (GraphicsPath glow = new GraphicsPath())
+            {
+                glow.AddEllipse(-80, -110, 320, 240);
+                using (PathGradientBrush pb = new PathGradientBrush(glow))
+                {
+                    pb.CenterColor = failed ? Color.FromArgb(80, 255, 96, 92) : Color.FromArgb(72, 10, 132, 255);
+                    pb.SurroundColors = new Color[] { Color.FromArgb(0, 10, 132, 255) };
+                    g.FillPath(pb, glow);
+                }
+            }
+            using (Pen pen = new Pen(Color.FromArgb(40, 255, 255, 255), 1f))
+                g.DrawPath(pen, shell);
+        }
+
+        // The app tile: bobbing gently, with a specular sheen and a rotating ring.
+        float bob = (float)Math.Sin(t * 2.4) * 2.2f;
+        RectangleF tile = new RectangleF(30f, 30f + bob, 56f, 56f);
+        using (GraphicsPath p = Rounded(Rectangle.Round(tile), 16))
+        {
+            using (LinearGradientBrush b = new LinearGradientBrush(tile,
+                       failed ? Color.FromArgb(255, 138, 132) : Color.FromArgb(104, 182, 255),
+                       failed ? Color.FromArgb(214, 66, 62) : Color.FromArgb(8, 96, 246), 62f))
+                g.FillPath(b, p);
+            using (LinearGradientBrush hi = new LinearGradientBrush(tile,
+                       Color.FromArgb(96, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
+                g.FillPath(hi, p);
+        }
+        using (Font f = new Font("Segoe UI", 27f, FontStyle.Bold, GraphicsUnit.Pixel))
+        using (StringFormat sf = Central())
+        using (SolidBrush ink = new SolidBrush(Color.FromArgb(252, 253, 255)))
+        {
+            if (done && doneScale > 0f)
+            {
+                // A drawn check, scaled with a soft overshoot.
+                float k = doneScale < 0.8f ? doneScale * 1.18f : 1f - (doneScale - 0.8f) * 0.18f;
+                k = Math.Max(0.01f, Math.Min(1.06f, k));
+                g.TranslateTransform(tile.X + tile.Width / 2f, tile.Y + tile.Height / 2f);
+                g.ScaleTransform(k, k);
+                using (Pen check = new Pen(Color.FromArgb(252, 253, 255), 5.4f))
+                {
+                    check.StartCap = LineCap.Round;
+                    check.EndCap = LineCap.Round;
+                    check.LineJoin = LineJoin.Round;
+                    g.DrawLines(check, new PointF[]
+                    {
+                        new PointF(-11f, 1f), new PointF(-3.4f, 9f), new PointF(12f, -9f)
+                    });
+                }
+                g.ResetTransform();
+            }
+            else
+            {
+                g.DrawString("Y", f, ink, new RectangleF(tile.X, tile.Y - 1f, tile.Width, tile.Height), sf);
+            }
+        }
+
+        if (!failed && shown < 99.5f)
+        {
+            float sweep = 96f + 190f * (0.5f + 0.5f * (float)Math.Sin(t * 1.7));
+            using (Pen ring = new Pen(Color.FromArgb(132, 255, 255, 255), 3f))
+            {
+                ring.StartCap = LineCap.Round;
+                ring.EndCap = LineCap.Round;
+                g.DrawArc(ring, tile.X - 7f, tile.Y - 7f, tile.Width + 14f, tile.Height + 14f, (t * 210f) % 360f, sweep);
+            }
+        }
+
+        using (Font tf = new Font("Microsoft YaHei UI", 13f, FontStyle.Bold))
+        using (SolidBrush ink = new SolidBrush(Color.FromArgb(244, 245, 248)))
+            g.DrawString("正在安装 Yunzhao " + version, tf, ink, 104f, 33f);
+
+        int percent = (int)Math.Round(shown);
+        using (Font sf2 = new Font("Microsoft YaHei UI", 9f))
+        using (SolidBrush sub = new SolidBrush(Color.FromArgb((int)(205 * statusFade), 168, 172, 184)))
+            g.DrawString(status, sf2, sub, 104f, 61f);
+        using (Font pf = new Font("Segoe UI", 9f, FontStyle.Bold))
+        using (SolidBrush pi = new SolidBrush(failed ? Color.FromArgb(255, 112, 107) : Color.FromArgb(124, 192, 255)))
+        using (StringFormat right = new StringFormat())
+        {
+            right.Alignment = StringAlignment.Far;
+            g.DrawString(percent + "%", pf, pi, new RectangleF(282f, 61f, 88f, 18f), right);
+        }
+
+        // The bar: a pill track, a springy gradient fill, and a highlight that travels.
+        RectangleF track = new RectangleF(30f, 112f, 340f, 10f);
+        using (GraphicsPath p = Rounded(Rectangle.Round(track), 5))
+        using (SolidBrush b = new SolidBrush(Color.FromArgb(34, 255, 255, 255)))
+            g.FillPath(b, p);
+
+        float w = Math.Min(track.Width, track.Width * shown / 100f);
+        if (w > 0.5f)
+        {
+            if (w < track.Height) w = track.Height;
+            RectangleF fill = new RectangleF(track.X, track.Y, w, track.Height);
+            using (GraphicsPath p = Rounded(Rectangle.Round(fill), 5))
+            {
+                using (LinearGradientBrush b = new LinearGradientBrush(track,
+                           failed ? Color.FromArgb(255, 104, 98) : Color.FromArgb(92, 184, 255),
+                           failed ? Color.FromArgb(206, 62, 58) : Color.FromArgb(10, 92, 238), 0f))
+                    g.FillPath(b, p);
+
+                float band = 70f;
+                float x = fill.X - band + ((t * 170f) % (band + fill.Width + 40f));
+                Region old = g.Clip;
+                g.SetClip(p, CombineMode.Intersect);
+                RectangleF sweep = new RectangleF(x, fill.Y, band, fill.Height);
+                using (LinearGradientBrush gb = new LinearGradientBrush(sweep,
+                           Color.FromArgb(0, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 0f))
+                {
+                    ColorBlend blend = new ColorBlend(3);
+                    blend.Colors = new Color[]
+                    {
+                        Color.FromArgb(0, 255, 255, 255),
+                        Color.FromArgb(165, 255, 255, 255),
+                        Color.FromArgb(0, 255, 255, 255)
+                    };
+                    blend.Positions = new float[] { 0f, 0.5f, 1f };
+                    gb.InterpolationColors = blend;
+                    g.FillRectangle(gb, sweep);
+                }
+                g.Clip = old;
+                old.Dispose();
+            }
         }
     }
 
+    static StringFormat Central()
+    {
+        StringFormat sf = new StringFormat();
+        sf.Alignment = StringAlignment.Center;
+        sf.LineAlignment = StringAlignment.Center;
+        return sf;
+    }
+
     static GraphicsPath Rounded(Rectangle r, int radius)
     {
-        int d = Math.Max(1, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
-        var path = new GraphicsPath();
+        int d = Math.Min(Math.Max(1, radius * 2), Math.Min(r.Width, r.Height));
+        GraphicsPath path = new GraphicsPath();
         path.AddArc(r.X, r.Y, d, d, 180, 90);
         path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
         path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
         path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
         path.CloseFigure();
         return path;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) timer.Dispose();
+        base.Dispose(disposing);
     }
 }
 '@
         }
-        $script:uiForm = New-Object YunzhaoUpdateWindow $Version        $script:uiBar = $script:uiForm.bar
+        $script:uiForm = New-Object YunzhaoUpdateWindow $Version
         $script:uiForm.ShowQuiet()
         [System.Windows.Forms.Application]::DoEvents()
     } catch {
@@ -212,10 +346,7 @@ function Set-Progress([int]$Percent, [string]$Text) {
     if ($Text) { $script:uiText = $Text }
     if (-not $script:uiForm) { return }
     try {
-        $script:uiBar.Percent = $script:uiPercent
-        $script:uiForm.Detail = "$script:uiText  $script:uiPercent%"
-        $script:uiForm.Invalidate()
-        $script:uiBar.Invalidate()
+        $script:uiForm.SetProgress($script:uiPercent, $script:uiText)
         [System.Windows.Forms.Application]::DoEvents()
     } catch { }
 }
@@ -225,10 +356,7 @@ function Set-ProgressFailed([string]$Text) {
     $script:uiText = $Text
     if (-not $script:uiForm) { return }
     try {
-        $script:uiBar.Failed = $true
-        $script:uiForm.Detail = $Text
-        $script:uiForm.Invalidate()
-        $script:uiBar.Invalidate()
+        $script:uiForm.SetFailed($Text)
         [System.Windows.Forms.Application]::DoEvents()
     } catch { }
 }

@@ -15,6 +15,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <tlhelp32.h>
 #include <wincodec.h>
 #include <windowsx.h>
 
@@ -1530,15 +1531,35 @@ bool HostedCalendarAlive()
         return false;
     HANDLE file = CreateFileW((std::wstring(base) + L"\\Yunzhao\\yunzhao-hwnd.txt").c_str(), GENERIC_READ,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE)
+    if (file != INVALID_HANDLE_VALUE) {
+        char buf[64]{};
+        DWORD got = 0;
+        ReadFile(file, buf, sizeof(buf) - 1, &got, nullptr);
+        CloseHandle(file);
+        unsigned long long value = _strtoui64(buf, nullptr, 10);
+        HWND note = reinterpret_cast<HWND>(static_cast<uintptr_t>(value));
+        if (value && IsWindow(note))
+            return true;
+    }
+    // The handle file can be missing or stale while the process runs (a crash left
+    // it behind, or the window published before writing it). A running process
+    // still counts, or every switch would start a second calendar.
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
         return false;
-    char buf[64]{};
-    DWORD got = 0;
-    ReadFile(file, buf, sizeof(buf) - 1, &got, nullptr);
-    CloseHandle(file);
-    unsigned long long value = _strtoui64(buf, nullptr, 10);
-    HWND note = reinterpret_cast<HWND>(static_cast<uintptr_t>(value));
-    return value && IsWindow(note);
+    bool found = false;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snap, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, L"YunzhaoNote.exe") == 0) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
+    return found;
 }
 
 void StartHostedCalendar()
@@ -1562,6 +1583,45 @@ void StartHostedCalendar()
     std::wstring packaged = resolve(folder + L"\\Calendar\\YunzhaoNote.exe");
     if (!packaged.empty()) {
         std::wstring calendarDir = packaged.substr(0, packaged.find_last_of(L"\\/"));
+        // The calendar keeps one database per account under accounts\<id>, chosen by
+        // YUNZHAO_ACCOUNT_ID. ShellExecuteW does not reliably hand the parent's
+        // environment to the child, and without the id it fell back to the unscoped
+        // database and looked like every note had gone. CreateProcessW with an
+        // explicit environment always carries it.
+        std::wstring accountId = ReadTextFile(SettingsPath().substr(0, SettingsPath().find_last_of(L'\\')) + L"\\account.json");
+        std::wstring id;
+        {
+            winrt::Windows::Data::Json::JsonObject account{nullptr};
+            if (winrt::Windows::Data::Json::JsonObject::TryParse(accountId, account))
+                id = std::wstring(account.GetNamedString(L"id", L""));
+        }
+        std::wstring command = L"\"" + packaged + L"\"";
+        std::wstring env;
+        for (wchar_t* p = GetEnvironmentStringsW(); p && *p;) {
+            std::wstring entry(p);
+            p += entry.size() + 1;
+            if (entry.rfind(L"YUNZHAO_ACCOUNT_ID=", 0) == 0)
+                continue;
+            env += entry;
+            env.push_back(L'\0');
+        }
+        env.push_back(L'\0');
+        if (!id.empty()) {
+            std::wstring pair = L"YUNZHAO_ACCOUNT_ID=" + id;
+            // Replace the block's final terminator with this entry plus a new one.
+            env.resize(env.size() - 1);
+            env += pair;
+            env.push_back(L'\0');
+            env.push_back(L'\0');
+        }
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, env.data(), calendarDir.c_str(), &si, &pi)) {
+            if (pi.hThread) CloseHandle(pi.hThread);
+            if (pi.hProcess) CloseHandle(pi.hProcess);
+            return;
+        }
         ShellExecuteW(nullptr, L"open", packaged.c_str(), nullptr, calendarDir.c_str(), SW_SHOWNORMAL);
         return;
     }
@@ -2610,40 +2670,12 @@ void DesktopWidgets::SyncYunzhao(Widget& w)
         WriteFile(file, payload, DWORD(strlen(payload)), &wrote, nullptr);
         CloseHandle(file);
     }
-    static bool launched = false;
-    if (launched)
-        return;
-    wchar_t exe[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring folder(exe);
-    const size_t slash = folder.find_last_of(L"\\/");
-    if (slash != std::wstring::npos)
-        folder.resize(slash);
-    auto resolve = [](const std::wstring& candidate) {
-        wchar_t full[MAX_PATH]{};
-        if (!GetFullPathNameW(candidate.c_str(), MAX_PATH, full, nullptr))
-            return std::wstring();
-        if (GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES)
-            return std::wstring();
-        return std::wstring(full);
-    };
-    std::wstring packaged = resolve(folder + L"\\Calendar\\YunzhaoNote.exe");
-    if (!packaged.empty()) {
-        std::wstring calendarDir = packaged.substr(0, packaged.find_last_of(L"\\/"));
-        HINSTANCE startedPackaged = ShellExecuteW(nullptr, L"open", packaged.c_str(), nullptr, calendarDir.c_str(), SW_SHOWNORMAL);
-        if (reinterpret_cast<INT_PTR>(startedPackaged) > 32)
-            launched = true;
-        return;
-    }
-    std::wstring script = resolve(folder + L"\\..\\..\\..\\tools\\yunzhao-note.ps1");
-    if (script.empty())
-        script = resolve(folder + L"\\tools\\yunzhao-note.ps1");
-    if (script.empty())
-        return;
-    std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -File \"" + script + L"\"";
-    HINSTANCE started = ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
-    if (reinterpret_cast<INT_PTR>(started) > 32)
-        launched = true;
+    // The calendar is a separate program and can be closed on its own (or fail to
+    // start once). A permanent "already launched" flag left the switch doing
+    // nothing after that, so it is started through the same path that carries the
+    // account id, and only while no calendar window exists.
+    if (!HostedCalendarAlive())
+        StartHostedCalendar();
 }
 
 void DesktopWidgets::Tick()
