@@ -941,19 +941,41 @@ void Bar::Relayout()
     // as the apps; so does the status ring (battery or volume, Wi-Fi).
     // The status entry as three icons (statusStyle) is wider than a plate by about an icon.
     const int statusExtra = st.statusStyle == L"icons" ? int(std::lround(icon * 1.3f)) : 0;
-    const int rightCount = int(showTray) + int(showStatus) + int(showNotifications) + int(clockW != 0);
-    const int groupGap = rightCount ? sepGap : 0;
     const int total = int(items_.size());
     int n = total;
     bool more = false;
+    // The three extra entries read the settings before anything is measured from them: the width
+    // pass below and the layout further down have to agree, or the app strip runs into the tray.
+    showLaunchpad_ = settings_.showLaunchpad;
+    showStacks_ = settings_.showFolderStacks;
+    const int rightCount = int(showTray) + int(showStatus) + int(showNotifications) + int(clockW != 0) +
+                           int(showStatus && musicShown_) + int(showStacks_);
+    const int groupGap = rightCount ? sepGap : 0;
     auto padFor = [&](int p) { return (barH - p) / 2 + Px(4, s); }; // ends: plate gap plus a little air
     auto contentWidth = [&](int count, int p, int g, bool overflow) {
         int slots = count + (overflow ? 1 : 0);
         int w = 2 * padFor(p) + p + 2 * g;               // logo and the air after it
+        if (showLaunchpad_)
+            w += p + g;                                  // Launchpad's entry, right of the logo
         w += slots ? slots * p + (slots - 1) * g : 0;    // apps
-        if (rightCount)
-            w += 2 * sepGap + p * (int(showTray) + int(showStatus) + int(showNotifications)) + (showStatus ? statusExtra : 0) + clockW +
-                 (rightCount - 1) * g;
+        // The right group, laid out exactly as Relayout's rightSlot does it: each entry takes its
+        // width plus one gap. Anything missing here makes the bar narrower than what it draws, and
+        // the app strip then runs into the tray.
+        int right = 0, rightEntries = 0;
+        if (showNotifications)
+            right += p + g, ++rightEntries;
+        if (clockW != 0)
+            right += clockW + g, ++rightEntries;
+        if (showStatus)
+            right += p + statusExtra + g, ++rightEntries; // the status entry is plate + its icons
+        if (showStatus && musicShown_)
+            right += p + g, ++rightEntries;
+        if (showStacks_)
+            right += p + g, ++rightEntries;
+        if (showTray)
+            right += p + g, ++rightEntries;
+        if (rightEntries)
+            w += 2 * sepGap + right;
         return std::max(w, barH * 2);
     };
     // The magnified bar stretches by up to (mag - 1) * range on top of its width.
@@ -1078,9 +1100,6 @@ void Bar::Relayout()
         return it;
     };
     // Disabled entries consume neither space nor hit targets.
-    // The three extra entries read the settings here, before anything is measured from them.
-    showLaunchpad_ = settings_.showLaunchpad;
-    showStacks_ = settings_.showFolderStacks;
     const int startLeft = insetX + pad;
     int cursor = insetX + barW - pad;
     auto rightSlot = [&](int width, bool enabled) {
