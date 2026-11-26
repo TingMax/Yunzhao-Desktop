@@ -1078,6 +1078,9 @@ void Bar::Relayout()
         return it;
     };
     // Disabled entries consume neither space nor hit targets.
+    // The three extra entries read the settings here, before anything is measured from them.
+    showLaunchpad_ = settings_.showLaunchpad;
+    showStacks_ = settings_.showFolderStacks;
     const int startLeft = insetX + pad;
     int cursor = insetX + barW - pad;
     auto rightSlot = [&](int width, bool enabled) {
@@ -1108,7 +1111,7 @@ void Bar::Relayout()
     scene.extras.push_back(entry(kStartKey, startLeft, L""));
     hits_.push_back({kStartKey, RECT{insetX, hitTop, startLeft + plate + gap / 2, hitBottom}});
     if (showLaunchpad_) {
-        scene.extras.push_back(entry(kLaunchpadKey, launchpadLeft, L"\uF0A4")); // the app grid
+        scene.extras.push_back(entry(kLaunchpadKey, launchpadLeft, L"\uE71D")); // the app grid (AppsList)
         hits_.push_back({kLaunchpadKey, RECT{launchpadLeft - gap / 2, hitTop, launchpadLeft + plate + gap / 2, hitBottom}});
     }
     // Icons are rendered for their magnified size, so they stay sharp when they grow.
@@ -1162,6 +1165,9 @@ void Bar::Relayout()
     plate_ = plate;
     gap_ = gap;
     shown_ = n;
+    // The three extra entries: Launchpad beside the logo, the folder stack left of the tray, now
+    // playing right of the status entry. Read from the settings each layout, so no caller can
+    // leave them out of step with what the user chose.
     scene.separatorX = rightCount ? float(rightLeft - sepGap) : -1;
     if (showStacks_) {
         scene.extras.push_back(entry(kStacksKey, stacksLeft, L"\uE8F1")); // a folder

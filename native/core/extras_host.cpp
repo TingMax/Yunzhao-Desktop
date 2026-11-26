@@ -156,7 +156,12 @@ void ExtrasHost::Apply(const Settings& s, float radius)
     stacks_.SetRadius(radius);
     // The bar's own entries: Launchpad beside the logo, the folder stack left of the tray.
     const bool lp = launchpadOn_, st = stacksOn_;
-    forBars_(std::function<void(Bar&)>([lp, st](Bar& bar) { bar.SetExtrasShown(lp, st); }));
+    forBars_(std::function<void(Bar&)>([lp, st](Bar& bar) {
+        if (bar.ExtrasShown() == std::make_pair(lp, st))
+            return; // the entries are already like this: no relayout
+        bar.SetExtrasShown(lp, st);
+        bar.Relayout(); // the entries come or go
+    }));
 }
 
 void ExtrasHost::ConfigureBar(Bar& bar)

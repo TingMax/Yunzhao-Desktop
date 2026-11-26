@@ -104,6 +104,7 @@ public:
     std::function<void()> onTuckChanged;
     // Whether Launchpad's and the folder stack's entries show (the settings say).
     void SetExtrasShown(bool launchpad, bool stacks) { showLaunchpad_ = launchpad; showStacks_ = stacks; }
+    std::pair<bool, bool> ExtrasShown() const { return {showLaunchpad_, showStacks_}; }
     // The overflow entry: apps that did not fit, in bar order.
     std::function<void(const std::vector<std::wstring>& keys, RECT anchor)> onOverflow;
     // Drag and drop of an app to visible position `toIndex` (0-based, in the
