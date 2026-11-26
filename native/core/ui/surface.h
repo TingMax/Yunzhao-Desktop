@@ -23,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -50,6 +51,7 @@ struct ShapeDip {
     D2D1_RECT_F rect;
     float radius;
     float fade = 0; // 0 = as is, 1 = gone
+    float rotate = 0; // radians, clockwise about its centre (the arc-shaped popups, upstream 3.0)
     // Melting parts instead of one rectangle (GlassShape::parts), DIP; rect is their bounds.
     struct Part {
         D2D1_RECT_F rect;
@@ -86,6 +88,10 @@ public:
     // Ink region by region (WM_GLASS_INK): Text and Glyph in the theme's ink
     // take the ink the glass under them needs, fading as it changes.
     InkField ink;
+    // One flat region for everything drawn until EndInkArea (upstream 3.0): a card's ink follows
+    // its own glass as a whole, so it never turns dark in one part and light in another. DIP.
+    void BeginInkArea(D2D1_RECT_F r) { inkArea_ = r; }
+    void EndInkArea() { inkArea_.reset(); }
 
     // Asks for another frame (an animation is still running).
     void Continue();
@@ -109,6 +115,8 @@ public:
     void Gradient(D2D1_RECT_F r, float radius, D2D1_COLOR_F a, D2D1_COLOR_F b, bool vertical = true);
     // A crescent: the disc (cx, cy, radius) less the disc of `cut` moved by (dx, dy).
     void Crescent(float cx, float cy, float radius, float dx, float dy, float cut, D2D1_COLOR_F c);
+    // A filled polygon; `round` > 0 rounds its corners, growing it by that much on every side.
+    void Polygon(std::span<const D2D1_POINT_2F> points, D2D1_COLOR_F c, float round = 0);
     // A circular arc with round ends, clockwise from a0 to a1 (degrees from the right, y down).
     void Arc(float cx, float cy, float radius, float a0, float a1, D2D1_COLOR_F c, float width);
     // Text in `r`; align: 0 left, 1 centre, 2 right. One line, trimmed with an ellipsis unless wrap.
@@ -153,6 +161,7 @@ private:
     D2D1_MATRIX_3X2_F base_;
     float alpha_ = 1; // opacity of the current group
     std::vector<std::pair<D2D1_MATRIX_3X2_F, float>> groups_;
+    std::optional<D2D1_RECT_F> inkArea_; // BeginInkArea's: the ink every call follows meanwhile
     winrt::com_ptr<ID2D1Image> blurTarget_;
     winrt::com_ptr<ID2D1CommandList> blurList_;
 };

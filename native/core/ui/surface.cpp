@@ -313,6 +313,44 @@ void Canvas::Crescent(float cx, float cy, float radius, float dx, float dy, floa
     d2d_->FillGeometry(path.get(), Brush(c));
 }
 
+// A filled polygon; `round` > 0 rounds its corners, growing it by that much on every side.
+// Upstream 3.0, for the arc-shaped folder stack.
+void Canvas::Polygon(std::span<const D2D1_POINT_2F> points, D2D1_COLOR_F c, float round)
+{
+    if (points.size() < 3)
+        return;
+    D2D1_RECT_F bounds = D2D1::RectF(points[0].x, points[0].y, points[0].x, points[0].y);
+    for (const auto& p : points.subspan(1)) {
+        bounds.left = std::min(bounds.left, p.x);
+        bounds.top = std::min(bounds.top, p.y);
+        bounds.right = std::max(bounds.right, p.x);
+        bounds.bottom = std::max(bounds.bottom, p.y);
+    }
+    D2D1_COLOR_F unused;
+    c = InkAt(bounds, c, unused);
+    winrt::com_ptr<ID2D1Factory> f;
+    d2d_->GetFactory(f.put());
+    winrt::com_ptr<ID2D1PathGeometry> path;
+    winrt::com_ptr<ID2D1GeometrySink> sink;
+    if (FAILED(f->CreatePathGeometry(path.put())) || FAILED(path->Open(sink.put())))
+        return;
+    sink->BeginFigure(D2D1::Point2F(points[0].x * scale, points[0].y * scale), D2D1_FIGURE_BEGIN_FILLED);
+    for (const auto& p : points.subspan(1))
+        sink->AddLine(D2D1::Point2F(p.x * scale, p.y * scale));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    if (FAILED(sink->Close()))
+        return;
+    ID2D1SolidColorBrush* brush = Brush(c);
+    d2d_->FillGeometry(path.get(), brush);
+    if (round <= 0)
+        return;
+    // Round corners: the outline stroked as wide as the rounding, with round joins.
+    winrt::com_ptr<ID2D1StrokeStyle> joins;
+    const auto props = D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND);
+    if (SUCCEEDED(f->CreateStrokeStyle(props, nullptr, 0, joins.put())))
+        d2d_->DrawGeometry(path.get(), brush, 2 * round * scale, joins.get());
+}
+
 void Canvas::Arc(float cx, float cy, float radius, float a0, float a1, D2D1_COLOR_F c, float width)
 {
     if (a1 - a0 < 0.5f)
@@ -371,7 +409,7 @@ float Canvas::DarkAt(D2D1_RECT_F r) const
 {
     if (ink.dark.empty())
         return inkDark;
-    D2D1_RECT_F p = Px(r);
+    D2D1_RECT_F p = Px(inkArea_ ? *inkArea_ : r);
     D2D1_MATRIX_3X2_F m;
     d2d_->GetTransform(&m);
     return ink.DarkAt(p.left * m._11 + m._31, p.top * m._22 + m._32, p.right * m._11 + m._31, p.bottom * m._22 + m._32, inkDark);
@@ -394,7 +432,7 @@ D2D1_COLOR_F Canvas::InkAt(D2D1_RECT_F r, D2D1_COLOR_F c, D2D1_COLOR_F& haloInk)
     if (!isText && !isWash)
         return c;
     const D2D1_COLOR_F& from = isText ? theme.text : theme.hover;
-    D2D1_RECT_F p = Px(r);
+    D2D1_RECT_F p = Px(inkArea_ ? *inkArea_ : r); // one flat region for a whole card, if asked
     D2D1_MATRIX_3X2_F m;
     d2d_->GetTransform(&m); // groups move and scale what they draw
     float x0 = p.left * m._11 + m._31, y0 = p.top * m._22 + m._32, x1 = p.right * m._11 + m._31, y1 = p.bottom * m._22 + m._32;
