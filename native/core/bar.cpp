@@ -1339,16 +1339,7 @@ bool Bar::MonitorCoveredByApp() const
         RECT frame{};
         if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) && !GetWindowRect(window, &frame))
             continue;
-        // Windows' taskbar is hidden (settings hideTaskbar): this bar is the taskbar now, and a
-        // taskbar is not pushed off the screen by a maximized window. With the system taskbar
-        // hidden the work area is the whole screen, so a maximized app's frame looks exactly like
-        // a full-screen one. Only a window without a title bar or resize frame that really fills
-        // the monitor (a game, a full-screen video) takes the bar away; anything with a frame is
-        // an app's window and the bar stays on top of it.
-        const bool framed = (GetWindowLongW(window, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) != 0;
         if (auto covered = WindowCoverOnMonitor(windowMonitor, frame, IsZoomed(window) != FALSE, hmonitor_, monitor_)) {
-            if (*covered && settings_.hideTaskbar && framed)
-                continue; // a normal app's window, maximized or merely large: the bar stays, as a taskbar does
             if (*covered)
                 return true;
             // Snapped side by side, the windows fill the screen as a maximized one does.
@@ -1357,8 +1348,8 @@ bool Bar::MonitorCoveredByApp() const
             const int slack = MulDiv(8, int(GetDpiForWindow(window)), 96);
             if (IsTile(bounds, mi.rcWork, slack)) {
                 tiles.push_back(bounds);
-                if (TilesFill(tiles, mi.rcWork, slack) && !settings_.hideTaskbar)
-                    return true; // snapped tiles are no reason to take the only taskbar away
+                if (TilesFill(tiles, mi.rcWork, slack))
+                    return true;
             }
             // A smaller window in front (a mail opened from a chat, a dialog, a float) does not
             // decide: what fills the screen behind it still does.
@@ -1367,25 +1358,10 @@ bool Bar::MonitorCoveredByApp() const
     return false;
 }
 
-// Windows' own taskbar is off (settings hideTaskbar): this bar is then the only one there is.
-// A tuck-away mode would leave the desktop with no taskbar at all, so "always" is refused while
-// the system taskbar is hidden and only a full-screen app in front may take this bar away.
-std::wstring Bar::EffectiveAutoHide()
-{
-    if (settings_.autoHide == L"always" && settings_.hideTaskbar) {
-        if (!tuckModeLogged_) {
-            tuckModeLogged_ = true;
-            Log(L"bar: auto-hide 'always' ignored: Windows' taskbar is hidden, so this bar stays up (only a full-screen app takes it away)");
-        }
-        return L"fullscreen";
-    }
-    return settings_.autoHide;
-}
-
 void Bar::UpdateCover()
 {
     // Apply the hide mode independently on each display.
-    const std::wstring mode = EffectiveAutoHide();
+    const std::wstring& mode = settings_.autoHide;
     bool covered = mode == L"always" || (mode != L"never" && MonitorCoveredByApp());
     if (covered == covered_) {
         // Same state, but the poll can be gone (a window move, a display change, a
@@ -1494,7 +1470,7 @@ void Bar::WatchPointer()
         const bool atBottom = onScreen && nearBottom;
         // With auto-hide "always" the user asked for this bar, so a full-screen report
         // (a game, a browser in fullscreen, a stale UIA answer) must not lock it away.
-        const bool allowReveal = EffectiveAutoHide() == L"always" || !FullScreenInFront(hmonitor_);
+        const bool allowReveal = settings_.autoHide == L"always" || !FullScreenInFront(hmonitor_);
         // A bar that cannot be brought back is unrecoverable for the user, so the decision
         // is logged (rate-limited) whenever the pointer rests on the strip but nothing happens.
         if (atBottom && !allowReveal && now - revealLogged_ > 5000) {
