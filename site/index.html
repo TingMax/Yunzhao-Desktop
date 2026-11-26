@@ -3,70 +3,214 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Yunzhao</title>
-  <meta name="description" content="Yunzhao 是跑在 Windows 上的桌面。它有自己的任务栏、日历、课表和当日待办。" />
+  <title>Yunzhao — 一块自己的 Windows 桌面</title>
+  <meta name="description" content="Yunzhao 让 Windows 拥有一套自己的任务栏、日历课表、当日待办和灵动岛。玻璃材质、流畅动画、本地数据，登录后多台电脑同步。" />
+  <meta property="og:title" content="Yunzhao — 一块自己的 Windows 桌面" />
+  <meta property="og:description" content="自己的任务栏、日历课表、当日待办和灵动岛。玻璃材质，流畅动画。" />
   <style>
     :root {
       color-scheme: dark;
       --ink: #07080d;
       --panel: #14161d;
+      --panel-2: #1b1e27;
       --line: rgba(255, 255, 255, 0.08);
       --text: #f5f5f7;
       --muted: #a1a1aa;
       --blue: #0a84ff;
+      --blue-soft: rgba(10, 132, 255, 0.14);
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; }
+    html, body { margin: 0; scroll-behavior: smooth; }
     body {
       min-height: 100vh;
       background:
         radial-gradient(900px 420px at 80% -10%, rgba(10, 132, 255, 0.28), transparent 60%),
+        radial-gradient(700px 380px at 10% 20%, rgba(120, 90, 255, 0.12), transparent 65%),
         var(--ink);
       color: var(--text);
       font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-      line-height: 1.6;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
     }
     a { color: inherit; }
-    header, main, footer { width: min(1040px, calc(100% - 40px)); margin: 0 auto; }
+    header, main, footer { width: min(1080px, calc(100% - 40px)); margin: 0 auto; }
+
     header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 28px 0;
+      padding: 26px 0;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(18px);
+      background: rgba(7, 8, 13, 0.72);
+      border-bottom: 1px solid transparent;
     }
     .brand { display: flex; align-items: center; gap: 12px; font-weight: 650; letter-spacing: 0.02em; }
-    .mark { width: 36px; height: 36px; }
+    .mark { width: 34px; height: 34px; flex: none; }
     nav { color: var(--muted); font-size: 14px; }
-    nav a { text-decoration: none; margin-left: 22px; }
+    nav a { text-decoration: none; margin-left: 24px; }
     nav a:hover { color: var(--text); }
-    .hero { padding: 54px 0 28px; }
-    h1 { margin: 0 0 16px; font-size: clamp(42px, 6vw, 72px); line-height: 1.05; letter-spacing: -0.04em; }
-    .lead { max-width: 640px; margin: 0; color: var(--muted); font-size: 18px; }
-    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 28px 0 0; }
+
+    .hero { padding: 72px 0 20px; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 12px; margin-bottom: 20px;
+      border: 1px solid var(--line); border-radius: 999px;
+      background: var(--blue-soft); color: #9fcbff;
+      font-size: 13px; font-weight: 600;
+    }
+    h1 {
+      margin: 0 0 18px; font-size: clamp(40px, 6vw, 70px);
+      line-height: 1.06; letter-spacing: -0.04em;
+      background: linear-gradient(180deg, #fff 30%, #b9c0cc);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .lead { max-width: 660px; margin: 0; color: var(--muted); font-size: 18px; }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin: 32px 0 0; }
     .download {
-      display: inline-block;
-      padding: 12px 22px;
-      border-radius: 999px;
-      background: var(--blue);
-      color: #fff;
-      text-decoration: none;
-      font-weight: 650;
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 13px 26px; border-radius: 999px;
+      background: linear-gradient(180deg, #2b9bff, var(--blue));
+      color: #fff; text-decoration: none; font-weight: 650;
+      box-shadow: 0 10px 26px rgba(10, 132, 255, 0.32);
+      transition: transform 0.16s ease, filter 0.16s ease;
     }
-    .download:hover { filter: brightness(1.08); }
+    .download:hover { transform: translateY(-1px); filter: brightness(1.08); }
+    .download svg { width: 17px; height: 17px; }
     .meta { color: var(--muted); font-size: 14px; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 42px 0 64px; }
-    article {
-      padding: 22px 22px 18px;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: rgba(20, 22, 29, 0.86);
+    .hint { margin: 18px 0 0; color: #7d8490; font-size: 13.5px; }
+
+    /* 任务栏预览：用 CSS 复刻真实外观，不依赖截图 */
+    .showcase {
+      margin: 52px 0 0; padding: 26px 0 30px;
+      border: 1px solid var(--line); border-radius: 24px;
+      background:
+        linear-gradient(180deg, rgba(38, 74, 150, 0.35), rgba(12, 20, 40, 0.6)),
+        var(--panel);
+      overflow: hidden;
     }
-    article h2 { margin: 0 0 8px; font-size: 18px; }
-    article p { margin: 0; color: var(--muted); }
-    footer { padding: 8px 0 40px; color: var(--muted); font-size: 14px; }
-    @media (max-width: 720px) {
-      .grid { grid-template-columns: 1fr; }
+    .showcase-label {
+      padding: 0 26px 16px; color: #8b93a1;
+      font-size: 12.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    }
+    .fake-bar {
+      display: flex; align-items: center; gap: 7px;
+      width: max-content; max-width: calc(100% - 52px); margin: 0 auto;
+      padding: 10px 15px; border-radius: 19px;
+      background: rgba(30, 34, 44, 0.62);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
+    .chip {
+      width: 34px; height: 34px; border-radius: 9px; flex: none;
+      display: grid; place-items: center;
+      font-size: 14px; font-weight: 700; color: #fff;
+    }
+    .chip--start { background: #0a84ff; border-radius: 10px; }
+    .chip--1 { background: linear-gradient(160deg, #f0a03c, #d2701c); }
+    .chip--2 { background: linear-gradient(160deg, #4a8cf7, #2b5fd0); }
+    .chip--3 { background: linear-gradient(160deg, #8b5cf6, #6d28d9); }
+    .chip--4 { background: linear-gradient(160deg, #22c55e, #15803d); }
+    .chip--5 { background: linear-gradient(160deg, #f43f5e, #be123c); }
+    .chip--dot { position: relative; }
+    .chip--dot::after {
+      content: ""; position: absolute; left: 50%; bottom: -7px;
+      width: 4px; height: 4px; margin-left: -2px;
+      border-radius: 50%; background: rgba(255, 255, 255, 0.75);
+    }
+    .fake-sep { width: 1px; height: 20px; background: rgba(255, 255, 255, 0.16); margin: 0 8px; flex: none; }
+    .fake-clock { margin-left: 4px; text-align: right; line-height: 1.15; font-size: 10.5px; color: rgba(255, 255, 255, 0.9); }
+    .fake-clock b { display: block; font-size: 12px; font-weight: 600; }
+
+    .stats {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px; margin: 54px 0 0;
+      border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+      background: var(--line);
+    }
+    .stat { padding: 20px 22px; background: var(--panel); }
+    .stat b { display: block; font-size: 24px; letter-spacing: -0.02em; }
+    .stat span { color: var(--muted); font-size: 13px; }
+
+    h2.section {
+      margin: 76px 0 8px; font-size: 30px; letter-spacing: -0.02em;
+    }
+    p.section-lead { margin: 0 0 26px; color: var(--muted); max-width: 640px; }
+
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    article {
+      padding: 24px 22px 22px;
+      border: 1px solid var(--line); border-radius: 18px;
+      background: linear-gradient(180deg, var(--panel-2), var(--panel));
+      transition: border-color 0.18s ease, transform 0.18s ease;
+    }
+    article:hover { border-color: rgba(10, 132, 255, 0.34); transform: translateY(-2px); }
+    .icon {
+      width: 38px; height: 38px; margin-bottom: 14px;
+      border-radius: 11px; display: grid; place-items: center;
+      background: var(--blue-soft); color: #7cc0ff;
+    }
+    .icon svg { width: 19px; height: 19px; }
+    article h3 { margin: 0 0 7px; font-size: 16.5px; }
+    article p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+    .steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 6px; }
+    .step { padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+    .step-num {
+      display: inline-grid; place-items: center;
+      width: 26px; height: 26px; margin-bottom: 12px;
+      border-radius: 50%; background: var(--blue); color: #fff;
+      font-size: 13px; font-weight: 700;
+    }
+    .step h3 { margin: 0 0 6px; font-size: 16px; }
+    .step p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+    .specs { margin-top: 6px; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+    .spec-row {
+      display: grid; grid-template-columns: 180px 1fr; gap: 20px;
+      padding: 15px 22px; background: var(--panel);
+    }
+    .spec-row + .spec-row { border-top: 1px solid var(--line); }
+    .spec-row dt { color: var(--muted); font-size: 14px; }
+    .spec-row dd { margin: 0; font-size: 14.5px; }
+
+    .cta {
+      margin: 76px 0 0; padding: 40px 32px; text-align: center;
+      border: 1px solid var(--line); border-radius: 24px;
+      background:
+        radial-gradient(520px 200px at 50% 0%, rgba(10, 132, 255, 0.2), transparent 70%),
+        var(--panel);
+    }
+    .cta h2 { margin: 0 0 10px; font-size: 26px; letter-spacing: -0.02em; }
+    .cta p { margin: 0 0 22px; color: var(--muted); }
+
+    footer {
+      display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+      padding: 46px 0 54px; margin-top: 40px;
+      border-top: 1px solid var(--line);
+      color: var(--muted); font-size: 13.5px;
+    }
+    footer a { text-decoration: none; }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 900px) {
+      .grid, .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .spec-row { grid-template-columns: 1fr; gap: 4px; }
+    }
+    @media (max-width: 620px) {
       nav { display: none; }
+      .grid, .steps { grid-template-columns: 1fr; }
+      .hero { padding-top: 44px; }
+      .fake-bar { max-width: calc(100% - 28px); }
+      .chip { width: 28px; height: 28px; font-size: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html, body { scroll-behavior: auto; }
+      * { transition: none !important; }
     }
   </style>
 </head>
@@ -80,48 +224,136 @@
       Yunzhao
     </div>
     <nav>
-      <a href="#desktop">桌面</a>
-      <a href="#calendar">日历</a>
-      <a href="#account">账号</a>
+      <a href="#features">功能</a>
+      <a href="#install">安装</a>
+      <a href="#specs">系统要求</a>
     </nav>
   </header>
+
   <main>
     <section class="hero">
-      <h1>一块自己的 Windows 桌面。</h1>
-      <p class="lead">Yunzhao 打开之后，屏幕上是它自己的任务栏、日历、课表和当日待办。设置、账号和教师工作台用的是同一套界面。</p>
-      <p class="actions">
-        <a class="download" href="/releases/Yunzhao-2.6.10-win-x64.zip">下载 Windows 版</a>
-        <span class="meta">2.6.10 · Windows 11 · 336 MB</span>
+      <span class="eyebrow">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        2.6.27 已发布
+      </span>
+      <h1>一块自己的<br />Windows 桌面。</h1>
+      <p class="lead">
+        Yunzhao 用一套玻璃材质的任务栏替掉系统那条，再把日历、课表、当日待办和灵动岛收进同一处。
+        鼠标滑过图标会放大，窗口弹出带弹簧动画，数据留在你自己的电脑上。
       </p>
-      <p class="meta">这是一个压缩包。解压后运行 Yunzhao.exe。账号和数据留在这台电脑上。</p>
+      <p class="actions">
+        <a class="download" href="/releases/Yunzhao-2.6.27-win-x64.zip">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 20h16"/></svg>
+          下载 Windows 版
+        </a>
+        <span class="meta">2.6.27 · Windows 11（兼容 Windows 10）· x64 · 265 MB</span>
+      </p>
+      <p class="hint">压缩包，解压后直接运行 <b>Yunzhao.exe</b>，无需安装。账号与数据保存在本机。</p>
+
+      <div class="showcase">
+        <div class="showcase-label">任务栏</div>
+        <div class="fake-bar" aria-hidden="true">
+          <div class="chip chip--start">Y</div>
+          <div class="chip chip--1">计</div>
+          <div class="chip chip--2 chip--dot">资</div>
+          <div class="chip chip--3 chip--dot">笔</div>
+          <div class="chip chip--4 chip--dot">览</div>
+          <div class="chip chip--5">聊</div>
+          <div class="fake-sep"></div>
+          <div class="chip" style="background:rgba(255,255,255,.1)">⌃</div>
+          <div class="chip" style="background:rgba(255,255,255,.1)">🔊</div>
+          <div class="fake-clock"><b>18:24</b>2026/11/24</div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><b>4</b><span>个模块</span></div>
+        <div class="stat"><b>60</b><span>帧动画</span></div>
+        <div class="stat"><b>1</b><span>个托盘图标</span></div>
+        <div class="stat"><b>0</b><span>安装步骤</span></div>
+      </div>
     </section>
-    <section class="grid">
-      <article id="desktop">
-        <h2>任务栏</h2>
-        <p>Yunzhao 使用自己的任务栏。它会自动隐藏，鼠标靠向屏幕边缘时再出现。</p>
-      </article>
-      <article id="calendar">
-        <h2>日历和课表</h2>
-        <p>日历和课表在同一个窗口里切换。课表按周显示课程，也可以只改某一周。点开某一天，会弹出这一天的待办。</p>
+
+    <h2 class="section" id="features">都在这条栏上</h2>
+    <p class="section-lead">任务栏不只是一排图标。它接管了系统的位置，也接管了每天要点的那几处。</p>
+    <div class="grid">
+      <article>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 15h18"/></svg></div>
+        <h3>玻璃任务栏</h3>
+        <p>实时取桌面颜色做模糊与折射，鼠标靠近图标时整条栏跟着伸展，指针下的图标放大。自动贴边隐藏，靠近屏幕底边才出来。</p>
       </article>
       <article>
-        <h2>当日待办</h2>
-        <p>待办可以新建、编辑和完成。窗口没有系统标题栏，大小会记住。换一天时，打开的列表跟着换成那一天。</p>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></div>
+        <h3>日历与课表</h3>
+        <p>月视图和周课表在同一个窗口切换。课表按周记录，可以只调整某一周。点开某一天，会弹出当天的待办列表。</p>
       </article>
       <article>
-        <h2>灵动岛</h2>
-        <p>灵动岛是单独的程序，由 Yunzhao 启动。它的设置在桌面的「灵动岛」页里，不另占一个任务栏图标。</p>
-      </article>
-      <article id="account">
-        <h2>账号</h2>
-        <p>登录使用 yunzhao-desktop.com。退出时先上传这个账号要同步的内容，再次登录时再拉回来。登录状态只留在这台电脑上。</p>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg></div>
+        <h3>当日待办</h3>
+        <p>没有系统标题栏的小窗，大小会被记住。切换日期时窗口内容跟着换，不用反复开关。支持标签、提醒和循环待办。</p>
       </article>
       <article>
-        <h2>数据留在本机</h2>
-        <p>日历、课表和设置写在这台电脑的用户目录里。更换程序时，这些内容留在原地。</p>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="3" width="12" height="7" rx="3.5"/><rect x="4" y="14" width="16" height="7" rx="3.5"/></svg></div>
+        <h3>灵动岛</h3>
+        <p>屏幕顶部的一条浮岛，集中待办、剪贴板、音乐波形、翻译和消息提醒。设置在桌面「灵动岛」页里改，不另占托盘图标。</p>
       </article>
+      <article>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/></svg></div>
+        <h3>通知与托盘</h3>
+        <p>系统通知变成栏上弹出的玻璃卡片，托盘图标整组收进 Yunzhao 自己的面板，右键菜单与 Windows 一致。</p>
+      </article>
+      <article>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg></div>
+        <h3>多显示器</h3>
+        <p>每块屏幕一条栏，或只留主屏。可以跟着鼠标走，也可以固定在某一台显示器上。组件的放置单独设置。</p>
+      </article>
+    </div>
+
+    <h2 class="section" id="install">三步就能用</h2>
+    <p class="section-lead">不是安装程序，是一个文件夹。想换回系统任务栏，退出就行。</p>
+    <div class="steps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <h3>下载并解压</h3>
+        <p>把 zip 解压到任意文件夹，例如 <code>D:\Yunzhao</code>。不必放进 Program Files。</p>
+      </div>
+      <div class="step">
+        <span class="step-num">2</span>
+        <h3>运行 Yunzhao.exe</h3>
+        <p>首次启动会接管系统任务栏。想退出时右键托盘图标选「退出」，系统任务栏会立刻恢复。</p>
+      </div>
+      <div class="step">
+        <span class="step-num">3</span>
+        <h3>登录账号</h3>
+        <p>登录后可把待办、设置和组件布局同步到其他电脑。换机器时登录同一账号即可拉回。</p>
+      </div>
+    </div>
+
+    <h2 class="section" id="specs">系统要求</h2>
+    <p class="section-lead">需要独立显卡或较新的核显，玻璃效果依赖 D3D11 与 DirectComposition。</p>
+    <dl class="specs">
+      <div class="spec-row"><dt>操作系统</dt><dd>Windows 11（推荐）· Windows 10 1903 及以上</dd></div>
+      <div class="spec-row"><dt>处理器架构</dt><dd>x64</dd></div>
+      <div class="spec-row"><dt>显卡</dt><dd>支持 DirectX 11 与 WDDM 2.0 的显卡</dd></div>
+      <div class="spec-row"><dt>安装包大小</dt><dd>265 MB（含日历与灵动岛运行时）</dd></div>
+      <div class="spec-row"><dt>安装方式</dt><dd>便携式文件夹，解压即用，无需管理员权限</dd></div>
+      <div class="spec-row"><dt>数据位置</dt><dd><code>%LOCALAPPDATA%\Yunzhao</code>，退出或更新都不会清除</dd></div>
+    </dl>
+
+    <section class="cta">
+      <h2>换一套桌面，不动你的使用习惯</h2>
+      <p>Win 键、托盘、窗口切换都照旧，只是长得不一样了。</p>
+      <a class="download" href="/releases/Yunzhao-2.6.27-win-x64.zip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 20h16"/></svg>
+        下载 Yunzhao 2.6.27
+      </a>
+      <p class="hint" style="margin-top:14px">265 MB · Windows x64 · 便携版</p>
     </section>
   </main>
-  <footer>Yunzhao · yunzhao-desktop.com</footer>
+
+  <footer>
+    <span>Yunzhao · yunzhao-desktop.com</span>
+    <span>界面字体 MiSans，由小米公司提供</span>
+  </footer>
 </body>
 </html>

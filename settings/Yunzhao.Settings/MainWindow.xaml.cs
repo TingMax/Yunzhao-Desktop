@@ -757,11 +757,15 @@ public sealed partial class MainWindow : Window
         bool ready = _preparedRelease != null;
         bool transferring = _transferStatus != null && !ready;
         bool offer = ready || transferring || HasNewerRelease();
-        CheckUpdateButton.Content = ready ? "点击安装" : transferring && _transferStatus!.CanRetry ? "重试" : transferring ? "正在下载" : offer ? "点击安装" : "检查更新";
+        // A failed transfer retries from the manifest again: the package it was
+        // fetching may have been replaced on the server since (404 on resume).
+        bool retry = transferring && _transferStatus!.CanRetry;
+        CheckUpdateButton.Content = ready ? "点击安装" : retry ? "重新下载" : transferring ? "正在下载" : offer ? "点击安装" : "检查更新";
         CheckUpdateButton.IsEnabled = _updateCheck == null && !_queueingDownload && !(transferring && !_transferStatus!.CanRetry);
         UpdateAvailableButton.Visibility = offer ? Visibility.Visible : Visibility.Collapsed;
         if (!string.IsNullOrEmpty(_updateError)) UpdateStatus.Text = _updateError;
         else if (ready) UpdateStatus.Text = "新版本已准备好，点击安装";
+        else if (retry) UpdateStatus.Text = _transferStatus!.Text + "，点击重新下载";
         else if (transferring) UpdateStatus.Text = _transferStatus!.Text;
         else if (offer) UpdateStatus.Text = $"发现新版本 {_latestRelease!.Version.ToString(3)}，点击安装开始下载";
     }
@@ -844,6 +848,13 @@ public sealed partial class MainWindow : Window
             await CloseRequestedAsync();
             return;
         }
+        // A failed transfer restarts from the manifest: the package it was
+        // fetching may already be gone from the server (its zip was replaced).
+        if (_transferStatus is { CanRetry: true })
+        {
+            await CheckForUpdatesAsync(startDownload: true);
+            return;
+        }
         if (_latestRelease?.Download == null && _transferStatus == null) return;
         await QueueDownloadAsync(_latestRelease);
     }
@@ -857,10 +868,10 @@ public sealed partial class MainWindow : Window
             OnInstallRelease(sender, e);
             return;
         }
-        await CheckForUpdatesAsync();
+        await CheckForUpdatesAsync(startDownload: true);
     }
 
-    private async Task CheckForUpdatesAsync()
+    private async Task CheckForUpdatesAsync(bool startDownload = false)
     {
         if (_updateCheck != null) return;
         _updateError = null;
@@ -891,6 +902,9 @@ public sealed partial class MainWindow : Window
                 return;
             }
             ShowInstallAction();
+            // A retry of a failed transfer goes straight on to downloading the
+            // package the manifest now names, instead of asking again.
+            if (startDownload && _latestRelease?.Download != null) QueueDownloadAsync(_latestRelease);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException
             or JsonException or FormatException or InvalidOperationException or KeyNotFoundException or IOException or UnauthorizedAccessException)
@@ -1515,6 +1529,22 @@ public sealed partial class MainWindow : Window
         WeChatSwitch.IsOn = _current.NotifyWeChat;
         FeishuSwitch.IsOn = _current.NotifyFeishu;
         BarSwitch.IsOn = _current.Bar;
+        LaunchpadSwitch.IsOn = _current.ShowLaunchpad;
+        FolderStacksSwitch.IsOn = _current.ShowFolderStacks;
+        NowPlayingSwitch.IsOn = _current.ShowNowPlaying;
+        NowPlayingPausedSwitch.IsOn = _current.NowPlayingShowPaused;
+        (_current.LaunchpadLayout == "fullscreen" ? LaunchpadFull : LaunchpadWindow).IsChecked = true;
+        (_current.LaunchpadMaterial == "tint" ? LaunchpadTint : LaunchpadBar).IsChecked = true;
+        (_current.FolderStackLayout == "column" ? StackColumn : StackFan).IsChecked = true;
+        (_current.NowPlayingMotion switch
+        {
+            "off" => NpMotionOff,
+            "subtle" => NpMotionSubtle,
+            "vivid" => NpMotionVivid,
+            _ => NpMotionNormal,
+        }).IsChecked = true;
+        (_current.NowPlayingRhythm == "loop" ? NpRhythmLoop : NpRhythmLive).IsChecked = true;
+        RebuildStackFolderList();
         UpdateBarModule();
         WidgetsSwitch.IsOn = _current.Widgets;
         (_current.WidgetsOnRight ? WidgetsRight : WidgetsLeft).IsChecked = true;
@@ -1689,6 +1719,120 @@ public sealed partial class MainWindow : Window
         if (_loading) return;
         _current.Bar = BarSwitch.IsOn;
         UpdateBarModule();
+        Changed();
+    }
+
+    private void OnLaunchpadToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.ShowLaunchpad = LaunchpadSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnLaunchpadLayoutChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.LaunchpadLayout = tag;
+        Changed();
+    }
+
+    private void OnLaunchpadMaterialChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.LaunchpadMaterial = tag;
+        Changed();
+    }
+
+    private void OnStackLayoutChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.FolderStackLayout = tag;
+        Changed();
+    }
+
+    private void OnNowPlayingPausedToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.NowPlayingShowPaused = NowPlayingPausedSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnNpMotionChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.NowPlayingMotion = tag;
+        Changed();
+    }
+
+    private void OnNpRhythmChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.NowPlayingRhythm = tag;
+        Changed();
+    }
+
+    // Adds a folder to the stack, or removes one from the list shown under the picker.
+    private async void OnAddStackFolder(object sender, RoutedEventArgs e)
+    {
+        var picker = new Windows.Storage.Pickers.FolderPicker();
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
+        picker.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var folder = await picker.PickSingleFolderAsync();
+        if (folder == null) return;
+        if (_current.FolderStacks.Count >= 32) return;
+        if (_current.FolderStacks.Contains(folder.Path, StringComparer.OrdinalIgnoreCase)) return;
+        _current.FolderStacks.Add(folder.Path);
+        RebuildStackFolderList();
+        Changed();
+    }
+
+    private void OnRemoveStackFolder(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string path }) return;
+        _current.FolderStacks.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        RebuildStackFolderList();
+        Changed();
+    }
+
+    private void RebuildStackFolderList()
+    {
+        if (StackFolderList == null) return;
+        StackFolderList.Children.Clear();
+        int n = _current.FolderStacks.Count;
+        StackCountText.Text = n == 0 ? "还没有添加文件夹。堆栈开启后，这里放的文件夹会出现在任务栏上。" : $"已添加 {n} 个文件夹（最多 32 个）。";
+        foreach (var path in _current.FolderStacks.ToList())
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var name = new TextBlock
+            {
+                Text = System.IO.Path.GetFileName(path) is { Length: > 0 } leaf ? leaf : path,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTipService.SetToolTip(name, path);
+            var remove = new Button { Content = "移除", Tag = path, VerticalAlignment = VerticalAlignment.Center };
+            remove.Click += OnRemoveStackFolder;
+            Grid.SetColumn(remove, 1);
+            row.Children.Add(name);
+            row.Children.Add(remove);
+            StackFolderList.Children.Add(row);
+        }
+    }
+
+    private void OnFolderStacksToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.ShowFolderStacks = FolderStacksSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnNowPlayingToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.ShowNowPlaying = NowPlayingSwitch.IsOn;
         Changed();
     }
 

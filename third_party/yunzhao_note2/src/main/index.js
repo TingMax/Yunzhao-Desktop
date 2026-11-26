@@ -45,7 +45,7 @@ import { createMainWindowHost } from './windows/main-window-host.js'
 import { installRendererRecovery } from './windows/renderer-recovery.js'
 import { beginPerformanceOperation } from './logging/operation-performance.js'
 import { yunzhaoInitialBounds, yunzhaoHosted, yunzhaoPeeking, yunzhaoWindowStaysVisible, clampYunzhaoBounds, noteYunzhaoBounds, publishYunzhaoFrame, readYunzhaoLaunch, startYunzhaoHost } from './yunzhao-host.js'
-import { startCloudSync } from './cloud-sync.js'
+import { pullCloudNow, startCloudSync } from './cloud-sync.js'
 import { createEditingDraftGuard } from './windows/editing-draft-guard.js'
 /**
  * index.js — Electron 主进程入口文件
@@ -937,6 +937,7 @@ const mainTrayController = createMainTrayController({
   Tray,
   Menu,
   icon,
+  trayEnabled: !yunzhaoHosted(), // Yunzhao's own tray icon stands for the whole desktop
   getShortcutsEnabled: () => settingsRuntime.shortcutsEnabled,
   getViewMode: () => mainViewNavigation.mode,
   getStickyCommands: featureRuntime.getStickyCommands,
@@ -2072,6 +2073,21 @@ const applicationBootstrap = createApplicationBootstrap({
     mainWindowIpc.handle('view:switch', (event, { mode } = {}) =>
       mainViewNavigation.requestFromRenderer(event.sender, mode)
     )
+
+    // Pull the account's data from the server again and reload what is on screen.
+    // The calendar's own lists came from the server, so a machine that was offline
+    // while it changed showed stale data with no way to ask for it again.
+    mainWindowIpc.handle('cloud:pull-now', async () => {
+      const result = await pullCloudNow({ force: true })
+      if (result?.ok === false) return { ok: false, error: result.error || '拉取失败' }
+      // Everything the window draws comes from the database, so reload the window
+      // instead of trying to patch each list in place.
+      for (const win of getApplicationWindows()) {
+        if (!win || win.isDestroyed()) continue
+        win.webContents.reload()
+      }
+      return { ok: true }
+    })
 
     // 【窗口锁定 - 切换锁定状态】
     mainWindowIpc.handle('toggle-lock', async (event, source) => {

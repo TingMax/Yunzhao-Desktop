@@ -16,12 +16,23 @@ export function useWorkspaceNotices({ showMessage, openSettings, label, api = wi
   let settingsTimer = null
   let disposed = false
 
+  // Yunzhao ships the calendar without its onboarding prompts: a new machine showed
+  // the first-use notice and then the author's WeChat group notice on every launch,
+  // both about a different product. The flags stay (the dialogs are still mounted and
+  // the rest of the queue keeps working) but nothing opens them.
+  const SUPPRESS_ONBOARDING = true
+
   function revealFirstUseNoticeFromSnapshot(snapshot) {
+    if (SUPPRESS_ONBOARDING) return
     const pending = (snapshot?.values?.onboarding?.noticeVersion ?? 0) < FIRST_USE_NOTICE_VERSION
     if (!disposed && pending && !showFirstUseNotice.value) showFirstUseNotice.value = true
   }
 
   function applyInitialSnapshot(snapshot) {
+    if (SUPPRESS_ONBOARDING) {
+      showFirstUseNotice.value = false
+      return
+    }
     if (!disposed)
       showFirstUseNotice.value =
         (snapshot?.values?.onboarding?.noticeVersion ?? 0) < FIRST_USE_NOTICE_VERSION
@@ -32,7 +43,7 @@ export function useWorkspaceNotices({ showMessage, openSettings, label, api = wi
       const notices = await api.listPendingRemoteNotices()
       if (disposed) return
       pendingRemoteNotices.value = notices
-      if (show) showRemoteNoticeDialog.value = notices.length > 0
+      if (show && !SUPPRESS_ONBOARDING) showRemoteNoticeDialog.value = notices.length > 0
     } catch (error) {
       console.warn(`[${label}] 读取未确认通知失败:`, error)
     }

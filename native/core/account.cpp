@@ -162,15 +162,24 @@ bool SaveSession(const Session& session)
 struct HttpResult {
     int status = 0;
     std::string body;
+    int transportError = 0; // Win32 error when nothing was received
 };
 
-HttpResult Request(const wchar_t* method, const std::wstring& path, const std::string& body, const std::wstring& token)
+// One attempt over one access type. AUTOMATIC_PROXY asks Windows for the system
+// proxy and falls back to direct; a system whose proxy setting points at a dead
+// local port, or a network that only reaches the host directly, needs the other
+// choice, so Request below tries both before reporting a failure.
+HttpResult RequestOnce(const wchar_t* method, const std::wstring& path, const std::string& body, const std::wstring& token,
+                       DWORD accessType)
 {
     HttpResult result;
-    HINTERNET session = WinHttpOpen(L"Yunzhao", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET session = WinHttpOpen(L"Yunzhao", accessType, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session)
         return result;
     WinHttpSetTimeouts(session, 8000, 8000, 8000, 8000);
+    // A stale or blocked TLS session otherwise fails until the process restarts.
+    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+    WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
     HINTERNET connect = WinHttpConnect(session, kHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
     HINTERNET request = connect ? WinHttpOpenRequest(connect, method, path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr;
     std::wstring headers = L"Content-Type: application/json\r\n";
@@ -192,6 +201,9 @@ HttpResult Request(const wchar_t* method, const std::wstring& path, const std::s
             chunk.resize(read);
             result.body += chunk;
         }
+    } else if (request) {
+        const DWORD code = GetLastError();
+        result.transportError = int(code);
     }
     if (request)
         WinHttpCloseHandle(request);
@@ -199,6 +211,26 @@ HttpResult Request(const wchar_t* method, const std::wstring& path, const std::s
         WinHttpCloseHandle(connect);
     WinHttpCloseHandle(session);
     return result;
+}
+
+// System proxy first (the normal case), then the same request without it. A machine
+// whose proxy setting points at a closed local port, or one behind a proxy that
+// cannot reach this host, needs the direct attempt; one that only reaches the
+// server through a proxy needs the first. Either way the other one is not tried
+// when the first produced a response.
+HttpResult Request(const wchar_t* method, const std::wstring& path, const std::string& body, const std::wstring& token)
+{
+    HttpResult first = RequestOnce(method, path, body, token, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY);
+    if (first.status != 0)
+        return first;
+    Log(L"account: %s %s failed (winhttp %d), retrying without the system proxy", method, path.c_str(), first.transportError);
+    HttpResult direct = RequestOnce(method, path, body, token, WINHTTP_ACCESS_TYPE_NO_PROXY);
+    if (direct.status != 0)
+        return direct;
+    // Nothing answered either way; keep the later error, it is the more specific one.
+    if (direct.transportError)
+        return direct;
+    return first;
 }
 
 bool FillSession(const json::JsonObject& data, const std::wstring& provider, Session& session)
@@ -222,8 +254,12 @@ bool FillSession(const json::JsonObject& data, const std::wstring& provider, Ses
 
 std::wstring ErrorText(const HttpResult& http, const wchar_t* fallback)
 {
-    if (http.status == 0)
+    if (http.status == 0) {
+        // The code behind it separates an unreachable host from a refused handshake.
+        if (http.transportError)
+            return L"登录服务器还没有连上（网络错误 " + std::to_wstring(http.transportError) + L"）";
         return L"登录服务器还没有连上";
+    }
     json::JsonObject o{nullptr};
     if (json::JsonObject::TryParse(Utf8ToWide(http.body), o)) {
         std::wstring detail = std::wstring(o.GetNamedString(L"detail", L""));
@@ -277,6 +313,10 @@ void AdoptLocalFiles()
     };
     take(root, L"widgets.json");
     take(root, L"todos.json");
+    // Settings and the calendar's own choices follow the account too, so a machine
+    // that already has them locally does not lose them to an empty server row.
+    take(root, L"settings.json");
+    take(root, L"calendar-ui-state.json");
     std::wstring standDir = root + L"\\users\\a1000000-0000-4000-8000-000000000001";
     take(standDir, L"widgets.json");
     take(standDir, L"todos.json");
@@ -285,21 +325,87 @@ void AdoptLocalFiles()
 bool Refresh(Session& session);
 HttpResult Authed(const wchar_t* method, const std::wstring& path, const std::string& body, Session& session);
 
-void PullLayout(bool force = false)
+// The user's local files that follow the account, each synced as one item whose
+// "kind" names it. Anything the user configures on one machine shows up on the
+// other after signing in: the taskbar and material settings, the widget layout and
+// the calendar's own lists.
+struct SyncedFile {
+    const wchar_t* kind;  // kind sent to the server
+    const wchar_t* name;  // file in the account folder
+};
+constexpr SyncedFile kSyncedFiles[] = {
+    {L"widgets", L"widgets.json"},
+    {L"settings", L"settings.json"},
+    // The calendar's own settings, including its tag list and the dropdown choices
+    // (view, reveal mode, title bar style): everything the user picks in its settings.
+    {L"calendar", L"calendar-ui-state.json"},
+};
+
+// The server ids of what this account already owns, so updates reuse the row
+// instead of piling up one per save.
+std::wstring ReadSyncMap()
 {
-    Session session;
-    if (!LoadSession(session))
+    return ReadTextFile(AccountDataDir() + L"\\sync.json");
+}
+
+long long SyncId(const std::wstring& mapText, const wchar_t* kind)
+{
+    json::JsonObject map{nullptr};
+    if (!json::JsonObject::TryParse(mapText, map) || !map.HasKey(kind))
+        return 0;
+    return (long long)map.GetNamedNumber(kind, 0);
+}
+
+std::wstring WithSyncId(const std::wstring& mapText, const wchar_t* kind, long long id)
+{
+    json::JsonObject map{nullptr};
+    if (!json::JsonObject::TryParse(mapText, map))
+        map = json::JsonObject();
+    map.SetNamedValue(kind, json::JsonValue::CreateNumberValue(double(id)));
+    return std::wstring(map.Stringify());
+}
+
+// One file up. An item the server already has is replaced, otherwise created.
+void PushFile(Session& session, const SyncedFile& file)
+{
+    std::wstring path = AccountDataDir() + L"\\" + file.name;
+    std::wstring text = ReadTextFile(path);
+    if (text.empty() || text[0] != L'{')
         return;
-    std::wstring dest = AccountDataDir() + L"\\widgets.json";
+    std::string payload = WideToUtf8(text);
+    std::wstring mapText = ReadSyncMap();
+    long long id = SyncId(mapText, file.kind);
+    std::wstring kind = file.kind;
+    HttpResult http = id > 0
+        ? Authed(L"PUT", L"/items/" + std::to_wstring(id), std::string("{\"payload\":") + payload + "}", session)
+        : Authed(L"POST", L"/items", std::string("{\"kind\":\"") + WideToUtf8(kind) + "\",\"payload\":" + payload + "}", session);
+    json::JsonObject row{nullptr};
+    if ((http.status != 200 && http.status != 201) || !json::JsonObject::TryParse(Utf8ToWide(http.body), row))
+        return;
+    long long saved = (long long)row.GetNamedNumber(L"id", double(id));
+    if (saved > 0)
+        WriteTextFile(AccountDataDir() + L"\\sync.json", WithSyncId(mapText, file.kind, saved));
+}
+
+void PushAllFiles(Session& session)
+{
+    for (const SyncedFile& file : kSyncedFiles)
+        PushFile(session, file);
+}
+
+// One file down. Only written when the server has it and the local copy does not
+// exist yet, unless `force` asks for the server's version to win.
+void PullFile(Session& session, const SyncedFile& file, bool force)
+{
+    std::wstring dest = AccountDataDir() + L"\\" + file.name;
     if (!force && GetFileAttributesW(dest.c_str()) != INVALID_FILE_ATTRIBUTES)
         return;
-    HttpResult http = Authed(L"GET", L"/items?kind=widgets&limit=1", {}, session);
+    std::wstring kind = file.kind;
+    HttpResult http = Authed(L"GET", L"/items?kind=" + kind + L"&limit=1", {}, session);
     if (http.status != 200)
         return;
     json::JsonObject root{nullptr};
-    if (!json::JsonObject::TryParse(Utf8ToWide(http.body), root))
-        return;
-    if (!root.HasKey(L"items"))
+    if (!json::JsonObject::TryParse(Utf8ToWide(http.body), root) || !root.HasKey(L"items"))
         return;
     json::JsonArray items = root.GetNamedArray(L"items");
     if (items.Size() == 0)
@@ -311,7 +417,16 @@ void PullLayout(bool force = false)
     WriteTextFile(dest, std::wstring(payload.Stringify()));
     double id = row.GetNamedNumber(L"id", 0);
     if (id > 0)
-        WriteTextFile(AccountDataDir() + L"\\sync.json", L"{\"widgets\":" + std::to_wstring((long long)id) + L"}");
+        WriteTextFile(AccountDataDir() + L"\\sync.json", WithSyncId(ReadSyncMap(), file.kind, (long long)id));
+}
+
+void PullLayout(bool force = false)
+{
+    Session session;
+    if (!LoadSession(session))
+        return;
+    for (const SyncedFile& file : kSyncedFiles)
+        PullFile(session, file, force);
 }
 
 bool Refresh(Session& session)
@@ -864,27 +979,7 @@ void AccountSignOut()
         Session session;
         if (!LoadSession(session) || session.access.empty())
             return;
-        std::wstring file = AccountDataDir() + L"\\widgets.json";
-        std::wstring text = ReadTextFile(file);
-        if (text.empty() || text[0] != L'{')
-            return;
-        std::string payload = WideToUtf8(text);
-        std::wstring mapText = ReadTextFile(AccountDataDir() + L"\\sync.json");
-        json::JsonObject map{nullptr};
-        long long id = 0;
-        if (json::JsonObject::TryParse(mapText, map))
-            id = (long long)map.GetNamedNumber(L"widgets", 0);
-        HttpResult http;
-        if (id > 0)
-            http = Authed(L"PUT", L"/items/" + std::to_wstring(id), std::string("{\"payload\":") + payload + "}", session);
-        else
-            http = Authed(L"POST", L"/items", std::string("{\"kind\":\"widgets\",\"payload\":") + payload + "}", session);
-        json::JsonObject row{nullptr};
-        if ((http.status == 200 || http.status == 201) && json::JsonObject::TryParse(Utf8ToWide(http.body), row)) {
-            long long saved = (long long)row.GetNamedNumber(L"id", double(id));
-            if (saved > 0)
-                WriteTextFile(AccountDataDir() + L"\\sync.json", L"{\"widgets\":" + std::to_wstring(saved) + L"}");
-        }
+        PushAllFiles(session);
     });
     DeleteFileW(SessionPath().c_str());
     wchar_t path[MAX_PATH]{};
@@ -900,29 +995,7 @@ void AccountPublishLayout()
         Session session;
         if (!LoadSession(session) || session.access.empty())
             return;
-        std::wstring file = AccountDataDir() + L"\\widgets.json";
-        std::wstring text = ReadTextFile(file);
-        if (text.empty() || text[0] != L'{')
-            return;
-        std::string payload = WideToUtf8(text);
-        std::wstring mapText = ReadTextFile(AccountDataDir() + L"\\sync.json");
-        json::JsonObject map{nullptr};
-        long long id = 0;
-        if (json::JsonObject::TryParse(mapText, map))
-            id = (long long)map.GetNamedNumber(L"widgets", 0);
-        HttpResult http;
-        if (id > 0)
-            http = Authed(L"PUT", L"/items/" + std::to_wstring(id), std::string("{\"payload\":") + payload + "}", session);
-        else
-            http = Authed(L"POST", L"/items", std::string("{\"kind\":\"widgets\",\"payload\":") + payload + "}", session);
-        if (http.status != 200 && http.status != 201)
-            return;
-        json::JsonObject row{nullptr};
-        if (!json::JsonObject::TryParse(Utf8ToWide(http.body), row))
-            return;
-        long long saved = (long long)row.GetNamedNumber(L"id", double(id));
-        if (saved > 0)
-            WriteTextFile(AccountDataDir() + L"\\sync.json", L"{\"widgets\":" + std::to_wstring(saved) + L"}");
+        PushAllFiles(session);
     }).detach();
 }
 

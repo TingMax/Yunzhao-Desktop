@@ -339,7 +339,7 @@ void StartMenu::Close(bool launched)
         EndResize();
     FinishNaming(true);
     KillTimer(surface_.Hwnd(), kStatusTimer);
-    catalog_.SetVisibleIcons({});
+    catalog_.SetVisibleIcons(VisibleIconsOwner::Start, {});
     powerOpen_ = false;
     surface_.Hide();
     lastClosed_ = GetTickCount64();
@@ -747,7 +747,7 @@ void StartMenu::Paint(Canvas& c)
     PaintGrip(c, t);
     if (drag_.on)
         PaintDragged(c, t);
-    catalog_.SetVisibleIcons(visibleIcons_);
+    catalog_.SetVisibleIcons(VisibleIconsOwner::Start, visibleIcons_);
     if (powerOpen_) {
         float e = float((now - powerMs_) / kPowerMs);
         D2D1_RECT_F pc = PowerRect();

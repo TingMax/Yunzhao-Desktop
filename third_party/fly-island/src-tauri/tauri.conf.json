@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "fly-island",
+  "productName": "Yunzhao Island",
   "version": "3.2.5",
   "identifier": "com.focusd.island",
   "build": {

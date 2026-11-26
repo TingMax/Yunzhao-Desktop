@@ -82,6 +82,9 @@ const api = {
   /** 将当前唯一主窗口切换到列表 / 月 / 周视图。 */
   switchMainView: (mode) => ipcRenderer.invoke('view:switch', { mode }),
 
+  /** 重新从服务器拉取账号数据并重载窗口（标题栏的刷新按钮）。 */
+  pullCloudNow: () => ipcRenderer.invoke('cloud:pull-now'),
+
   // ---- 窗口锁定 ----
   /** 切换窗口锁定状态（禁止/允许移动和缩放），返回最终状态及节流结果。 */
   toggleLock: () => settingsClient.invoke('toggle-lock'),

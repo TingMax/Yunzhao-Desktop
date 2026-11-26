@@ -246,6 +246,32 @@ const toggleLock = async () => {
   }
 }
 
+// Pull the account's data from the server again. The window then reloads, so the
+// animation runs until the reload actually starts: a fast machine would otherwise
+// see the spin end before the new data arrived.
+const pullingData = ref(false)
+const pullFailed = ref(false)
+const pullData = async () => {
+  if (pullingData.value) return
+  pullingData.value = true
+  pullFailed.value = false
+  try {
+    const result = await window.api.pullCloudNow()
+    if (result?.ok === false) {
+      pullFailed.value = true
+      console.warn('[AppTitlebar] 刷新数据失败:', result.error)
+      setTimeout(() => { pullFailed.value = false }, 2400)
+    }
+  } catch (e) {
+    pullFailed.value = true
+    console.warn('[AppTitlebar] 刷新数据失败:', e)
+    setTimeout(() => { pullFailed.value = false }, 2400)
+  } finally {
+    // A successful pull reloads the window, which ends this component anyway.
+    setTimeout(() => { pullingData.value = false }, 1200)
+  }
+}
+
 function requestTitlebarDragUpdate() {
   if (titlebarDragFrame) return
   titlebarMotionDiagnostics.scheduleFrame()
@@ -679,6 +705,7 @@ onBeforeUnmount(() => {
           name="pin"
         />
       </button>
+
       <button
         v-if="!yunzhaoHosted"
         class="light light-lock"
@@ -882,7 +909,10 @@ onBeforeUnmount(() => {
 }
 .light-lock {
   background-color: #28c840;
-} /* 绿色 - 未锁定 */
+}
+
+/* 刷新按钮在 MonthApp 的 TitlebarActions 里（始终可见的那组图标），
+   它的转圈样式定义在 MonthApp.vue。 */
 
 /* 各按钮悬停时的加深背景色 */
 .light-close:hover {

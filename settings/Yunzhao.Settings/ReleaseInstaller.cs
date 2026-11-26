@@ -66,7 +66,17 @@ internal static class ReleaseInstaller
         using var job = BitsTransfer.Open(download.Job);
         if (job == null) return File.Exists(Path.Combine(WorkDirectory, "release.zip"))
             ? new("正在准备更新…") : new("下载未完成，请重试", true);
-        if (job.CurrentState == BitsTransfer.State.Error) return new("后台下载失败，请重试", true);
+        if (job.CurrentState == BitsTransfer.State.Error)
+        {
+            // The package this job was fetching is gone from the server (its zip
+            // was replaced by a newer release): fetch the one the manifest names now.
+            Uri? current = null;
+            try { current = ReleaseInfo.FetchLatestAsync(CancellationToken.None).GetAwaiter().GetResult()?.Download; }
+            catch (HttpRequestException) { }
+            if (current != null && current != download.Release.Download)
+                return new("安装包已更新，请重新下载", true);
+            return new("后台下载失败，请重试", true);
+        }
         if (job.CurrentState == BitsTransfer.State.Transferred) return new("正在准备更新…");
         if (job.CurrentState == BitsTransfer.State.TransientError) return new("等待恢复后台下载…");
         var progress = job.CurrentProgress;
@@ -88,6 +98,7 @@ internal static class ReleaseInstaller
     }
 
     private static Version CurrentVersion => ProductVersion();
+    private static async Task<ReleaseInfo?> FetchLatestAsync() => await ReleaseInfo.FetchLatestAsync(CancellationToken.None);
     private static Download? ReadDownload() => ReadJson<Download>(DownloadPath);
     private static T? ReadJson<T>(string path)
     {
@@ -133,7 +144,13 @@ internal static class ReleaseInstaller
             }
             else if (args[0] == "--resume-update")
             {
-                if (pending != null) Queue(pending.Release, pending);
+                // A transfer can only be resumed while its source exists. When the
+                // package was replaced on the server, start the one the manifest names.
+                ReleaseInfo? latest = null;
+                try { latest = FetchLatestAsync().GetAwaiter().GetResult(); }
+                catch (HttpRequestException) { }
+                var release = latest?.Download != null && latest.Version > CurrentVersion ? latest : pending?.Release;
+                if (release != null) Queue(release, pending);
                 else NotifyReady();
             }
             else if (args[0] == "--close-update") CloseQuietly(cache, pending);
@@ -200,8 +217,15 @@ internal static class ReleaseInstaller
                 if (existing != null)
                 {
                     existing.OnTransferred(Environment.ProcessPath!);
-                    finish = existing.CurrentState == BitsTransfer.State.Transferred;
-                    if (!finish) { existing.Resume(); return; }
+                    var state = existing.CurrentState;
+                    finish = state == BitsTransfer.State.Transferred;
+                    // A job in Error can never resume: its source is gone (the package
+                    // was replaced) or BITS gave up. Resuming it returned to the same
+                    // failure without ever starting a fresh download, which is why the
+                    // second update always reported the first error again.
+                    bool dead = state == BitsTransfer.State.Error || state == BitsTransfer.State.Cancelled ||
+                                state == BitsTransfer.State.Acknowledged;
+                    if (!finish && !dead) { existing.Resume(); return; }
                 }
             }
             if (finish || File.Exists(Path.Combine(WorkDirectory, "release.zip"))) { Finish(pending); return; }
@@ -238,6 +262,22 @@ internal static class ReleaseInstaller
                 job.Complete();
             }
         }
+        try
+        {
+            Finalize(pending);
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            // A corrupt or mismatched download must not be retried forever: drop the
+            // state and the partial package so the next attempt starts clean.
+            try { File.Delete(DownloadPath); } catch (IOException) { }
+            try { if (Directory.Exists(WorkDirectory)) Directory.Delete(WorkDirectory, true); } catch (IOException) { }
+            throw;
+        }
+    }
+
+    private static void Finalize(Download pending)
+    {
         string zip = Path.Combine(WorkDirectory, "release.zip");
         if (pending.Release.Digest is { } digest)
         {
@@ -254,6 +294,16 @@ internal static class ReleaseInstaller
                 ? Path.Combine(unpacked, "Yunzhao")
                 : Path.Combine(unpacked, "Atrium"); // older portable zips used this folder name
         ValidatePackage(root, pending.Release.Version);
+        // Prefer the package helper on install: the copy next to this Settings build may
+        // still be an older Update.ps1 that rejects Atrium.Settings-named installs.
+        string helper = Path.Combine(root, "Update.ps1");
+        if (File.Exists(helper))
+        {
+            try { File.Copy(helper, Path.Combine(AppContext.BaseDirectory, "Update.ps1"), true); }
+            catch (IOException) { /* install folder may be read-only; Restart still prefers the package copy */ }
+            try { File.Copy(helper, Path.Combine(CacheDirectory, "Update.ps1"), true); }
+            catch (IOException) { }
+        }
         SaveJson(StatePath, new Prepared(pending.Release.Tag, pending.Release.Version.ToString(), root));
         File.Delete(DownloadPath);
         File.Delete(zip);
@@ -284,6 +334,11 @@ internal static class ReleaseInstaller
         string settings = Path.Combine(directory, "Settings", "Yunzhao.Settings.exe");
         if (!File.Exists(core) || !File.Exists(settings) || !File.Exists(Path.ChangeExtension(settings, ".dll")))
             throw new IOException("更新包缺少程序文件，请重新下载。");
+        // The calendar ships as its own Electron program. Installing a package without it
+        // silently removed the user's calendar, so a package that drops it is refused.
+        string calendar = Path.Combine(directory, "Calendar", "YunzhaoNote.exe");
+        if (!File.Exists(calendar))
+            throw new IOException("更新包缺少日历程序（Calendar\\YunzhaoNote.exe），请重新下载。");
         var info = FileVersionInfo.GetVersionInfo(core);
         var version = new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart, info.FilePrivatePart);
         var settingsInfo = FileVersionInfo.GetVersionInfo(Path.ChangeExtension(settings, ".dll"));
@@ -294,10 +349,14 @@ internal static class ReleaseInstaller
     internal static void Restart(Prepared ready, bool startCore)
     {
         ValidatePackage(ready.Directory, Version.Parse(ready.Version));
-        // Copy the helper out of the install directory before replacing that directory.
+        // Prefer Update.ps1 from the downloaded package so a rename-era install that still
+        // has Atrium.Settings.exe can be replaced by a helper that accepts that layout.
         string script = Path.Combine(CacheDirectory, "Update.ps1");
+        string fromPackage = Path.Combine(ready.Directory, "Update.ps1");
+        string fromApp = Path.Combine(AppContext.BaseDirectory, "Update.ps1");
+        string source = File.Exists(fromPackage) ? fromPackage : fromApp;
         // Windows PowerShell 5.1 needs a BOM to read the helper's Chinese messages.
-        File.WriteAllText(script, File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Update.ps1")), new System.Text.UTF8Encoding(true));
+        File.WriteAllText(script, File.ReadAllText(source), new System.Text.UTF8Encoding(true));
         var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
             "WindowsPowerShell", "v1.0", "powershell.exe")) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = CacheDirectory };
         foreach (string arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,

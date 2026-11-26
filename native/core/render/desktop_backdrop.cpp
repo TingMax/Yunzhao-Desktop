@@ -114,6 +114,19 @@ DesktopBackdrop::~DesktopBackdrop()
 {
     StopCapture();
     StopWallpaper();
+    // The worker may still be winding down (StopWallpaper does not block the render
+    // thread): wait for it here, off the render loop, so no thread outlives this object.
+    if (worker_.joinable())
+    {
+        if (stop_)
+            SetEvent(stop_);
+        worker_.join();
+        if (stop_)
+        {
+            CloseHandle(stop_);
+            stop_ = nullptr;
+        }
+    }
 }
 
 void DesktopBackdrop::Update(const std::wstring& mode)
@@ -124,8 +137,12 @@ void DesktopBackdrop::Update(const std::wstring& mode)
         StopWallpaper();
         if (mode_ == L"off" || want == L"off" || want == L"wallpaper")
             texture_ = nullptr; // not a picture of what comes next
+        // A failed capture keeps its back-off across a mode change, so switching
+        // back a moment later cannot retry immediately.
+        const bool recovering = want == L"desktop" && retryMs_ > ClockMs();
         mode_ = want;
-        retryMs_ = 0;
+        if (!recovering)
+            retryMs_ = 0;
         if (mode_ == L"wallpaper")
             StartWallpaper();
     }
@@ -196,11 +213,19 @@ void DesktopBackdrop::Update(const std::wstring& mode)
             D3D11_TEXTURE2D_DESC nd{UINT(pic->width), UINT(pic->height), 1, 1, DXGI_FORMAT_B8G8R8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT, 0, 0, 0};
             if (FAILED(gpu_.device->CreateTexture2D(&nd, nullptr, texture_.put())))
                 return;
+            gpu_.context->UpdateSubresource(texture_.get(), 0, nullptr, pic->pixels.data(), UINT(pic->width * 4), 0);
+            origin_ = pic->origin;
+            ++version_;
+            // A new size: nothing on screen matches it any more.
+            Changed(RECT{pic->origin.x, pic->origin.y, pic->origin.x + pic->width, pic->origin.y + pic->height});
+            return;
         }
         gpu_.context->UpdateSubresource(texture_.get(), 0, nullptr, pic->pixels.data(), UINT(pic->width * 4), 0);
         origin_ = pic->origin;
         ++version_;
-        Changed(RECT{LONG_MIN / 2, LONG_MIN / 2, LONG_MAX / 2, LONG_MAX / 2}); // a new wallpaper: everywhere
+        // Only the wallpaper's own area. Marking the whole virtual screen dirty forced every
+        // glass surface (bar, popups, widgets) to redraw on a picture that had not changed.
+        Changed(RECT{pic->origin.x, pic->origin.y, pic->origin.x + pic->width, pic->origin.y + pic->height});
     }
 }
 
@@ -291,22 +316,48 @@ void DesktopBackdrop::Store(ID3D11Texture2D* frame)
 void DesktopBackdrop::StartWallpaper()
 {
     if (worker_.joinable())
-        return;
+    {
+        // Reap a worker that already saw the stop event.
+        if (!workerRunning_)
+        {
+            worker_.join();
+            if (stop_)
+            {
+                CloseHandle(stop_);
+                stop_ = nullptr;
+            }
+        }
+        else
+            return;
+    }
     stop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    workerRunning_ = true;
     worker_ = std::thread([this] { WallpaperLoop(); });
     Log(L"render: widgets' backdrop: the wallpaper");
 }
 
+// Never joins on the render thread, where waiting for the worker showed up as
+// multi-hundred-millisecond frames. It signals the worker instead, and a worker
+// that is already gone is reaped now.
 void DesktopBackdrop::StopWallpaper()
 {
     if (!worker_.joinable())
         return;
-    SetEvent(stop_);
-    worker_.join();
-    CloseHandle(stop_);
-    stop_ = nullptr;
-    std::lock_guard g(pictureLock_);
-    picture_ = nullptr;
+    if (stop_)
+        SetEvent(stop_);
+    {
+        std::lock_guard g(pictureLock_);
+        picture_ = nullptr;
+    }
+    if (!workerRunning_)
+    {
+        worker_.join();
+        if (stop_)
+        {
+            CloseHandle(stop_);
+            stop_ = nullptr;
+        }
+    }
 }
 
 void DesktopBackdrop::WallpaperLoop()
@@ -320,7 +371,7 @@ void DesktopBackdrop::WallpaperLoop()
         winrt::com_ptr<IWICImagingFactory> wic;
         if (FAILED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL, IID_PPV_ARGS(dw.put()))) ||
             FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(wic.put()))))
-            continue;
+            continue; // the do-while's wait still runs, so a failure cannot spin
         DESKTOP_WALLPAPER_POSITION pos = DWPOS_FILL;
         COLORREF bg = 0;
         dw->GetPosition(&pos);
@@ -386,6 +437,7 @@ void DesktopBackdrop::WallpaperLoop()
         }
         SetEvent(frameEvent_);
     } while (WaitForSingleObject(stop_, kWallpaperPollMs) == WAIT_TIMEOUT);
+    workerRunning_ = false;
     CoUninitialize();
 }
 

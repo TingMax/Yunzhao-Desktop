@@ -1,4 +1,4 @@
-#include "bar.h"
+﻿#include "bar.h"
 #include "render/continuous_corners.h"
 
 #include "clock.h"
@@ -13,11 +13,8 @@
 #include <psapi.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
-#include <timeapi.h>
 #include <windowsx.h>
 #include <winrt/Windows.Foundation.h>
-
-#pragma comment(lib, "winmm.lib")
 
 #include <algorithm>
 #include <atomic>
@@ -48,6 +45,10 @@ constexpr wchar_t kNotifyKey[] = L"#notify";
 constexpr wchar_t kTrayKey[] = L"#tray";
 constexpr wchar_t kStatusKey[] = L"#status";
 constexpr wchar_t kMoreKey[] = L"#more";
+// Upstream 3.0's extra entries (ExtrasHost): Launchpad, now playing, folder stack.
+constexpr wchar_t kLaunchpadKey[] = L"#launchpad";
+constexpr wchar_t kMusicKey[] = L"#music";
+constexpr wchar_t kStacksKey[] = L"#stacks";
 // Bar entries and the clock start with '#'; app keys are AUMIDs or paths.
 bool IsEntry(const std::wstring& key) { return !key.empty() && key[0] == L'#'; }
 constexpr double kInsetDip = 14; // room for the drop shadow around the shape
@@ -516,10 +517,7 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                     SetTimer(h, kTooltipTimer, quick ? kPreviewSwapMs : kTooltipDelayMs, nullptr);
             }
             scene_.pointerX = float(pt.x);
-            // Hover / magnify tracking never bumps the layout generation: a fresh desktop
-            // copy and mip chain on every move (or every icon crossed) is what makes the
-            // magnification wave feel a beat late, especially on Win10.
-            Publish(false);
+            Publish();
         }
         return 0;
     }
@@ -629,6 +627,8 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                 onClockClick();
             else if (key == kStartKey && onStartClick)
                 onStartClick(anchor);
+            else if ((key == kLaunchpadKey || key == kMusicKey || key == kStacksKey) && onExtraClick)
+                onExtraClick(key, anchor);
             else if (key == kNotifyKey && onNotifyClick)
                 onNotifyClick(anchor);
             else if (key == kTrayKey && onTrayClick)
@@ -941,19 +941,41 @@ void Bar::Relayout()
     // as the apps; so does the status ring (battery or volume, Wi-Fi).
     // The status entry as three icons (statusStyle) is wider than a plate by about an icon.
     const int statusExtra = st.statusStyle == L"icons" ? int(std::lround(icon * 1.3f)) : 0;
-    const int rightCount = int(showTray) + int(showStatus) + int(showNotifications) + int(clockW != 0);
-    const int groupGap = rightCount ? sepGap : 0;
     const int total = int(items_.size());
     int n = total;
     bool more = false;
+    // The three extra entries read the settings before anything is measured from them: the width
+    // pass below and the layout further down have to agree, or the app strip runs into the tray.
+    showLaunchpad_ = settings_.showLaunchpad;
+    showStacks_ = settings_.showFolderStacks;
+    const int rightCount = int(showTray) + int(showStatus) + int(showNotifications) + int(clockW != 0) +
+                           int(showStatus && musicShown_) + int(showStacks_);
+    const int groupGap = rightCount ? sepGap : 0;
     auto padFor = [&](int p) { return (barH - p) / 2 + Px(4, s); }; // ends: plate gap plus a little air
     auto contentWidth = [&](int count, int p, int g, bool overflow) {
         int slots = count + (overflow ? 1 : 0);
         int w = 2 * padFor(p) + p + 2 * g;               // logo and the air after it
+        if (showLaunchpad_)
+            w += p + g;                                  // Launchpad's entry, right of the logo
         w += slots ? slots * p + (slots - 1) * g : 0;    // apps
-        if (rightCount)
-            w += 2 * sepGap + p * (int(showTray) + int(showStatus) + int(showNotifications)) + (showStatus ? statusExtra : 0) + clockW +
-                 (rightCount - 1) * g;
+        // The right group, laid out exactly as Relayout's rightSlot does it: each entry takes its
+        // width plus one gap. Anything missing here makes the bar narrower than what it draws, and
+        // the app strip then runs into the tray.
+        int right = 0, rightEntries = 0;
+        if (showNotifications)
+            right += p + g, ++rightEntries;
+        if (clockW != 0)
+            right += clockW + g, ++rightEntries;
+        if (showStatus)
+            right += p + statusExtra + g, ++rightEntries; // the status entry is plate + its icons
+        if (showStatus && musicShown_)
+            right += p + g, ++rightEntries;
+        if (showStacks_)
+            right += p + g, ++rightEntries;
+        if (showTray)
+            right += p + g, ++rightEntries;
+        if (rightEntries)
+            w += 2 * sepGap + right;
         return std::max(w, barH * 2);
     };
     // The magnified bar stretches by up to (mag - 1) * range on top of its width.
@@ -1091,15 +1113,26 @@ void Bar::Relayout()
     const int bellLeft = rightSlot(plate, showNotifications);
     const int clockLeft = rightSlot(clockW, clockW != 0), clockRight = clockLeft + clockW;
     const int statusLeft = rightSlot(statusW, showStatus), statusRight = statusLeft + statusW;
+    // The now-playing entry sits right of the status entry, so it is placed before it (right to
+    // left): five bars on a capsule, only while a player has a session.
+    const int musicW = plate;
+    const int musicLeft = rightSlot(musicW, showStatus && musicShown_);
+    const int stacksLeft = rightSlot(plate, showStacks_);
     const int trayLeft = rightSlot(plate, showTray);
     const int rightLeft = rightCount ? cursor + gap : insetX + barW - pad;
-    const int appsMin = startLeft + plate + 2 * gap;
     const int slots = n + (more ? 1 : 0);
     const int appsW = slots ? slots * plate + (slots - 1) * gap : 0;
-    // Apps are centred in the space between the logo and the separator (matters when autoWidth is off).
-    const int appsLeft = appsMin + std::max(0, (rightLeft - 2 * groupGap - appsMin - appsW) / 2);
+    // Launchpad's entry sits right of the logo (upstream 3.0), so the app strip starts past it.
+    const int launchpadLeft = startLeft + plate + gap;
+    const int stripMin = showLaunchpad_ ? launchpadLeft + plate + gap : startLeft + plate + 2 * gap;
+    // Apps are centred in the space between the launchpad entry and the separator (matters when autoWidth is off).
+    const int appsLeft = stripMin + std::max(0, (rightLeft - 2 * groupGap - stripMin - appsW) / 2);
     scene.extras.push_back(entry(kStartKey, startLeft, L""));
-    hits_.push_back({kStartKey, RECT{insetX, hitTop, appsMin - gap / 2, hitBottom}});
+    hits_.push_back({kStartKey, RECT{insetX, hitTop, startLeft + plate + gap / 2, hitBottom}});
+    if (showLaunchpad_) {
+        scene.extras.push_back(entry(kLaunchpadKey, launchpadLeft, L"\uE71D")); // the app grid (AppsList)
+        hits_.push_back({kLaunchpadKey, RECT{launchpadLeft - gap / 2, hitTop, launchpadLeft + plate + gap / 2, hitBottom}});
+    }
     // Icons are rendered for their magnified size, so they stay sharp when they grow.
     const int iconPx = int(std::lround(float(icon) * mag));
     std::map<std::wstring, CachedIcon> keep;
@@ -1136,14 +1169,14 @@ void Bar::Relayout()
         }
         scene.items.push_back(std::move(it));
         // Hit cells split the gaps; the last one reaches the separator.
-        int hl = k == 0 ? appsMin - gap / 2 : appsLeft + k * pitch - gap / 2;
+        int hl = k == 0 ? stripMin - gap / 2 : appsLeft + k * pitch - gap / 2;
         int hr = k == slots - 1 ? rightLeft - groupGap : appsLeft + k * pitch + plate + (gap - gap / 2);
         hits_.push_back({t.key, RECT{hl, hitTop, hr, hitBottom}});
     }
     if (more) {
         int left = appsLeft + n * pitch;
         scene.extras.push_back(entry(kMoreKey, left, L"\uE712"));
-        hits_.push_back({kMoreKey, RECT{n ? left - gap / 2 : appsMin - gap / 2, hitTop, rightLeft - groupGap, hitBottom}});
+        hits_.push_back({kMoreKey, RECT{n ? left - gap / 2 : stripMin - gap / 2, hitTop, rightLeft - groupGap, hitBottom}});
     }
     icons_ = std::move(keep);
     appsLeft_ = appsLeft;
@@ -1151,7 +1184,20 @@ void Bar::Relayout()
     plate_ = plate;
     gap_ = gap;
     shown_ = n;
+    // The three extra entries: Launchpad beside the logo, the folder stack left of the tray, now
+    // playing right of the status entry. Read from the settings each layout, so no caller can
+    // leave them out of step with what the user chose.
     scene.separatorX = rightCount ? float(rightLeft - sepGap) : -1;
+    if (showStacks_) {
+        scene.extras.push_back(entry(kStacksKey, stacksLeft, L"\uE8F1")); // a folder
+        hits_.push_back({kStacksKey, RECT{stacksLeft - gap / 2, hitTop, stacksLeft + plate + gap / 2, hitBottom}});
+    }
+    if (musicShown_ && showStatus) {
+        SceneItem music = entry(kMusicKey, musicLeft, L"");
+        music.musicBars = true;
+        scene.extras.push_back(std::move(music));
+        hits_.push_back({kMusicKey, RECT{musicLeft - gap / 2, hitTop, musicLeft + plate + gap / 2, hitBottom}});
+    }
     if (showTray) {
         scene.extras.push_back(entry(kTrayKey, trayLeft, L"\uE70E"));
         hits_.push_back({kTrayKey, RECT{trayLeft - gap / 2, hitTop, trayLeft + plate + gap / 2, hitBottom}});
@@ -1292,10 +1338,25 @@ void CALLBACK Bar::WinEvent(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idO
         }
         return;
     }
-    if (event == EVENT_SYSTEM_FOREGROUND && FullScreenApp(hwnd))
-        bar->yieldUntil_ = GetTickCount64() + 2000;
-    if (bar->settings_.taskbarApps != L"all")
-        bar->Relayout();
+    if (event == EVENT_SYSTEM_FOREGROUND) {
+        // A game that just took the foreground may not match FullScreenApp yet (the
+        // caption is gone but SHQueryUserNotificationState has not caught up).
+        // A caption-less window covering the monitor is enough to stand down. The desktop
+        // (Progman) and Explorer's taskbars are not apps: clicking the wallpaper used to read
+        // as a full-screen game, take the bar away, and nothing brought it back.
+        const bool fullscreenFrame = hwnd && IsWindowVisible(hwnd) && !IsIconic(hwnd) && !ShellSurface(hwnd) &&
+                                     !SystemCompose(hwnd) &&
+                                     !(GetWindowLongW(hwnd, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) &&
+                                     CoversMonitor(hwnd, bar->hmonitor_);
+        if (FullScreenApp(hwnd) || fullscreenFrame)
+            bar->yieldUntil_ = GetTickCount64() + 2000;
+    }
+    if (bar->settings_.taskbarApps != L"all") {
+        // Relaying out moves the bar's windows; while a full-screen app holds the
+        // screen that is at best pointless and at worst a flicker over it.
+        if (GetTickCount64() >= bar->yieldUntil_ && !FullScreenInFront(bar->hmonitor_))
+            bar->Relayout();
+    }
     bar->GuardStacking(event == EVENT_SYSTEM_FOREGROUND ? L"foreground" : L"move");
 }
 
@@ -1354,8 +1415,20 @@ void Bar::UpdateCover()
     // Apply the hide mode independently on each display.
     const std::wstring& mode = settings_.autoHide;
     bool covered = mode == L"always" || (mode != L"never" && MonitorCoveredByApp());
-    if (covered == covered_)
+    if (covered == covered_) {
+        // Same state, but the poll can be gone (a window move, a display change, a
+        // message loop restart). Re-arming it here is what keeps a hidden bar able to
+        // come back; earlier this returned early and the bar stayed hidden until restart.
+        if (covered_)
+            SetTimer(input_, kPointerTimer, kPointerMs, nullptr);
+        else
+            KillTimer(input_, kPointerTimer);
+        // YieldToGame tucks the bar without `covered_` changing (a game over a plain desktop,
+        // the desktop itself misread as one). Leaving here without re-checking kept the bar
+        // hidden for good, which is exactly the "the taskbar is gone" report.
+        UpdateAutoHide();
         return;
+    }
     covered_ = covered;
     // Maximizing with the pointer on the bar keeps it up until the pointer leaves.
     POINT p{};
@@ -1384,6 +1457,8 @@ void Bar::UpdateAutoHide()
         return;
     tucked_ = tuck;
     scene_.tucked = tuck;
+    if (onTuckChanged)
+        onTuckChanged(); // the music entry samples the level only while the bar is on screen
     if (tuck) {
         HideTooltip();
         SetRegion(false);
@@ -1410,6 +1485,21 @@ void Bar::WatchPointer()
     }
     POINT p{};
     GetCursorPos(&p);
+    // A bar that will not come back is the worst failure this app has. The state is
+    // logged once every few seconds while the pointer sits on the strip, so a report
+    // of "the taskbar is gone" comes with the numbers behind it.
+    if (ULONGLONG now0 = GetTickCount64(); !revealed_ && now0 - watchLogged_ > 4000) {
+        MONITORINFO mi{sizeof(mi)};
+        GetMonitorInfoW(hmonitor_, &mi);
+        const bool onStrip = p.x >= mi.rcMonitor.left && p.x < mi.rcMonitor.right &&
+                             (p.y >= mi.rcMonitor.bottom - 120 || p.y >= mi.rcWork.bottom - 120);
+        if (onStrip) {
+            watchLogged_ = now0;
+            Log(L"bar: reveal poll pointer=%ld,%ld monitor=%ld,%ld-%ld,%ld work.bottom=%ld yieldLeft=%lld tucked=%d slidOut=%d",
+                p.x, p.y, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom, mi.rcWork.bottom,
+                (long long)yieldUntil_ - (long long)now0, tucked_ ? 1 : 0, slidOut_ ? 1 : 0);
+        }
+    }
     RECT bar = BarRect();
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG revealMs = static_cast<ULONGLONG>(settings_.barRevealDelay);
@@ -1417,30 +1507,73 @@ void Bar::WatchPointer()
     if (!revealed_) {
         // The bar is hidden, so the pointer has to rest on this screen's bottom strip, not on a
         // two-pixel line. A two-pixel line cannot be held for the reveal delay.
-        const int band = std::max(int(std::lround(48 * scale_)), int(scene_.bar.bottom - scene_.bar.top));
         MONITORINFO hot{sizeof(hot)};
         GetMonitorInfoW(hmonitor_, &hot);
+        // A stale or failed scale would make the strip unusably thin, which is exactly
+        // how a bar becomes impossible to bring back on an unfamiliar machine. Clamp it.
+        const float sc = scale_ > 0.25f && scale_ < 8.f ? scale_ : 1.f;
+        const int barH = int(scene_.bar.bottom - scene_.bar.top);
+        const int band = std::max(96, std::max(int(std::lround(64 * sc)), barH + int(std::lround(32 * sc))));
         // The pointer on Windows 10 often cannot cross into a hidden taskbar's
-        // strip, so the work area's own bottom edge has to count as well.
-        const bool onScreen = p.x >= monitor_.left && p.x < monitor_.right;
-        const bool atBottom = onScreen && ((p.y >= monitor_.bottom - band && p.y < monitor_.bottom) ||
-                                           (p.y >= hot.rcWork.bottom - band && p.y < hot.rcWork.bottom));
-        if (atBottom && !FullScreenInFront(hmonitor_) && now >= yieldUntil_) {
-            if (!revealAt_)
+        // strip, so the work area's own bottom edge has to count as well. The monitor
+        // rectangle from the last layout can be stale (a resolution change, a moved
+        // display), so the live one is asked for here.
+        const RECT& m = hot.rcMonitor;
+        const bool onScreen = p.x >= m.left && p.x < m.right;
+        const bool nearBottom = p.y >= m.bottom - band || p.y >= hot.rcWork.bottom - band;
+        const bool atBottom = onScreen && nearBottom;
+        // With auto-hide "always" the user asked for this bar, so a full-screen report
+        // (a game, a browser in fullscreen, a stale UIA answer) must not lock it away.
+        const bool allowReveal = settings_.autoHide == L"always" || !FullScreenInFront(hmonitor_);
+        // A bar that cannot be brought back is unrecoverable for the user, so the decision
+        // is logged (rate-limited) whenever the pointer rests on the strip but nothing happens.
+        if (atBottom && !allowReveal && now - revealLogged_ > 5000) {
+            revealLogged_ = now;
+            Log(L"bar: pointer at the edge (%ld,%ld) but a full-screen window holds the bar away", p.x, p.y);
+        }
+        if (atBottom && allowReveal && now >= yieldUntil_) {
+            if (!revealAt_) {
                 revealAt_ = now;
-            else if (now - revealAt_ >= revealMs) {
+                if (now - revealLog2_ > 4000) {
+                    revealLog2_ = now;
+                    Log(L"bar: reveal wait started at the edge (delay %llu ms)", revealMs);
+                }
+            } else if (now - revealAt_ >= revealMs) {
                 revealed_ = true;
                 revealAt_ = 0;
                 leftAt_ = 0;
                 UpdateAutoHide();
             }
         } else {
+            // A bar that will not come back is the worst failure this app has, so the
+            // reason is recorded once per pause instead of failing silently.
+            if (atBottom && allowReveal && now < yieldUntil_ && now - revealLogged_ > 3000) {
+                revealLogged_ = now;
+                Log(L"bar: pointer at the edge but a game hold is still in effect (%llu ms left)", yieldUntil_ - now);
+            }
+            if (revealAt_ && now - revealLog2_ > 4000) {
+                revealLog2_ = now;
+                Log(L"bar: reveal wait reset (atBottom=%d allow=%d nowLTyield=%d)", atBottom ? 1 : 0, allowReveal ? 1 : 0,
+                    now < yieldUntil_ ? 1 : 0);
+            }
             revealAt_ = 0;
         }
         return;
     }
-    RECT zone{bar.left, window_.top, bar.right, monitor_.bottom};
-    if (PtInRect(&zone, p) || dragging_ || (keepShown && keepShown())) {
+    // Keeping it up: the pointer on the bar itself, or on the bottom strip it was summoned from.
+    // The strip comes from the monitor and work area, never from the window's own rect: that rect
+    // slides as the bar moves, so a pointer resting at the edge fell out of it, the bar tucked,
+    // the pointer was inside again and it came straight back — the up-and-down the user saw.
+    const RECT onBar{bar.left, window_.top, bar.right, monitor_.bottom};
+    bool inZone = PtInRect(&onBar, p) != 0;
+    if (!inZone)
+        if (MONITORINFO mi{sizeof(mi)}; hmonitor_ && GetMonitorInfoW(hmonitor_, &mi)) {
+            const int band = std::max(96, int(std::lround(64 * std::clamp(scale_, 0.25f, 8.f))));
+            const bool onScreen = p.x >= mi.rcMonitor.left && p.x < mi.rcMonitor.right;
+            const bool nearBottom = p.y >= mi.rcMonitor.bottom - band || p.y >= mi.rcWork.bottom - band;
+            inZone = onScreen && nearBottom;
+        }
+    if (inZone || dragging_ || (keepShown && keepShown())) {
         leftAt_ = 0;
         return;
     }
@@ -1475,6 +1608,8 @@ void Bar::YieldToGame(HWND cover)
         KillTimer(input_, kSlideTimer);
         Relayout(); // hides now; waiting out the slide would keep the bar on top of the game
     }
+    // Standing down is not auto-hide: `covered_` can still be false, and UpdateCover is what puts
+    // the bar back once the screen is free (see its early return). Kept in one place on purpose.
 }
 
 void Bar::Raise()
@@ -1569,8 +1704,38 @@ void Bar::GuardStacking(const wchar_t* why)
     // Climbing back over a full-screen game takes the screen away from it, so it
     // drops to the desktop. It used to take several tries before the bar gave up.
     if (GetTickCount64() < yieldUntil_ || FullScreenInFront(hmonitor_) || FullScreenApp(cover)) {
+        if (ULONGLONG now3 = GetTickCount64(); now3 - yieldLogged_ > 1200) {
+            yieldLogged_ = now3;
+            wchar_t cls[64] = {};
+            if (cover)
+                GetClassNameW(cover, cls, 64);
+            Log(L"bar: stand down (yieldLeft=%lld fullInFront=%d fullApp=%d cover=%s)", (long long)yieldUntil_ - (long long)now3,
+                FullScreenInFront(hmonitor_) ? 1 : 0, FullScreenApp(cover) ? 1 : 0, cls[0] ? cls : L"none");
+        }
         YieldToGame(cover ? cover : GetForegroundWindow());
         return;
+    }
+    // A game switching to exclusive fullscreen is not visible to Windows for a few
+    // frames: the foreground window is still the one it replaced and
+    // SHQueryUserNotificationState still reports the old state. Raising the bar in
+    // that window takes the screen from the game and lands the user on the desktop.
+    // A caption-less window that covers the monitor is that moment, so the raise
+    // waits for it to settle instead of racing it. The desktop and the taskbars are
+    // not apps: they always cover the monitor, and counting them held the bar down
+    // forever (it could not be brought back at all).
+    const bool fullscreenFrame = cover && IsWindowVisible(cover) && !IsIconic(cover) && !ShellSurface(cover) &&
+                                 !(GetWindowLongW(cover, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) &&
+                                 CoversMonitor(cover, hmonitor_);
+    if (fullscreenFrame) {
+        const ULONGLONG now = GetTickCount64();
+        if (!fullscreenSettleUntil_) {
+            fullscreenSettleUntil_ = now + 2000;
+            Log(L"bar: a fullscreen window just appeared; holding the bar down while it settles");
+        }
+        if (now < fullscreenSettleUntil_)
+            return;
+    } else {
+        fullscreenSettleUntil_ = 0;
     }
     if (!cover)
         return;
@@ -1611,6 +1776,30 @@ void Bar::SetUnread(int count)
         return;
     unread_ = count;
     Relayout();
+}
+
+// The now-playing entry (upstream 3.0): while a player has a session, five bars sit right of the
+// status entry and move with `feed`. The entry comes and goes with `shown`, so the bar re-lays out.
+void Bar::SetMusic(std::shared_ptr<const MusicFeed> feed, bool shown, std::wstring tip)
+{
+    (void)tip; // the tooltip text is the track name, drawn by the card
+    const bool relayout = shown != musicShown_;
+    musicShown_ = shown;
+    {
+        std::lock_guard g(lock_);
+        music_ = std::move(feed);
+    }
+    if (relayout)
+        Relayout(); // the entry comes or goes
+    else
+        Publish(false); // the render thread takes up the bars (playing) or lets them settle
+}
+
+// A new audio level: the render thread redraws the music bars at once instead of on its own clock.
+void Bar::WakeRender()
+{
+    if (music_)
+        Publish(false);
 }
 
 RECT Bar::EntryRect(const std::wstring& key) const
@@ -1801,9 +1990,6 @@ void Bar::SetOwnWindowsDdaExclusion(bool exclude)
 void Bar::RenderThread()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    // Without this, WaitForMultipleObjects timeouts round up to ~15.6 ms on Windows 10,
-    // so magnification behind the pointer feels late when the compositor clock is absent.
-    timeBeginPeriod(1);
     while (WaitForSingleObject(quit_, 0) == WAIT_TIMEOUT) {
         bool rebuild = false;
         try {
@@ -1815,7 +2001,6 @@ void Bar::RenderThread()
         if (!rebuild || WaitForSingleObject(quit_, 1000) != WAIT_TIMEOUT)
             break;
     }
-    timeEndPeriod(1);
     winrt::uninit_apartment();
 }
 
@@ -1906,8 +2091,7 @@ bool Bar::RenderSession()
     BarPainter painter(renderer.D2D(), renderer.DWrite());
 
     unsigned drawnGeneration = 0;
-    std::wstring drawnText, drawnHoverKey;
-    float drawnPointerX = -2; // not equal to any real pointer; forces the first follow
+    std::wstring drawnText;
     bool darkClock = false, darkApps = false, drawnDark = false, drawnDarkIcons = false, animating = false;
     InkFade clockInk, appsInk; // the inks fade to a new colour, not switch
     Readback dotBackdrop; // newest completed luminance grid, reused while the desktop is still
@@ -2043,9 +2227,16 @@ bool Bar::RenderSession()
         bool offMonitor = std::any_of(snap.panels.begin(), snap.panels.end(), [&](const GlassPanel& p) {
             return !p.desktop && p.visible && MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST) != captureMonitor;
         });
-        std::wstring backdropMode = widgets ? snap.settings.widgetBackdrop : std::wstring(L"off");
-        if (offMonitor && (backdropMode.empty() || backdropMode == L"off"))
+        // A panel on a monitor this session cannot capture needs the desktop picture too,
+        // and so does the visible bar: it must not sample a frame that contains itself.
+        // Both call sites below must agree on the mode — alternating "off"/"desktop"
+        // tore the wallpaper worker down and rebuilt it on every single frame.
+        const bool needDesktop = widgets || offMonitor || snap.visible;
+        std::wstring backdropMode = needDesktop ? snap.settings.widgetBackdrop : std::wstring();
+        if (needDesktop && (backdropMode.empty() || backdropMode == L"off"))
             backdropMode = L"desktop";
+        if (!needDesktop)
+            backdropMode = L"off";
         desktop.Update(backdropMode);
         deskMode = backdropMode;
         deskLive = desktop.Texture() != nullptr;
@@ -2329,6 +2520,9 @@ bool Bar::RenderSession()
         bool readback = renderer.ReadbackPending() || std::any_of(panels.begin(), panels.end(), [](const auto& e) {
             return e.second.renderer && e.second.renderer->ReadbackPending();
         });
+        // Never wait on the swap chain's latency object here: it is auto-reset, so
+        // consuming its signal leaves Ready() false, nothing presents, and the bar
+        // freezes while still accepting clicks.
         DWORD w = WAIT_FAILED;
         if (paced && g_waitClock) {
             w = g_waitClock(3, handles, 100);
@@ -2548,25 +2742,16 @@ bool Bar::RenderSession()
         bool hadBackdrop = source != nullptr;
         // The bar's glass samples the desktop window, which does not contain the bar.
         // Sampling the live capture here feeds the bar its own pixels and the glass turns into bands.
-        if (snap.visible) {
-            std::wstring mode = snap.settings.widgetBackdrop;
-            if (mode.empty() || mode == L"off")
-                mode = L"desktop";
-            if (!(deskLive && mode == deskMode))
-                desktop.Update(mode);
-            deskMode = mode;
-            deskLive = desktop.Texture() != nullptr;
-        }
-        const bool layoutChange = snap.generation != drawnGeneration;
-        // A static desktop picture does not need a fresh copy and mip chain on every
-        // pointer step. Live capture still refreshes when a frame arrived.
-        const bool needBackdrop = !renderer.HasPresented() || layoutChange || (!deskLive && hadBackdrop);
-        if (needBackdrop) {
-            if (ID3D11Texture2D* desk = desktop.Texture())
-                renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
-            else if (source)
-                renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
-        }
+        // The mode was chosen once this frame (see renderPanels) and is only re-applied
+        // when the capture behind it is not live yet. A failed capture backs off for
+        // kRetryMs inside Update, so this cannot turn into a per-frame retry.
+        if (!deskLive)
+            desktop.Update(deskMode);
+        deskLive = desktop.Texture() != nullptr;
+        if (ID3D11Texture2D* desk = desktop.Texture())
+            renderer.UpdateBackdrop(desk, snap.window.left - desktop.Origin().x, snap.window.top - desktop.Origin().y);
+        else if (source)
+            renderer.UpdateBackdrop(source.get(), snap.window.left - snap.monitor.left, snap.window.top - snap.monitor.top);
         {
             bool lost = false;
             if (!freeze)
@@ -2623,10 +2808,7 @@ bool Bar::RenderSession()
         animating |= clockInk.Moving(nowMs) || appsInk.Moving(nowMs);
         const Ink inks{clockInk.Value(nowMs), appsInk.Value(nowMs)};
         ULONGLONG now = GetTickCount64();
-        // Magnification and hover washes live only in the scene: they must still force a
-        // present when the layout generation did not change.
-        const bool pointerMoved = snap.scene.pointerX != drawnPointerX || snap.scene.hoverKey != drawnHoverKey;
-        bool force = layoutChange || pointerMoved || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
+        bool force = snap.generation != drawnGeneration || textKey != drawnText || dark != drawnDark || darkIcons != drawnDarkIcons ||
                      animating || barOwed || now - lastPresent > kStaleMs;
         if (!changed && !force) {
             ++skipped; // echo of our own present, or nothing new under the glass
@@ -2657,7 +2839,7 @@ bool Bar::RenderSession()
                                    [&](ID2D1DeviceContext2* d2d) {
                                        painter.Draw(d2d, snap.scene, inks, time, date,
                                                     std::to_wstring(snap.generation) + textKey + (dark ? L"d" : L"l") + (darkIcons ? L"d" : L"l"),
-                                                    animating || pointerMoved);
+                                                    animating);
                                    });
         if (!ok) {
             Log(L"render: device lost");
@@ -2670,8 +2852,6 @@ bool Bar::RenderSession()
         drawnText = textKey;
         drawnDark = dark;
         drawnDarkIcons = darkIcons;
-        drawnPointerX = snap.scene.pointerX;
-        drawnHoverKey = snap.scene.hoverKey;
         lastPresent = now;
     }
 }

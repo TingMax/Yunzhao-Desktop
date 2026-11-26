@@ -85,6 +85,7 @@ private:
         std::vector<uint8_t> pixels;
     };
     std::thread worker_;
+    std::atomic_bool workerRunning_{false};
     HANDLE stop_ = nullptr;
     std::mutex pictureLock_;
     std::unique_ptr<Picture> picture_; // new, not yet taken

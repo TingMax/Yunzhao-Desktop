@@ -2,6 +2,8 @@
 
 Yunzhao 是一套跑在 Windows 11 上的桌面。打开之后，屏幕上是 Yunzhao 自己的任务栏、日历、课表和当日待办；设置、账号和教师工作台用的是同一套界面。程序名是 `Yunzhao.exe`。
 
+读代码先看 [docs/CODE-MAP.md](docs/CODE-MAP.md)：四个程序的分工、核心的模块划分、渲染调用链，以及改代码时的几个已知陷阱。
+
 数据放在本机的 `%LOCALAPPDATA%\Yunzhao`。账号登录的是 [yunzhao-desktop.com](https://yunzhao-desktop.com)。代码仓库是 [TingMax/Yunzhao-Desktop](https://github.com/TingMax/Yunzhao-Desktop)。
 
 ## 桌面

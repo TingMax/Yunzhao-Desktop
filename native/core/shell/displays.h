@@ -36,6 +36,16 @@ bool FullScreenInFront(HMONITOR monitor);
 // A game or borderless full-screen window. A maximized app with a title bar is not one:
 // climbing back over that app is fine, climbing over a game drops it to the desktop.
 bool FullScreenApp(HWND window);
+// A window with no title bar or resize frame that really fills its monitor: a game in borderless
+// full screen, a full-screen video. A maximized or merely large window is not one.
+bool BorderlessFill(HWND window);
+// A window's frame covers its monitor (the shape a game takes when it goes fullscreen).
+bool CoversMonitor(HWND root, HMONITOR monitor);
+// The desktop itself and Explorer's taskbars: windows every layout covers, never apps.
+bool ShellSurface(HWND window);
+// Windows' own composition hosts (IME, the input experience, the touch keyboard): they cover the
+// screen without a title bar but are not apps, so they never stand the bar down.
+bool SystemCompose(HWND window);
 bool FilterTasksOnDisplay(const std::wstring& mode, bool primary);
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary,
     HMONITOR monitor, HWND foreground, const std::function<HMONITOR(HWND)>& monitorOf);

@@ -12,10 +12,14 @@ internal sealed record ReleaseInfo(Version Version, string Tag, Uri Page, Uri? D
     // Login already reaches this host. Prefer a direct connection: a system proxy
     // that points at a closed local port makes HttpClient fail before it leaves.
     // Some networks also reset reused TLS sockets; each attempt uses a fresh client
-    // with TLS 1.2 only and Connection: close.
+    // and Connection: close. If the direct route fails on every attempt (a network
+    // where this host is only reachable through the system proxy), the proxy route
+    // is tried as well — that is what BITS, which downloaded the package before,
+    // uses on such machines.
     public static async Task<ReleaseInfo?> FetchLatestAsync(CancellationToken cancel)
     {
         Exception? last = null;
+        // Direct first, then whatever the system configures.
         foreach (bool useProxy in new[] { false, true })
         {
             for (int attempt = 0; attempt < 3; attempt++)
@@ -27,14 +31,16 @@ internal sealed record ReleaseInfo(Version Version, string Tag, Uri Page, Uri? D
                     using var handler = new SocketsHttpHandler
                     {
                         UseProxy = useProxy,
-                        Proxy = useProxy ? WebRequest.DefaultWebProxy : null,
+                        Proxy = useProxy ? HttpClient.DefaultProxy : null,
                         AutomaticDecompression = DecompressionMethods.All,
                         ConnectTimeout = TimeSpan.FromSeconds(10),
                         PooledConnectionLifetime = TimeSpan.Zero,
                         MaxConnectionsPerServer = 2,
                         SslOptions = new SslClientAuthenticationOptions
                         {
-                            EnabledSslProtocols = SslProtocols.Tls12,
+                            // Both TLS 1.2 and 1.3 are offered: pinning 1.2 made some
+                            // networks (and one nginx build) reset the handshake.
+                            EnabledSslProtocols = SslProtocols.None,
                             CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck,
                         },
                     };
@@ -61,11 +67,22 @@ internal sealed record ReleaseInfo(Version Version, string Tag, Uri Page, Uri? D
         string detail = last switch
         {
             TaskCanceledException => "连接超时",
-            HttpRequestException { InnerException: { } inner } => inner.Message,
-            HttpRequestException http => http.Message,
+            HttpRequestException { InnerException: { } inner } => $"{inner.Message}（{Describe(inner)}）",
+            HttpRequestException http => $"{http.Message}（{Describe(http)}）",
             _ => last?.Message ?? "未知错误",
         };
         throw new HttpRequestException("无法连接更新服务器：" + detail, last);
+    }
+
+    // The Windows error behind a reset helps tell an unreachable host from a refused
+    // handshake; the message alone reads the same for both.
+    private static string Describe(Exception error)
+    {
+        if (error is System.Net.Sockets.SocketException socket)
+            return $"socket {socket.SocketErrorCode} / {socket.ErrorCode}";
+        if (error is System.Security.Authentication.AuthenticationException auth)
+            return $"TLS {auth.HResult:X8}";
+        return $"0x{error.HResult:X8}";
     }
 
     internal static ReleaseInfo? FromManifest(JsonElement manifest)

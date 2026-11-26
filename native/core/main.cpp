@@ -4,6 +4,7 @@
 
 #include "bar.h"
 #include "clock.h"
+#include "extras_host.h"
 #include "log.h"
 #include "resource.h"
 #include "account.h"
@@ -68,7 +69,6 @@ constexpr UINT_PTR kTrayTimer = 0x51;
 constexpr UINT_PTR kStatusTimer = 0x52;       // the bar's status icon
 constexpr UINT_PTR kTrayFocusTimer = 0x53;    // after a forwarded tray click
 constexpr UINT_PTR kReadyTimer = 0x54;       // only during an update startup handshake
-constexpr UINT_PTR kChromeTimer = 0x55;      // while the system taskbar is hidden, put it back the moment it shows
 constexpr UINT kStatusMs = 3000;
 constexpr UINT kTrayId = 1;
 
@@ -95,6 +95,7 @@ struct App {
     std::unique_ptr<TaskModel> tasks;
     std::unique_ptr<AppCatalog> catalog;
     std::unique_ptr<StartMenu> start;
+    std::unique_ptr<ExtrasHost> extras; // Launchpad, the now-playing entry, the folder stack
     std::unique_ptr<Notifications> notes;
     std::unique_ptr<NotificationListener> listener;
     std::unique_ptr<UpdateChecker> updates;
@@ -585,6 +586,41 @@ static void StopYunzhaoIsland()
     CloseHandle(snap);
 }
 
+// The calendar is a separate Electron program started from this one. It reads data for
+// the same account, and leaving it behind after Yunzhao quits kept a window on the
+// desktop and a taskbar entry of its own, so it goes with its host.
+// Electron runs several processes for one app (main, GPU, renderers): each is ended,
+// and the whole set is swept until nothing is left, because a renderer can respawn
+// while its parent is still shutting down.
+static void StopYunzhaoCalendar()
+{
+    for (int round = 0; round < 6; ++round) {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == INVALID_HANDLE_VALUE)
+            return;
+        bool found = false;
+        PROCESSENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        if (Process32FirstW(snap, &entry)) {
+            do {
+                if (_wcsicmp(entry.szExeFile, L"YunzhaoNote.exe") != 0)
+                    continue;
+                found = true;
+                HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+                if (process) {
+                    TerminateProcess(process, 0);
+                    WaitForSingleObject(process, 1000);
+                    CloseHandle(process);
+                }
+            } while (Process32NextW(snap, &entry));
+        }
+        CloseHandle(snap);
+        if (!found)
+            return;
+        Sleep(120); // let the surviving children see their parent go
+    }
+}
+
 void ApplySettings(const Settings& s)
 {
     g_app.desktopDisplay = s.desktopDisplay;
@@ -604,6 +640,8 @@ void ApplySettings(const Settings& s)
     g_app.start->SetPreferredSize(s.startSize);
     g_app.notes->SetRadius(radius);
     g_app.notes->SetOptions(s.notifyTimeout, s.notifyHideBody, s.notifyPlacement);
+    if (g_app.extras)
+        g_app.extras->Apply(s, radius); // Launchpad, now playing, folder stack
     // Notification cards belong to the bar (its bell): without it, Windows shows its own banners.
     if (s.bar && s.notifyListener && !g_app.listener)
         g_app.listener = std::make_unique<NotificationListener>(g_app.host, WM_NOTICE);
@@ -660,13 +698,9 @@ void ApplySettings(const Settings& s)
         // Without the bar, Windows' own taskbar and banners are never hidden.
         g_app.chrome->SetTaskbarHidden(s.bar && s.hideTaskbar);
         g_app.chrome->SetBannersHidden(s.bar && s.hideBanners);
-        // A short period here fights Explorer on every tick and makes the whole
-        // desktop stutter, especially on Windows 10. The show/location hook and
-        // the 3 s status check are enough to keep the system taskbar parked.
-        if (s.bar && s.hideTaskbar)
-            SetTimer(g_app.host, kChromeTimer, 1000, nullptr);
-        else
-            KillTimer(g_app.host, kChromeTimer);
+        // No timer here. Hiding is ShowWindow(SW_HIDE), and the show event hook
+        // (Watch) re-hides Explorer's taskbar the moment it reappears by itself.
+        // A periodic re-hide used to relocate the taskbar and stalled mouse input.
         if (s.bar && (s.hideTaskbar || s.hideBanners))
             EnsureGuard();
     }
@@ -1048,6 +1082,8 @@ void CloseBarPopups()
     g_app.calendar->Close();
     g_app.menu->Close();
     g_app.preview->Close();
+    if (g_app.extras)
+        g_app.extras->ClosePopups(); // Launchpad's and the folder stack's, and the now-playing card
     if (g_app.notes->CenterVisible())
         g_app.notes->ToggleCenter();
 }
@@ -1078,6 +1114,10 @@ void ConfigureBar(Bar& bar)
             g_app.calendar->Visible() || g_app.notes->CenterVisible() || g_app.menu->Visible());
     };
     bar.onStatusWheel = [](int notches) { AdjustVolume(2 * notches); UpdateStatus(); };
+    // Launchpad, the now-playing entry and the folder stack: their entries' callbacks and the
+    // music feed (ExtrasHost owns all three, upstream 3.0).
+    if (g_app.extras)
+        g_app.extras->ConfigureBar(bar);
     bar.onFileDragHover = [](const std::wstring& key) { g_app.tasks->Show(key); };
     bar.canOpenFiles = [](const std::wstring& key) { return g_app.tasks->CanOpenFiles(key); };
     bar.onDropFiles = [](const std::wstring& key, const std::vector<std::wstring>& files) { g_app.tasks->OpenFiles(key, files); };
@@ -1120,6 +1160,7 @@ void SyncDisplayBars(const Settings& settings, bool refresh)
             g_app.chrome->RestoreForExit();
             Log(L"core: secondary display renderer stuck during removal");
             StopYunzhaoIsland();
+            StopYunzhaoCalendar();
             TerminateProcess(GetCurrentProcess(), 0);
         }
         return true;
@@ -1288,11 +1329,6 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 g_app.chrome->Enforce();
             return 0;
         }
-        if (w == kChromeTimer) {
-            if (g_app.chrome)
-                g_app.chrome->RehideTaskbars();
-            return 0;
-        }
         if (w == kTrayFocusTimer) {
             // Explorer gives the focus to its hidden overflow window when a
             // tray button is invoked. The app usually takes it for its window
@@ -1445,6 +1481,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
                 ReleaseMutex(guard);
             CloseHandle(guard);
         }
+        // The calendar outlives a core that could not shut down cleanly, and the updater
+        // then cannot replace its files: sweep it here as well.
+        StopYunzhaoCalendar();
         return wait == WAIT_OBJECT_0 ? 0 : 1;
     }
     HANDLE mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
@@ -1539,6 +1578,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     }
     g_app.start->onSystem = OpenSystem;
     g_app.start->menu = g_app.menu.get();
+    // Launchpad, the now-playing entry and the folder stack: one door for the three (upstream 3.0).
+    g_app.extras = std::make_unique<ExtrasHost>(instance, *g_app.catalog, [](const std::function<void(Bar&)>& each) { ForBars(each); });
+    g_app.extras->onPanelsChanged = [] { g_app.notes->PanelsChanged(); };
+    g_app.extras->onOpenSettings = [](const wchar_t* page) { (void)page; }; // the settings page is not part of this port yet
     g_app.notes = std::make_unique<Notifications>(instance);
     g_app.tray = std::make_unique<TrayModel>(g_app.host, WM_TRAY_ICONS, [] {
         std::vector<PinnedApp> names;
@@ -1607,6 +1650,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
         DispatchMessageW(&msg);
     }
     StopYunzhaoIsland();
+    StopYunzhaoCalendar();
     g_app.displaysReady = false;
     // First the render thread, while every window it draws for is still there; a driver call stuck
     // in the desktop duplication (it holds the shared device) must not keep Yunzhao from exiting:
@@ -1623,6 +1667,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
         Log(L"core: exited (render thread stuck)");
         ReleaseMutex(mutex);
         StopYunzhaoIsland();
+        StopYunzhaoCalendar();
         Sleep(150); // the log line reaches the file
         // Not ExitProcess: unloading the graphics DLLs would wait for the same stuck call.
         TerminateProcess(GetCurrentProcess(), 0);
@@ -1633,6 +1678,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     g_app.wechat.reset();
     g_app.feishu.reset();
     g_app.notes.reset();
+    // Before the bars go: ExtrasHost ends its media watcher's thread and closes its popups.
+    if (g_app.extras) {
+        g_app.extras->Shutdown();
+        g_app.extras.reset();
+    }
     g_app.widgets.reset();
     g_app.calendar.reset();
     g_app.control.reset();

@@ -153,9 +153,7 @@ private:
     winrt::com_ptr<ID3D11Texture2D> roi_, presented_;
     winrt::com_ptr<ID3D11ShaderResourceView> roiSrv_, presentedSrv_;
     bool hasPresented_ = false;
-    // The bar waits for the display between frames; a popup's glass is shown
-    // at once, as its content is (Surface presents without waiting), so a
-    // frame of the two lands in the same composition.
+    // Always overlay-paced: pacing is the frame-latency waitable plus Present(sync_).
     UINT sync_ = 1;
     bool hasBackdrop_ = false;
     HANDLE waitable_ = nullptr;

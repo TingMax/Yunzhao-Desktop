@@ -2,6 +2,7 @@ extends: 'file:./electron-builder.base.yml'
 win:
   executableName: YunzhaoNote
   icon: build/icon.ico
+  legalTrademarks: Yunzhao
   target:
     - target: nsis
       arch:

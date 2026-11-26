@@ -15,6 +15,12 @@ export function assembleResolvedSettings({
     resolveSettingsRows(viewRows, viewMode),
     applicationSettings
   )
+  // The rows come from outside this module and one of them may arrive frozen
+  // (a shared default, a cached snapshot). Writing into it threw
+  // "Cannot assign to read only property 'enabled'" and aborted startup, so the
+  // gate is written on a copy that is ours.
+  if (!next.shortcuts) next.shortcuts = {}
+  if (Object.isFrozen(next.shortcuts)) next.shortcuts = { ...next.shortcuts }
   next.shortcuts.enabled = shortcutsEnabled
   return next
 }
@@ -74,7 +80,9 @@ export function createSettingsRuntime({
     },
     setShortcutsEnabled(enabled) {
       shortcutsEnabled = Boolean(enabled)
+      // structuredClone gives a plain copy even when `values` is frozen.
       const next = structuredClone(values)
+      if (!next.shortcuts) next.shortcuts = {}
       next.shortcuts.enabled = shortcutsEnabled
       values = freezeValues(next)
       revision += 1

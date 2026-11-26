@@ -1350,8 +1350,9 @@ function teacherServerFile() {
 
 async function ensureTeacherServer() {
   const health = 'http://127.0.0.1:3090/api/v1/health'
+  const probe = () => fetch(health, { signal: AbortSignal.timeout(2000) })
   try {
-    if ((await fetch(health)).ok) return true
+    if ((await probe()).ok) return true
   } catch {
     // The desk is started on the first page that needs it.
   }
@@ -1368,7 +1369,7 @@ async function ensureTeacherServer() {
   for (let i = 0; i < 40; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 250))
     try {
-      if ((await fetch(health)).ok) return true
+      if ((await probe()).ok) return true
     } catch {
       // Keep waiting while node starts.
     }

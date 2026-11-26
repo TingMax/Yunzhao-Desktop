@@ -77,6 +77,9 @@ void GlassRenderer::Pop(bool open, float cx, float cy) { PopVisual(dcomp_.get(),
 GlassRenderer::GlassRenderer(const Gpu& gpu, HWND hwnd, int width, int height, bool topmost, bool overlay, bool alignedBackdrop)
     : gpu_(gpu), w_(width), h_(height), alignedBackdrop_(alignedBackdrop)
 {
+    // Upstream pacing: Ready() takes the latency signal without waiting, then
+    // Present(1) blocks for the frame after it. Waiting on the latency object in
+    // the render loop instead (or here) deadlocks: see the wait in RenderSession.
     sync_ = overlay ? 1 : 0; // the bar draws its content over the glass; a popup's content is its own
     auto* dev = gpu_.device.get();
     Check(dev->CreateVertexShader(g_GlassVS, sizeof(g_GlassVS), nullptr, vs_.put()));

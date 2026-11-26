@@ -57,6 +57,10 @@ bool LoadShellImage(const std::wstring& parsingName, int sizePx, IconImage& out,
 bool LoadYunzhaoIcon(const std::wstring& exePath, int sizePx, IconImage& out);
 // Resolves a shortcut and a versioned client's app/ launcher without starting it.
 std::wstring AppExecutable(const std::wstring& path);
+// An HICON's picture, premultiplied BGRA.
+bool HIconToImage(HICON icon, IconImage& out);
+// Crops a premultiplied image to a centred square and scales it to size x size (cover).
+IconImage CropToSquare(const IconImage& src, int size);
 
 class TaskModel {
 public:

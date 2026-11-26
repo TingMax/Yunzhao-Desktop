@@ -18,6 +18,7 @@
 
 #include "render/bar_painter.h"
 #include "render/glass_panel.h"
+#include "render/music_bars.h"
 #include "settings.h"
 #include "shell/task_model.h"
 #include "shell/displays.h"
@@ -88,6 +89,22 @@ public:
     std::function<void(RECT anchor)> onTrayClick;   // the tray entry (Yunzhao's tray panel)
     std::function<void(RECT anchor)> onStatusClick; // the status icon (Wi-Fi, battery: the control centre)
     std::function<void(int notches)> onStatusWheel; // the wheel over the status icon (volume)
+    // The extra entries upstream 3.0 adds (ExtrasHost): Launchpad beside the logo, the now-playing
+    // entry right of the status entry, the folder stack left of the tray. `key` is kLaunchpadKey,
+    // kMusicKey or kStacksKey; `anchor` the entry's rectangle on screen.
+    std::function<void(const std::wstring& key, RECT anchor)> onExtraClick;
+    // The now-playing entry: its level feed (null: nothing playing), whether it shows at all, and
+    // its tooltip (the track). `tip` is upstream 3.0's; the entry's tooltip here is the track name.
+    void SetMusic(std::shared_ptr<const MusicFeed> feed, bool shown, std::wstring tip = {});
+    // Whether this bar is on screen at all (not tucked away): the music feed is sampled only then.
+    bool Seen() const { return visible_ && !slidOut_; }
+    // Wakes the render thread: a new level arrived (the music bars move at once).
+    void WakeRender();
+    // Called when the bar tucks or reveals: the music entry samples the level only while visible.
+    std::function<void()> onTuckChanged;
+    // Whether Launchpad's and the folder stack's entries show (the settings say).
+    void SetExtrasShown(bool launchpad, bool stacks) { showLaunchpad_ = launchpad; showStacks_ = stacks; }
+    std::pair<bool, bool> ExtrasShown() const { return {showLaunchpad_, showStacks_}; }
     // The overflow entry: apps that did not fit, in bar order.
     std::function<void(const std::vector<std::wstring>& keys, RECT anchor)> onOverflow;
     // Drag and drop of an app to visible position `toIndex` (0-based, in the
@@ -203,6 +220,11 @@ private:
     std::vector<std::wstring> hidden_; // apps behind the overflow entry
     int unread_ = 0;
     SystemStatus status_;
+    // The now-playing entry (SetMusic): its level feed (under lock_, read through the snapshot),
+    // whether it shows. Upstream 3.0.
+    std::shared_ptr<const MusicFeed> music_;
+    bool musicShown_ = false;
+    bool showLaunchpad_ = false, showStacks_ = false; // the other two extra entries (ExtrasHost)
     bool belowTray_ = false;   // yielded to the system taskbar the user is using
     bool trayHeldUp_ = false;  // the system taskbar is up without the user (logged once)
     HWND previousForeground_ = nullptr;
@@ -224,9 +246,14 @@ private:
     bool covered_ = false, revealed_ = false, tucked_ = false, slidOut_ = false;
     ULONGLONG leftAt_ = 0; // when the pointer left a revealed bar
     ULONGLONG revealAt_ = 0; // when the pointer arrived at the bottom edge
+    ULONGLONG revealLogged_ = 0; // last "held away" log, so a stuck full-screen report is not spammed
     std::map<HWND, std::pair<int, ULONGLONG>> raises_; // windows we were raised over: count, first time
     HWND lastCover_ = nullptr;
     ULONGLONG yieldUntil_ = 0; // a game is taking the screen; do not raise or reveal until then
+    ULONGLONG fullscreenSettleUntil_ = 0; // a fullscreen window just appeared; let it settle
+    ULONGLONG watchLogged_ = 0; // last reveal-poll state log
+    ULONGLONG yieldLogged_ = 0; // last "stand down" state log
+    ULONGLONG revealLog2_ = 0;  // last reveal-wait state log
     bool appliedVisible_ = false;
     std::wstring fileHoverKey_;
     winrt::com_ptr<IDropTarget> dropTarget_;

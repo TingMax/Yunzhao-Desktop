@@ -36,6 +36,7 @@ struct SceneItem {
     std::wstring glyph;        // Segoe Fluent Icons glyph instead of an image (bar entries)
     int badge = 0;             // > 0: count badge on the icon (unread notifications)
     double bounceMs = 0;       // ClockMs() when a launch bounce started; 0 = none
+    bool musicBars = false;    // the now-playing entry: five bars instead of a glyph (upstream 3.0)
 };
 
 struct BarScene {
@@ -45,7 +46,7 @@ struct BarScene {
     bool tucked = false;       // auto-hide: the bar slides down off the screen
     float scale = 1;
     std::vector<SceneItem> items;  // apps only (drag and drop works on these)
-    std::vector<SceneItem> extras; // Yunzhao logo (#start), overflow (#more), tray (#tray), status (#status), notifications (#notify)
+    std::vector<SceneItem> extras; // Atrium logo (#start), overflow (#more), tray (#tray), status (#status), notifications (#notify)
     SystemStatus status;           // drawn by the #status entry
     bool statusIcons = false;      // as the Windows taskbar's three icons rather than the ring (statusStyle)
     float separatorX = -1;     // < 0: none

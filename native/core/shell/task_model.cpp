@@ -410,28 +410,21 @@ bool IconToImage(HICON icon, IconImage& out)
     return ok;
 }
 
-// Scales a premultiplied image into a size x size square (aspect kept, centred).
-IconImage FitToSquare(const IconImage& src, int size)
+// Scales a premultiplied image region into a size x size square (aspect kept, centred).
+// Copies src's (sx0, sy0, sw, sh) region into out's (ox, oy, dw, dh) box, bilinear when enlarging
+// and area-averaged when shrinking. Shared by FitToSquare and CropToSquare.
+static void ResampleRect(const IconImage& src, int sx0, int sy0, int sw, int sh, IconImage& out, int ox, int oy, int dw, int dh)
 {
-    if (src.width == size && src.height == size)
-        return src;
-    IconImage out;
-    out.width = out.height = size;
-    out.bgra.assign(size_t(size) * size_t(size) * 4, 0);
-    double scale = double(size) / double(std::max(src.width, src.height));
-    int dw = std::max(1, int(std::lround(src.width * scale)));
-    int dh = std::max(1, int(std::lround(src.height * scale)));
-    int ox = (size - dw) / 2, oy = (size - dh) / 2;
     auto at = [&](int x, int y, int c) {
-        x = std::clamp(x, 0, src.width - 1);
-        y = std::clamp(y, 0, src.height - 1);
+        x = std::clamp(x + sx0, 0, src.width - 1);
+        y = std::clamp(y + sy0, 0, src.height - 1);
         return double(src.bgra[(size_t(y) * size_t(src.width) + size_t(x)) * 4 + size_t(c)]);
     };
     for (int dy = 0; dy < dh; ++dy) {
-        double y0 = double(dy) * src.height / dh, y1 = double(dy + 1) * src.height / dh;
+        double y0 = double(dy) * sh / dh, y1 = double(dy + 1) * sh / dh;
         for (int dx = 0; dx < dw; ++dx) {
-            double x0 = double(dx) * src.width / dw, x1 = double(dx + 1) * src.width / dw;
-            uint8_t* d = &out.bgra[(size_t(dy + oy) * size_t(size) + size_t(dx + ox)) * 4];
+            double x0 = double(dx) * sw / dw, x1 = double(dx + 1) * sw / dw;
+            uint8_t* d = &out.bgra[(size_t(dy + oy) * size_t(out.width) + size_t(dx + ox)) * 4];
             for (int c = 0; c < 4; ++c) {
                 double v = 0;
                 if (x1 - x0 <= 1.0 && y1 - y0 <= 1.0) {
@@ -458,6 +451,20 @@ IconImage FitToSquare(const IconImage& src, int size)
             }
         }
     }
+}
+
+// Scales a premultiplied image into a size x size square (aspect kept, centred).
+IconImage FitToSquare(const IconImage& src, int size)
+{
+    if (src.width == size && src.height == size)
+        return src;
+    IconImage out;
+    out.width = out.height = size;
+    out.bgra.assign(size_t(size) * size_t(size) * 4, 0);
+    double scale = double(size) / double(std::max(src.width, src.height));
+    int dw = std::max(1, int(std::lround(src.width * scale)));
+    int dh = std::max(1, int(std::lround(src.height * scale)));
+    ResampleRect(src, 0, 0, src.width, src.height, out, (size - dw) / 2, (size - dh) / 2, dw, dh);
     return out;
 }
 
@@ -601,6 +608,25 @@ struct ScanRec {
 };
 
 } // namespace
+
+// An HICON's picture, premultiplied BGRA. The anonymous namespace's IconToImage, exposed for the
+// readers outside this file (the music card's album art, the tray's icons).
+bool HIconToImage(HICON icon, IconImage& out) { return IconToImage(icon, out); }
+
+// Crops a premultiplied image to a centred square and scales it to size x size (cover).
+IconImage CropToSquare(const IconImage& src, int size)
+{
+    if (src.width == size && src.height == size)
+        return src;
+    if (src.empty() || size <= 0)
+        return {};
+    IconImage out;
+    out.width = out.height = size;
+    out.bgra.assign(size_t(size) * size_t(size) * 4, 0);
+    const int side = std::min(src.width, src.height);
+    ResampleRect(src, (src.width - side) / 2, (src.height - side) / 2, side, side, out, 0, 0, size, size);
+    return out;
+}
 
 struct TaskModel::Impl {
     HWND ui;
