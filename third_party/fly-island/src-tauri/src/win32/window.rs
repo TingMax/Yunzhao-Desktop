@@ -17,7 +17,7 @@ use windows::{
                 AllowSetForegroundWindow, BringWindowToTop, EnumWindows, FlashWindowEx, IsGUIThread,
                 FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG, GetClassNameW, GetCursorPos,
                 GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
-                GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SendMessageTimeoutW,
+                GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, SendMessageTimeoutW,
                 SetForegroundWindow, SetWindowPos, ShowWindow, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, SMTO_ABORTIFHUNG,
                 SMTO_BLOCK, SMTO_ERRORONEXIT, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, WINDOWPLACEMENT, WM_NULL,
                 WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
@@ -100,6 +100,13 @@ pub(crate) fn is_minimized(window: HWND) -> bool {
     // SAFETY: IsIconic takes the HWND by value and returns false for invalid
     // windows.
     unsafe { IsIconic(window) }.as_bool()
+}
+
+/// The window is maximized: it fills the work area but keeps its frame. A maximized app is not a
+/// full-screen one — the island may still take the focus from it without dropping it anywhere.
+pub(crate) fn is_maximized(window: HWND) -> bool {
+    // SAFETY: IsZoomed takes the HWND by value and returns false for invalid windows.
+    unsafe { IsZoomed(window) }.as_bool()
 }
 
 /// The current foreground window; a null HWND when there is none.
