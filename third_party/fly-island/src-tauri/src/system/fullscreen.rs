@@ -50,25 +50,26 @@ fn is_fullscreen_foreground(
     match signal {
         FullscreenSignal::None => false,
         FullscreenSignal::Presentation => true,
-        FullscreenSignal::FullscreenApp => {
-            !SHELL_CLASSES.contains(&class)
-                && matches!((window, monitor), (Some(window), Some(monitor))
-                    if window.left <= monitor.left && window.top <= monitor.top
-                        && window.right >= monitor.right && window.bottom >= monitor.bottom)
-        }
+        FullscreenSignal::FullscreenApp => covers_monitor(window, monitor, class),
     }
 }
 
 fn read(app: &AppHandle) -> ForegroundFullscreen {
     let foreground = win32::window::foreground_window();
-    let active = is_fullscreen_foreground(
-        win32::notification_state::fullscreen_signal(),
-        (!foreground.is_invalid() && win32::window::is_visible(foreground))
-            .then(|| win32::window::window_rect(foreground))
-            .flatten(),
-        win32::window::monitor_rect(foreground),
-        &win32::window::class_name(foreground),
-    );
+    let window = (!foreground.is_invalid() && win32::window::is_visible(foreground))
+        .then(|| win32::window::window_rect(foreground))
+        .flatten();
+    let monitor = win32::window::monitor_rect(foreground);
+    let class = win32::window::class_name(foreground);
+    // A maximized app fills the work area but keeps its frame: the island may take the focus from
+    // it (nothing drops to the desktop). Only a window that covers the screen without being
+    // maximized is a full-screen app, exclusive or borderless alike.
+    let maximized = win32::window::is_maximized(foreground);
+    let active = is_fullscreen_foreground(win32::notification_state::fullscreen_signal(), window, monitor, &class)
+        // The system only reports an exclusive full screen. A game in a borderless window is a
+        // normal window as far as it is concerned (QUNS_NONE), yet it covers the screen just the
+        // same and must not be pulled to the desktop either. Judge that case by the window itself.
+        || (!maximized && covers_monitor(window, monitor, &class));
     let on_island_monitor = active
         && island::main_window(app)
             .and_then(|window| window.hwnd().map_err(|error| error.to_string()))
@@ -77,6 +78,17 @@ fn read(app: &AppHandle) -> ForegroundFullscreen {
                 win32::window::share_monitor(win32::window::foreground_window(), island)
             });
     ForegroundFullscreen { active, on_island_monitor }
+}
+
+/// The foreground window covers its whole monitor and is an app: a borderless full-screen game,
+/// a full-screen video. Explorer's shell windows always cover the screen and are not apps.
+fn covers_monitor(window: Option<RECT>, monitor: Option<RECT>, class: &str) -> bool {
+    if SHELL_CLASSES.contains(&class) {
+        return false;
+    }
+    matches!((window, monitor), (Some(window), Some(monitor))
+        if window.left <= monitor.left && window.top <= monitor.top
+            && window.right >= monitor.right && window.bottom >= monitor.bottom)
 }
 
 pub(crate) fn start(app: &AppHandle) {
@@ -139,5 +151,22 @@ mod tests {
     fn presentation_settings_count_and_a_quiet_shell_never_does() {
         assert!(is_fullscreen_foreground(FullscreenSignal::Presentation, None, None, ""));
         assert!(!is_fullscreen_foreground(FullscreenSignal::None, Some(MONITOR), Some(MONITOR), "UnityWndClass"));
+    }
+
+    /// A borderless game reports QUNS_NONE, so the signal alone misses it. `covers_monitor` is what
+    /// catches it; this pins that judgement down, and that a maximized window is not one.
+    #[test]
+    fn a_borderless_full_screen_is_judged_by_its_window() {
+        let covering = RECT { left: -8, top: -8, right: 1928, bottom: 1088 };
+        assert!(covers_monitor(Some(covering), Some(MONITOR), "RiotWindowClass"));
+        assert!(covers_monitor(Some(MONITOR), Some(MONITOR), "UnityWndClass"));
+        // A maximized window keeps the work area's height: not full screen.
+        let maximized = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
+        assert!(!covers_monitor(Some(maximized), Some(MONITOR), "Chrome_WidgetWin_1"));
+        // The shell covers the screen without being an app.
+        for shell in SHELL_CLASSES {
+            assert!(!covers_monitor(Some(MONITOR), Some(MONITOR), shell));
+        }
+        assert!(!covers_monitor(None, Some(MONITOR), "UnityWndClass"));
     }
 }
