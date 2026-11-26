@@ -1,4 +1,7 @@
-/* The lyric line on the collapsed island: the todo text's look; a new line replaces the last at once. */
+/* The lyric line on the collapsed island: the todo text's look; a new line replaces the last at once.
+   A line longer than the capsule scrolls sideways instead of being cut: the end of a Chinese line
+   is usually the half the ellipsis used to eat. `--lyric-overflow` (set by CollapsedLyric) is how
+   far it still has to travel, so a short line stays put and a long one starts over after a pause. */
 .collapsed-lyric {
   min-width: 0;
   flex: 1;
@@ -7,8 +10,38 @@
   font-size: calc(13px * var(--island-font-scale, 1));
   font-weight: 600;
   line-height: 1.2;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  --lyric-overflow: 0px;
+}
+
+.collapsed-lyric__text {
+  display: inline-block;
+  will-change: transform;
+}
+
+/* Only a line too long to fit moves; a short one sits still, exactly as before. */
+.collapsed-lyric--scrolls .collapsed-lyric__text {
+  animation: collapsed-lyric-scroll var(--lyric-scroll-ms, 8000ms) ease-in-out infinite alternate;
+}
+
+@keyframes collapsed-lyric-scroll {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(calc(-1 * var(--lyric-overflow)));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No travel: fade the tail out so it is still clear the line goes on. */
+  .collapsed-lyric--scrolls .collapsed-lyric__text {
+    animation: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 82%, transparent);
+    mask-image: linear-gradient(90deg, #000 82%, transparent);
+  }
 }
 
 .collapsed-lyric__word {

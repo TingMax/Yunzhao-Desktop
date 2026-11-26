@@ -83,6 +83,42 @@
   white-space: nowrap;
 }
 
+/* The body scrolls its tail into view when it does not fit: a message is often longer than the
+   capsule, and its end is what tells you whether it needs an answer. The sender above keeps its
+   ellipsis (it is the secondary half). `--message-overflow` is set by CollapsedMessageContent. */
+.island-message-preview__body--scrolls {
+  text-overflow: clip;
+  --message-overflow: 0px;
+}
+
+.island-message-preview__body-inner {
+  display: inline-block;
+  will-change: transform;
+}
+
+.island-message-preview__body--scrolls .island-message-preview__body-inner {
+  animation: islandMessageScroll var(--message-scroll-ms, 8000ms) ease-in-out infinite alternate;
+}
+
+@keyframes islandMessageScroll {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(calc(-1 * var(--message-overflow)));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .island-message-preview__body--scrolls .island-message-preview__body-inner {
+    animation: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 82%, transparent);
+    mask-image: linear-gradient(90deg, #000 82%, transparent);
+  }
+}
+
 .island-message-preview__sender {
   flex: 0 1 auto;
   max-width: 42%;

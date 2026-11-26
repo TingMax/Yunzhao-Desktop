@@ -27,6 +27,12 @@ pub fn take_island_hover_focus(app: AppHandle) -> Result<bool, String> {
     if win32::input::is_left_button_down() || win32::input::is_shortcut_modifier_down() {
         return Ok(false);
     }
+    // A full-screen app in front is never asked to give the focus up: on an exclusive full screen
+    // that drops the game to the desktop. The island's own shortcuts stay out of reach while one
+    // runs, which is the right trade (game mode already hides its pages).
+    if crate::system::fullscreen::foreground_fullscreen(&app) {
+        return Ok(false);
+    }
     let window = main_window(&app)?;
     let island = window.hwnd().map_err(|error| error.to_string())?;
     let foreground = win32::window::foreground_window();

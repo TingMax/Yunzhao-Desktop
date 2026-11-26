@@ -258,7 +258,13 @@ pub(crate) fn show_island(app: &AppHandle) -> Result<(), String> {
     let window = main_window(app)?;
     apply_stage_geometry(&window, read_window_state(), false)?;
     window.show().map_err(|error| error.to_string())?;
-    crate::system::window_focus::focus_window(&window)?;
+    // A full-screen app in front keeps the focus: taking it would drop the game out of its
+    // exclusive full screen onto the desktop, which reads as being thrown out of the game every
+    // time a message or a lyric line shows the island. The island still appears, on top.
+    let quiet = crate::system::fullscreen::foreground_fullscreen(app);
+    if !quiet {
+        crate::system::window_focus::focus_window(&window)?;
+    }
     if let Ok(hwnd) = window.hwnd() {
         win32::taskbar_edge::raise_topmost(hwnd);
     }

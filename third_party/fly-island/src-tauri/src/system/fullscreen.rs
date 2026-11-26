@@ -100,6 +100,17 @@ pub fn get_foreground_fullscreen() -> ForegroundFullscreen {
     *STATE.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
+/// A full-screen app on the island's monitor is in front right now. Showing the island then must
+/// not take the focus: doing so drops the game out of its exclusive full screen onto the desktop,
+/// which the user sees as being thrown out of the game on every message or lyric change.
+pub(crate) fn foreground_fullscreen(app: &AppHandle) -> bool {
+    // Ask the live windows as well as the polled state: a game can go full screen between polls,
+    // and the island is often shown by a message that arrives in that gap.
+    let live = read(app);
+    let polled = *STATE.lock().unwrap_or_else(|poison| poison.into_inner());
+    (live.active && live.on_island_monitor) || (polled.active && polled.on_island_monitor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

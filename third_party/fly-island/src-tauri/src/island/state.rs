@@ -1,6 +1,7 @@
 //! Native-side island window state shared by the commands, geometry and cursor passthrough.
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use tauri::PhysicalPosition;
 
@@ -11,6 +12,9 @@ use super::geometry::{
 };
 
 pub(super) static WINDOW_STATE: OnceLock<Mutex<IslandWindowState>> = OnceLock::new();
+
+/// Non-zero while this code is sliding the window to a new place: those moves are not the user's.
+static ANIMATION_RUNNING: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy)]
 pub(crate) enum IslandMode {
@@ -246,6 +250,12 @@ pub(super) fn read_window_state() -> IslandWindowState {
 }
 
 pub(crate) fn record_dragged_position(position: PhysicalPosition<i32>) {
+    // A slide this code runs moves the window with the same events a drag does. Recording one of
+    // those as the user's own position pinned the island wherever the animation happened to be —
+    // an animation to the primary monitor left it on the secondary one for good.
+    if is_animating() {
+        return;
+    }
     mutate_window_state(|state| {
         if state.is_dragging && !state.is_tucked {
             state.custom_position = Some(IslandPosition {
@@ -255,4 +265,18 @@ pub(crate) fn record_dragged_position(position: PhysicalPosition<i32>) {
         }
         *state
     });
+}
+
+/// True while a placement animation is still moving the window.
+fn is_animating() -> bool {
+    ANIMATION_RUNNING.load(Ordering::SeqCst) != 0
+}
+
+/// Called as a slide starts and ends (geometry.rs), so its own moves are not taken for drags.
+pub(super) fn animation_started() {
+    ANIMATION_RUNNING.fetch_add(1, Ordering::SeqCst);
+}
+
+pub(super) fn animation_finished() {
+    ANIMATION_RUNNING.fetch_sub(1, Ordering::SeqCst);
 }
