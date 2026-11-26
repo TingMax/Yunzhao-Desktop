@@ -36,7 +36,6 @@ struct SceneItem {
     std::wstring glyph;        // Segoe Fluent Icons glyph instead of an image (bar entries)
     int badge = 0;             // > 0: count badge on the icon (unread notifications)
     double bounceMs = 0;       // ClockMs() when a launch bounce started; 0 = none
-    bool musicBars = false;    // the now-playing entry: five bars instead of a glyph (upstream 3.0)
 };
 
 struct BarScene {

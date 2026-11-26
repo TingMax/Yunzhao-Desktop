@@ -47,7 +47,6 @@ constexpr wchar_t kStatusKey[] = L"#status";
 constexpr wchar_t kMoreKey[] = L"#more";
 // Upstream 3.0's extra entries (ExtrasHost): Launchpad, now playing, folder stack.
 constexpr wchar_t kLaunchpadKey[] = L"#launchpad";
-constexpr wchar_t kMusicKey[] = L"#music";
 constexpr wchar_t kStacksKey[] = L"#stacks";
 // Bar entries and the clock start with '#'; app keys are AUMIDs or paths.
 bool IsEntry(const std::wstring& key) { return !key.empty() && key[0] == L'#'; }
@@ -627,7 +626,7 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                 onClockClick();
             else if (key == kStartKey && onStartClick)
                 onStartClick(anchor);
-            else if ((key == kLaunchpadKey || key == kMusicKey || key == kStacksKey) && onExtraClick)
+            else if ((key == kLaunchpadKey || key == kStacksKey) && onExtraClick)
                 onExtraClick(key, anchor);
             else if (key == kNotifyKey && onNotifyClick)
                 onNotifyClick(anchor);
@@ -948,8 +947,7 @@ void Bar::Relayout()
     // pass below and the layout further down have to agree, or the app strip runs into the tray.
     showLaunchpad_ = settings_.showLaunchpad;
     showStacks_ = settings_.showFolderStacks;
-    const int rightCount = int(showTray) + int(showStatus) + int(showNotifications) + int(clockW != 0) +
-                           int(showStatus && musicShown_) + int(showStacks_);
+    const int rightCount = int(showTray) + int(showStatus) + int(showNotifications) + int(clockW != 0) + int(showStacks_);
     const int groupGap = rightCount ? sepGap : 0;
     auto padFor = [&](int p) { return (barH - p) / 2 + Px(4, s); }; // ends: plate gap plus a little air
     auto contentWidth = [&](int count, int p, int g, bool overflow) {
@@ -968,8 +966,6 @@ void Bar::Relayout()
             right += clockW + g, ++rightEntries;
         if (showStatus)
             right += p + statusExtra + g, ++rightEntries; // the status entry is plate + its icons
-        if (showStatus && musicShown_)
-            right += p + g, ++rightEntries;
         if (showStacks_)
             right += p + g, ++rightEntries;
         if (showTray)
@@ -1113,10 +1109,6 @@ void Bar::Relayout()
     const int bellLeft = rightSlot(plate, showNotifications);
     const int clockLeft = rightSlot(clockW, clockW != 0), clockRight = clockLeft + clockW;
     const int statusLeft = rightSlot(statusW, showStatus), statusRight = statusLeft + statusW;
-    // The now-playing entry sits right of the status entry, so it is placed before it (right to
-    // left): five bars on a capsule, only while a player has a session.
-    const int musicW = plate;
-    const int musicLeft = rightSlot(musicW, showStatus && musicShown_);
     const int stacksLeft = rightSlot(plate, showStacks_);
     const int trayLeft = rightSlot(plate, showTray);
     const int rightLeft = rightCount ? cursor + gap : insetX + barW - pad;
@@ -1191,12 +1183,6 @@ void Bar::Relayout()
     if (showStacks_) {
         scene.extras.push_back(entry(kStacksKey, stacksLeft, L"\uE8F1")); // a folder
         hits_.push_back({kStacksKey, RECT{stacksLeft - gap / 2, hitTop, stacksLeft + plate + gap / 2, hitBottom}});
-    }
-    if (musicShown_ && showStatus) {
-        SceneItem music = entry(kMusicKey, musicLeft, L"");
-        music.musicBars = true;
-        scene.extras.push_back(std::move(music));
-        hits_.push_back({kMusicKey, RECT{musicLeft - gap / 2, hitTop, musicLeft + plate + gap / 2, hitBottom}});
     }
     if (showTray) {
         scene.extras.push_back(entry(kTrayKey, trayLeft, L"\uE70E"));
@@ -1457,8 +1443,6 @@ void Bar::UpdateAutoHide()
         return;
     tucked_ = tuck;
     scene_.tucked = tuck;
-    if (onTuckChanged)
-        onTuckChanged(); // the music entry samples the level only while the bar is on screen
     if (tuck) {
         HideTooltip();
         SetRegion(false);
@@ -1776,30 +1760,6 @@ void Bar::SetUnread(int count)
         return;
     unread_ = count;
     Relayout();
-}
-
-// The now-playing entry (upstream 3.0): while a player has a session, five bars sit right of the
-// status entry and move with `feed`. The entry comes and goes with `shown`, so the bar re-lays out.
-void Bar::SetMusic(std::shared_ptr<const MusicFeed> feed, bool shown, std::wstring tip)
-{
-    (void)tip; // the tooltip text is the track name, drawn by the card
-    const bool relayout = shown != musicShown_;
-    musicShown_ = shown;
-    {
-        std::lock_guard g(lock_);
-        music_ = std::move(feed);
-    }
-    if (relayout)
-        Relayout(); // the entry comes or goes
-    else
-        Publish(false); // the render thread takes up the bars (playing) or lets them settle
-}
-
-// A new audio level: the render thread redraws the music bars at once instead of on its own clock.
-void Bar::WakeRender()
-{
-    if (music_)
-        Publish(false);
 }
 
 RECT Bar::EntryRect(const std::wstring& key) const

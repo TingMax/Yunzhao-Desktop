@@ -51,10 +51,6 @@ add_executable(yunzhao_core WIN32
     shell/jump_list.cpp
     shell/wechat_source.cpp
     shell/feishu_source.cpp
-    shell/media_app.cpp
-    shell/media_players.cpp
-    shell/audio_meter.cpp
-    shell/media_session.cpp
     shell/launchpad_order.cpp
     shell/start_pins.cpp
     shell/folder_stacks.cpp
@@ -64,7 +60,6 @@ add_executable(yunzhao_core WIN32
     ui/launchpad_input.cpp
     ui/launchpad_drag.cpp
     ui/folder_stack_popup.cpp
-    ui/now_playing_card.cpp
     extras_host.cpp
     ui/start_menu.cpp
     ui/notifications.cpp

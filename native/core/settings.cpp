@@ -77,17 +77,9 @@ void Settings::Clamp()
         launchpadMaterial = L"bar";
     if (launchpadLayout != L"fullscreen")
         launchpadLayout = L"window";
-    if (nowPlayingMotion != L"off" && nowPlayingMotion != L"subtle" && nowPlayingMotion != L"vivid")
-        nowPlayingMotion = L"normal";
-    if (nowPlayingRhythm != L"loop")
-        nowPlayingRhythm = L"live";
-    if (nowPlayingAppMode != L"allow" && nowPlayingAppMode != L"block")
-        nowPlayingAppMode = L"all";
     if (folderStackLayout != L"column")
         folderStackLayout = L"fan";
     folderStackMax = std::clamp(folderStackMax, 4, 24);
-    if (nowPlayingApps.size() > 64)
-        nowPlayingApps.resize(64);
     if (folderStacks.size() > 32)
         folderStacks.resize(32);
     if (folderStackFiles.size() > 32)
@@ -168,21 +160,10 @@ std::wstring Settings::ToJson() const
     o.SetNamedValue(L"winKeyStart", json::JsonValue::CreateBooleanValue(winKeyStart));
     o.SetNamedValue(L"winNumbers", json::JsonValue::CreateBooleanValue(winNumbers));
     o.SetNamedValue(L"startOnLogin", json::JsonValue::CreateBooleanValue(startOnLogin));
-    // Upstream 3.0's three extra entries.
+    // Upstream 3.0's extra entries (Launchpad and the folder stack; no player on the bar).
     o.SetNamedValue(L"showLaunchpad", json::JsonValue::CreateBooleanValue(showLaunchpad));
     o.SetNamedValue(L"launchpadMaterial", json::JsonValue::CreateStringValue(launchpadMaterial));
     o.SetNamedValue(L"launchpadLayout", json::JsonValue::CreateStringValue(launchpadLayout));
-    o.SetNamedValue(L"showNowPlaying", json::JsonValue::CreateBooleanValue(showNowPlaying));
-    o.SetNamedValue(L"nowPlayingShowPaused", json::JsonValue::CreateBooleanValue(nowPlayingShowPaused));
-    o.SetNamedValue(L"nowPlayingMotion", json::JsonValue::CreateStringValue(nowPlayingMotion));
-    o.SetNamedValue(L"nowPlayingRhythm", json::JsonValue::CreateStringValue(nowPlayingRhythm));
-    o.SetNamedValue(L"nowPlayingAppMode", json::JsonValue::CreateStringValue(nowPlayingAppMode));
-    {
-        json::JsonArray a;
-        for (const auto& s : nowPlayingApps)
-            a.Append(json::JsonValue::CreateStringValue(s));
-        o.SetNamedValue(L"nowPlayingApps", a);
-    }
     o.SetNamedValue(L"showFolderStacks", json::JsonValue::CreateBooleanValue(showFolderStacks));
     o.SetNamedValue(L"folderStackLayout", json::JsonValue::CreateStringValue(folderStackLayout));
     o.SetNamedValue(L"folderStackMax", json::JsonValue::CreateNumberValue(folderStackMax));
@@ -298,12 +279,6 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
     flag(L"showLaunchpad", s.showLaunchpad);
     wstr(L"launchpadMaterial", s.launchpadMaterial);
     wstr(L"launchpadLayout", s.launchpadLayout);
-    flag(L"showNowPlaying", s.showNowPlaying);
-    flag(L"nowPlayingShowPaused", s.nowPlayingShowPaused);
-    wstr(L"nowPlayingMotion", s.nowPlayingMotion);
-    wstr(L"nowPlayingRhythm", s.nowPlayingRhythm);
-    wstr(L"nowPlayingAppMode", s.nowPlayingAppMode);
-    list(L"nowPlayingApps", s.nowPlayingApps);
     flag(L"showFolderStacks", s.showFolderStacks);
     wstr(L"folderStackLayout", s.folderStackLayout);
     if (o.HasKey(L"folderStackMax") && o.GetNamedValue(L"folderStackMax").ValueType() == json::JsonValueType::Number)

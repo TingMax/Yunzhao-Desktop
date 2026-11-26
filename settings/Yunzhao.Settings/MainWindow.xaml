@@ -810,26 +810,6 @@
                                     <TextBlock x:Name="StackCountText" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                                     <StackPanel x:Name="StackFolderList" Spacing="4" Margin="0,6,0,0" />
                                 </StackPanel>
-                                <local:ToggleTile x:Name="NowPlayingSwitch" Title="正在播放" SwitchName="正在播放" Toggled="OnNowPlayingToggled" Flat="True"
-                                                  Note="有播放器在放音乐时，状态环右侧出现五根随声音跳动的竖条，点开是播放卡片。" />
-                                <local:ToggleTile x:Name="NowPlayingPausedSwitch" Title="暂停时也显示" SwitchName="暂停时也显示" Toggled="OnNowPlayingPausedToggled" Flat="True"
-                                                  Note="关闭后只有正在播放时才出现那五根竖条。" />
-                                <StackPanel Style="{StaticResource FlatRowStyle}">
-                                    <TextBlock Text="竖条的动作" Style="{StaticResource RowTitleStyle}" />
-                                    <local:SegmentTrack>
-                                        <RadioButton x:Name="NpMotionOff" GroupName="npmotion" Content="静止" Tag="off" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
-                                        <RadioButton x:Name="NpMotionSubtle" GroupName="npmotion" Content="轻微" Tag="subtle" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
-                                        <RadioButton x:Name="NpMotionNormal" GroupName="npmotion" Content="正常" Tag="normal" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
-                                        <RadioButton x:Name="NpMotionVivid" GroupName="npmotion" Content="强烈" Tag="vivid" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
-                                    </local:SegmentTrack>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource FlatRowStyle}">
-                                    <TextBlock Text="竖条的节奏" Style="{StaticResource RowTitleStyle}" />
-                                    <local:SegmentTrack>
-                                        <RadioButton x:Name="NpRhythmLive" GroupName="nprhythm" Content="跟随声音" Tag="live" Style="{StaticResource SegmentStyle}" Checked="OnNpRhythmChecked" />
-                                        <RadioButton x:Name="NpRhythmLoop" GroupName="nprhythm" Content="固定律动" Tag="loop" Style="{StaticResource SegmentStyle}" Checked="OnNpRhythmChecked" />
-                                    </local:SegmentTrack>
-                                </StackPanel>
                             </StackPanel>
                             <StackPanel x:Name="DockContent">
                                 <TextBlock Text="栏上显示" Style="{StaticResource SectionStyle}" />

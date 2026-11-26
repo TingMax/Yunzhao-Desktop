@@ -1114,8 +1114,7 @@ void ConfigureBar(Bar& bar)
             g_app.calendar->Visible() || g_app.notes->CenterVisible() || g_app.menu->Visible());
     };
     bar.onStatusWheel = [](int notches) { AdjustVolume(2 * notches); UpdateStatus(); };
-    // Launchpad, the now-playing entry and the folder stack: their entries' callbacks and the
-    // music feed (ExtrasHost owns all three, upstream 3.0).
+    // Launchpad and the folder stack: their entries' callbacks (ExtrasHost owns both).
     if (g_app.extras)
         g_app.extras->ConfigureBar(bar);
     bar.onFileDragHover = [](const std::wstring& key) { g_app.tasks->Show(key); };
