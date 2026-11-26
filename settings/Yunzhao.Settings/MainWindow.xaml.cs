@@ -1531,19 +1531,9 @@ public sealed partial class MainWindow : Window
         BarSwitch.IsOn = _current.Bar;
         LaunchpadSwitch.IsOn = _current.ShowLaunchpad;
         FolderStacksSwitch.IsOn = _current.ShowFolderStacks;
-        NowPlayingSwitch.IsOn = _current.ShowNowPlaying;
-        NowPlayingPausedSwitch.IsOn = _current.NowPlayingShowPaused;
         (_current.LaunchpadLayout == "fullscreen" ? LaunchpadFull : LaunchpadWindow).IsChecked = true;
         (_current.LaunchpadMaterial == "tint" ? LaunchpadTint : LaunchpadBar).IsChecked = true;
         (_current.FolderStackLayout == "column" ? StackColumn : StackFan).IsChecked = true;
-        (_current.NowPlayingMotion switch
-        {
-            "off" => NpMotionOff,
-            "subtle" => NpMotionSubtle,
-            "vivid" => NpMotionVivid,
-            _ => NpMotionNormal,
-        }).IsChecked = true;
-        (_current.NowPlayingRhythm == "loop" ? NpRhythmLoop : NpRhythmLive).IsChecked = true;
         RebuildStackFolderList();
         UpdateBarModule();
         WidgetsSwitch.IsOn = _current.Widgets;
@@ -1750,27 +1740,6 @@ public sealed partial class MainWindow : Window
         Changed();
     }
 
-    private void OnNowPlayingPausedToggled(object sender, RoutedEventArgs e)
-    {
-        if (_loading) return;
-        _current.NowPlayingShowPaused = NowPlayingPausedSwitch.IsOn;
-        Changed();
-    }
-
-    private void OnNpMotionChecked(object sender, RoutedEventArgs e)
-    {
-        if (_loading || sender is not RadioButton { Tag: string tag }) return;
-        _current.NowPlayingMotion = tag;
-        Changed();
-    }
-
-    private void OnNpRhythmChecked(object sender, RoutedEventArgs e)
-    {
-        if (_loading || sender is not RadioButton { Tag: string tag }) return;
-        _current.NowPlayingRhythm = tag;
-        Changed();
-    }
-
     // Adds a folder to the stack, or removes one from the list shown under the picker.
     private async void OnAddStackFolder(object sender, RoutedEventArgs e)
     {
@@ -1826,13 +1795,6 @@ public sealed partial class MainWindow : Window
     {
         if (_loading) return;
         _current.ShowFolderStacks = FolderStacksSwitch.IsOn;
-        Changed();
-    }
-
-    private void OnNowPlayingToggled(object sender, RoutedEventArgs e)
-    {
-        if (_loading) return;
-        _current.ShowNowPlaying = NowPlayingSwitch.IsOn;
         Changed();
     }
 
