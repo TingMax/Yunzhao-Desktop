@@ -679,8 +679,13 @@ void ApplySettings(const Settings& s)
     // With Stage Manager on, the widgets keep to the other side of the screen.
     g_app.widgets->SetOnRight(s.widgetsOnRight);
     g_app.stage->SetMonitor(desktop);
-    g_app.stage->SetEnabled(false);
-    g_app.control->SetStage(false, false);
+    // Stage Manager is a setting like any other: hard-coding false here meant every settings push
+    // turned it off, so the switch in settings could never take effect.
+    g_app.stage->SetEnabled(s.stageManager);
+    g_app.stage->SetOnRight(s.stageOnRight);
+    g_app.stage->SetAutoHide(s.stageAutoHide);
+    g_app.stage->SetMinimizeToStrip(s.stageMinimize);
+    g_app.control->SetStage(s.stageManager, s.stageOnRight);
     g_app.widgets->SetMaterial(s.widgetMaterial == L"dusk" ? WidgetMaterial::Dusk : s.widgetMaterial == L"color" ? WidgetMaterial::Color : WidgetMaterial::Glass);
     g_app.widgets->SetCalendarType(float(s.calendarDateSize), float(s.timetableDateSize));
     g_app.widgets->SetTimetableBadge(float(s.timetableBadgeScale));
@@ -1153,6 +1158,10 @@ void SyncDisplayBars(const Settings& settings, bool refresh)
             CloseBarPopups();
             g_app.activeBar = g_app.bar.get();
         }
+        // Before the bar goes: ExtrasHost keeps a pointer to the last bar it opened a popup from,
+        // and a freed address there makes the next click compare against garbage.
+        if (g_app.extras)
+            g_app.extras->OnBarRetiring(bar.get());
         bar->SetVisible(false);
         // Same bounded shutdown as the primary renderer: restore the Windows shell if a driver hangs.
         if (!bar->StopRendering(3000)) {

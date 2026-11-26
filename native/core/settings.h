@@ -87,6 +87,7 @@ struct Settings {
     double timetableDateSize = 24;   // timetable header type, DIP
     double timetableBadgeScale = 0.7; // timetable date badge, relative to the original circle
     bool calendarEdgeHide = true;    // a calendar sitting on a monitor edge slides fully off that edge
+    double calendarDockMs = 380;     // the calendar's own collapse/expand duration, milliseconds
     bool islandOn = false;           // the small top-center island
     double islandTop = 12;           // DIP down from the top of the monitor
     double islandWidth = 180;
