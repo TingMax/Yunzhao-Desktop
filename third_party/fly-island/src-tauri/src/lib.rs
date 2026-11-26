@@ -120,9 +120,8 @@ pub fn run() {
             if !yunzhao {
                 agent_status::reply_marker::init();
             }
-            if yunzhao {
-                let _ = settings_window::open(app.handle());
-            }
+            // Started by Yunzhao (YUNZHAO_HOST): the island shows its capsule only. Its settings are
+            // the desktop's own page, so no settings window pops up over the desktop on every start.
             Ok(())
         })
         .invoke_handler(collect_commands!([]

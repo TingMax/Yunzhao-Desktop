@@ -84,7 +84,9 @@ pub(crate) fn apply_stage_geometry(
     };
     let monitor = custom_monitor
         .or(followed_monitor)
-        .or_else(|| primary_monitor.or(current_monitor))
+        .or_else(|| {
+            primary_monitor.or(current_monitor)
+        })
         .ok_or_else(|| "No monitor is available for island positioning.".to_string())?;
 
     let scale = monitor.scale_factor();
@@ -120,12 +122,20 @@ pub(crate) fn apply_stage_geometry(
         return Ok(());
     }
     if !animate_position {
-        return window
+        // A jump moves the window in one step; nothing of it may read as a drag either.
+        super::state::animation_started();
+        let result = window
             .set_position(Position::Physical(target))
             .map_err(|error| error.to_string());
+        thread::sleep(Duration::from_millis(48));
+        super::state::animation_finished();
+        return result;
     }
 
     *RUNNING_SLIDE.lock().unwrap_or_else(PoisonError::into_inner) = Some((generation, (x, y)));
+    // Moves made while this counter is up are ours, not the user's: the Moved events they raise
+    // must not be recorded as a dragged position.
+    super::state::animation_started();
     let window = window.clone();
     thread::spawn(move || {
         let started_at = Instant::now();
@@ -146,6 +156,9 @@ pub(crate) fn apply_stage_geometry(
             }
             thread::sleep(Duration::from_millis(8));
         }
+        // The last move has been issued; let the events it raised drain before the flag drops.
+        thread::sleep(Duration::from_millis(48));
+        super::state::animation_finished();
         let mut running = RUNNING_SLIDE.lock().unwrap_or_else(PoisonError::into_inner);
         if running.is_some_and(|(owner, _)| owner == generation) {
             *running = None;
