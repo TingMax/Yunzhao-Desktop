@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { MessageSourceIcon } from "./MessageSourceIcon";
 import { messagePreviewText, type MessagePreview } from "./messagePreview";
 import { useTranslation } from "../../i18n";
@@ -13,20 +13,59 @@ type ContentTransition = {
   previousAnimated: boolean;
 };
 
+/**
+ * A message body that scrolls its tail into view when it does not fit. The capsule is narrow and a
+ * message is often longer than it; the end of it is what tells you whether it needs an answer.
+ * Short bodies stay still. Re-measured whenever the text changes or the island resizes.
+ */
+function ScrollingBody({ text, className }: { text: string; className?: string }) {
+  const boxRef = useRef<HTMLSpanElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const [overflow, setOverflow] = useState(0);
+
+  useLayoutEffect(() => {
+    const box = boxRef.current, inner = textRef.current;
+    if (!box || !inner) return;
+    const measure = () => setOverflow(Math.max(0, Math.ceil(inner.scrollWidth - box.clientWidth)));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [text]);
+
+  const scrollMs = Math.min(20000, Math.max(6000, Math.round(overflow * 20)));
+  const style = overflow > 0
+    ? ({ "--message-overflow": `${overflow}px`, "--message-scroll-ms": `${scrollMs}ms` } as CSSProperties)
+    : undefined;
+
+  return (
+    <span ref={boxRef} style={style} className={className}>
+      <span ref={textRef} className="island-message-preview__body-inner">{text}</span>
+    </span>
+  );
+}
+
 function MessageContent({ preview }: { preview: MessagePreview }) {
   const t = useTranslation();
+  const body = preview.title.trim() || preview.body;
   return <>
     <MessageSourceIcon source={preview.source} size={16} />
     {preview.source === "qqMail" && preview.otpCode ? (
-      <span className="island-message-preview__body">{preview.title.trim() || preview.body}</span>
+      <span className="island-message-preview__body">{body}</span>
     ) : preview.source === "qq" || (preview.source === "wechat" && preview.title) ? (
       <span className="island-message-preview__text">
         <strong className="island-message-preview__sender">{preview.title.trim() || "QQ"}</strong>
         <span className="island-message-preview__separator" aria-hidden="true">·</span>
-        <span className="island-message-preview__body">{preview.body.trim() || t.messages.newMessage}</span>
+        <ScrollingBody
+          className="island-message-preview__body island-message-preview__body--scrolls"
+          text={preview.body.trim() || t.messages.newMessage}
+        />
       </span>
     ) : (
-      <span className="island-message-preview__body">{messagePreviewText(preview, t.messages)}</span>
+      <ScrollingBody
+        className="island-message-preview__body island-message-preview__body--scrolls"
+        text={messagePreviewText(preview, t.messages)}
+      />
     )}
   </>;
 }
