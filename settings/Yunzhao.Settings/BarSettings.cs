@@ -91,6 +91,21 @@ internal sealed class BarSettings
     public bool WinKeyStart { get; set; }              // the Windows key alone opens Yunzhao's start menu
     public bool WinNumbers { get; set; }               // Win + 1..9, 0 open the bar's apps
     public bool StartOnLogin { get; set; } = true;
+    // Upstream 3.0's three extra entries.
+    public bool ShowLaunchpad { get; set; } = true;
+    public string LaunchpadMaterial { get; set; } = "bar";
+    public string LaunchpadLayout { get; set; } = "window";
+    public bool ShowNowPlaying { get; set; } = true;
+    public bool NowPlayingShowPaused { get; set; } = true;
+    public string NowPlayingMotion { get; set; } = "normal";
+    public string NowPlayingRhythm { get; set; } = "live";
+    public string NowPlayingAppMode { get; set; } = "all";
+    public List<string> NowPlayingApps { get; set; } = new();
+    public bool ShowFolderStacks { get; set; }
+    public string FolderStackLayout { get; set; } = "fan";
+    public int FolderStackMax { get; set; } = 8;
+    public List<string> FolderStacks { get; set; } = new();
+    public List<string> FolderStackFiles { get; set; } = new();
     // Null = the key was absent (never saved); the core then imports the Windows pins.
     public List<PinnedApp>? Pins { get; set; }
 
@@ -193,6 +208,20 @@ internal sealed class BarSettings
             ["winKeyStart"] = WinKeyStart,
             ["winNumbers"] = WinNumbers,
             ["startOnLogin"] = StartOnLogin,
+            ["showLaunchpad"] = ShowLaunchpad,
+            ["launchpadMaterial"] = LaunchpadMaterial,
+            ["launchpadLayout"] = LaunchpadLayout,
+            ["showNowPlaying"] = ShowNowPlaying,
+            ["nowPlayingShowPaused"] = NowPlayingShowPaused,
+            ["nowPlayingMotion"] = NowPlayingMotion,
+            ["nowPlayingRhythm"] = NowPlayingRhythm,
+            ["nowPlayingAppMode"] = NowPlayingAppMode,
+            ["showFolderStacks"] = ShowFolderStacks,
+            ["folderStackLayout"] = FolderStackLayout,
+            ["folderStackMax"] = FolderStackMax,
+            ["nowPlayingApps"] = new JsonArray(NowPlayingApps.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray()),
+            ["folderStacks"] = new JsonArray(FolderStacks.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray()),
+            ["folderStackFiles"] = new JsonArray(FolderStackFiles.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray()),
         };
         if (StartSize.Length > 0)
             o["startSize"] = StartSize;
@@ -280,6 +309,26 @@ internal sealed class BarSettings
         s.WinKeyStart = Flag("winKeyStart", f.WinKeyStart);
         s.WinNumbers = Flag("winNumbers", f.WinNumbers);
         s.StartOnLogin = Flag("startOnLogin", f.StartOnLogin);
+        string ReadStr(string key, string fallback) =>
+            o?[key] is JsonValue v && v.TryGetValue(out string? sv) && sv != null ? sv : fallback;
+        s.ShowLaunchpad = Flag("showLaunchpad", f.ShowLaunchpad);
+        s.LaunchpadMaterial = ReadStr("launchpadMaterial", f.LaunchpadMaterial) == "tint" ? "tint" : "bar";
+        s.LaunchpadLayout = ReadStr("launchpadLayout", f.LaunchpadLayout) == "fullscreen" ? "fullscreen" : "window";
+        s.ShowNowPlaying = Flag("showNowPlaying", f.ShowNowPlaying);
+        s.NowPlayingShowPaused = Flag("nowPlayingShowPaused", f.NowPlayingShowPaused);
+        s.NowPlayingMotion = ReadStr("nowPlayingMotion", f.NowPlayingMotion) is "off" or "subtle" or "vivid"
+            ? ReadStr("nowPlayingMotion", f.NowPlayingMotion) : "normal";
+        s.NowPlayingRhythm = ReadStr("nowPlayingRhythm", f.NowPlayingRhythm) == "loop" ? "loop" : "live";
+        s.NowPlayingAppMode = ReadStr("nowPlayingAppMode", f.NowPlayingAppMode) is "allow" or "block"
+            ? ReadStr("nowPlayingAppMode", f.NowPlayingAppMode) : "all";
+        s.ShowFolderStacks = Flag("showFolderStacks", f.ShowFolderStacks);
+        s.FolderStackLayout = ReadStr("folderStackLayout", f.FolderStackLayout) == "column" ? "column" : "fan";
+        s.FolderStackMax = Math.Clamp((int)Num("folderStackMax", f.FolderStackMax), 4, 24);
+        static List<string> ReadList(JsonObject? o, string key, List<string> fallback) =>
+            o?[key] is JsonArray arr ? arr.Select(e => e?.GetValue<string>() ?? "").Where(v => v.Length > 0).ToList() : fallback;
+        s.NowPlayingApps = ReadList(o, "nowPlayingApps", f.NowPlayingApps);
+        s.FolderStacks = ReadList(o, "folderStacks", f.FolderStacks);
+        s.FolderStackFiles = ReadList(o, "folderStackFiles", f.FolderStackFiles);
         string Display(string key, string value) => o?[key] is JsonValue v && v.TryGetValue(out string? text) && text != null ? text : value;
         string mode = Display("dockDisplayMode", f.DockDisplayMode);
         s.DockDisplayMode = mode is "follow" or "fixed" or "all" ? mode : "primary";
@@ -334,6 +383,10 @@ internal sealed class BarSettings
         IslandWidth == o.IslandWidth && IslandHeight == o.IslandHeight && IslandText == o.IslandText &&
         HideTaskbar == o.HideTaskbar && HideBanners == o.HideBanners && WinKeyStart == o.WinKeyStart && WinNumbers == o.WinNumbers &&
         StartOnLogin == o.StartOnLogin &&
+        ShowLaunchpad == o.ShowLaunchpad && LaunchpadMaterial == o.LaunchpadMaterial && LaunchpadLayout == o.LaunchpadLayout &&
+        ShowNowPlaying == o.ShowNowPlaying && NowPlayingShowPaused == o.NowPlayingShowPaused &&
+        NowPlayingMotion == o.NowPlayingMotion && NowPlayingRhythm == o.NowPlayingRhythm && NowPlayingAppMode == o.NowPlayingAppMode &&
+        ShowFolderStacks == o.ShowFolderStacks && FolderStackLayout == o.FolderStackLayout && FolderStackMax == o.FolderStackMax &&
         DockDisplayMode == o.DockDisplayMode && DockDisplayDelay == o.DockDisplayDelay && BarRevealDelay == o.BarRevealDelay && BarHideDelay == o.BarHideDelay && DockDisplay == o.DockDisplay && DesktopDisplay == o.DesktopDisplay &&
         TaskbarApps == o.TaskbarApps && TaskbarRightPrimaryOnly == o.TaskbarRightPrimaryOnly &&
         WindowsContextMenu == o.WindowsContextMenu &&

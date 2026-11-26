@@ -224,7 +224,6 @@ private:
     std::shared_ptr<const MusicFeed> music_;
     bool musicShown_ = false;
     bool showLaunchpad_ = false, showStacks_ = false; // the other two extra entries (ExtrasHost)
-    ULONGLONG extrasLogged_ = 0; // last "extras" state log
     bool belowTray_ = false;   // yielded to the system taskbar the user is using
     bool trayHeldUp_ = false;  // the system taskbar is up without the user (logged once)
     HWND previousForeground_ = nullptr;

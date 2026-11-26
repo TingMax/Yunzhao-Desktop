@@ -1111,12 +1111,6 @@ void Bar::Relayout()
         scene.extras.push_back(entry(kLaunchpadKey, launchpadLeft, L"\uF0A4")); // the app grid
         hits_.push_back({kLaunchpadKey, RECT{launchpadLeft - gap / 2, hitTop, launchpadLeft + plate + gap / 2, hitBottom}});
     }
-    if (ULONGLONG now = GetTickCount64(); now - extrasLogged_ > 5000) {
-        extrasLogged_ = now;
-        const RECT lp = showLaunchpad_ ? EntryRect(kLaunchpadKey) : RECT{};
-        Log(L"bar: extras launchpad=%d screen=%ld,%ld-%ld,%ld stacks=%d music=%d", showLaunchpad_ ? 1 : 0, lp.left, lp.top, lp.right,
-            lp.bottom, showStacks_ ? 1 : 0, musicShown_ ? 1 : 0);
-    }
     // Icons are rendered for their magnified size, so they stay sharp when they grow.
     const int iconPx = int(std::lround(float(icon) * mag));
     std::map<std::wstring, CachedIcon> keep;

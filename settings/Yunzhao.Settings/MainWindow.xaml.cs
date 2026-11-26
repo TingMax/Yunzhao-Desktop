@@ -1529,6 +1529,9 @@ public sealed partial class MainWindow : Window
         WeChatSwitch.IsOn = _current.NotifyWeChat;
         FeishuSwitch.IsOn = _current.NotifyFeishu;
         BarSwitch.IsOn = _current.Bar;
+        LaunchpadSwitch.IsOn = _current.ShowLaunchpad;
+        FolderStacksSwitch.IsOn = _current.ShowFolderStacks;
+        NowPlayingSwitch.IsOn = _current.ShowNowPlaying;
         UpdateBarModule();
         WidgetsSwitch.IsOn = _current.Widgets;
         (_current.WidgetsOnRight ? WidgetsRight : WidgetsLeft).IsChecked = true;
@@ -1703,6 +1706,27 @@ public sealed partial class MainWindow : Window
         if (_loading) return;
         _current.Bar = BarSwitch.IsOn;
         UpdateBarModule();
+        Changed();
+    }
+
+    private void OnLaunchpadToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.ShowLaunchpad = LaunchpadSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnFolderStacksToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.ShowFolderStacks = FolderStacksSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnNowPlayingToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.ShowNowPlaying = NowPlayingSwitch.IsOn;
         Changed();
     }
 

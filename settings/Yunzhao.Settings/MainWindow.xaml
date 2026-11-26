@@ -775,6 +775,12 @@
                                 <TextBlock Text="模块" Style="{StaticResource SectionStyle}" />
                                 <local:ToggleTile x:Name="BarSwitch" Title="Yunzhao 任务栏" SwitchName="Yunzhao 任务栏" Toggled="OnBarToggled" Flat="True"
                                                   Note="关闭后用回 Windows 自己的任务栏和通知横幅；桌面组件不受影响。" />
+                                <local:ToggleTile x:Name="LaunchpadSwitch" Title="启动台" SwitchName="启动台" Toggled="OnLaunchpadToggled" Flat="True"
+                                                  Note="开始键右侧一个图标，点开是全部应用的大网格，可分页、搜索、拖动排序。" />
+                                <local:ToggleTile x:Name="FolderStacksSwitch" Title="文件夹堆栈" SwitchName="文件夹堆栈" Toggled="OnFolderStacksToggled" Flat="True"
+                                                  Note="托盘左侧一个图标，点开时常用文件夹和文件沿弧线飞散排开。" />
+                                <local:ToggleTile x:Name="NowPlayingSwitch" Title="正在播放" SwitchName="正在播放" Toggled="OnNowPlayingToggled" Flat="True"
+                                                  Note="有播放器在放音乐时，状态环右侧出现五根随声音跳动的竖条，点开是播放卡片。" />
                             </StackPanel>
                             <StackPanel x:Name="DockContent">
                                 <TextBlock Text="栏上显示" Style="{StaticResource SectionStyle}" />
