@@ -116,11 +116,24 @@ bool ShellSurface(HWND window)
            !wcscmp(cls, L"Shell_TrayWnd") || !wcscmp(cls, L"Shell_SecondaryTrayWnd");
 }
 
+// Windows' own composition hosts: IME UI, the input experience, touch keyboard and text
+// services. They cover the screen without a title bar and without being apps, so a borderless
+// check reads them as full-screen games and takes the taskbar away while typing.
+bool SystemCompose(HWND window)
+{
+    wchar_t cls[64] = {};
+    GetClassNameW(window, cls, 64);
+    return !wcscmp(cls, L"Windows.UI.Core.CoreWindow") || !wcscmp(cls, L"Windows.UI.Composition.DesktopWindowContentBridge") ||
+           !wcscmp(cls, L"ApplicationFrameWindow") || !wcscmp(cls, L"XamlExplorerHostIslandWindow") ||
+           !wcscmp(cls, L"XamlExplorerHostIslandWindow_WASDK") || !wcscmp(cls, L"TextInputHostWnd") ||
+           !wcscmp(cls, L"IME") || !wcscmp(cls, L"MSCTFIME UI") || !wcscmp(cls, L"ForegroundStaging");
+}
+
 bool BorderlessGame(HWND root, HMONITOR monitor)
 {
     // The desktop itself covers the monitor and has no title bar. Clicking empty
     // wallpaper was treated as a game, so the bar hid and would not come back.
-    if (!root || IsIconic(root) || IsZoomed(root) || ShellSurface(root))
+    if (!root || IsIconic(root) || IsZoomed(root) || ShellSurface(root) || SystemCompose(root))
         return false;
     const LONG style = GetWindowLongW(root, GWL_STYLE);
     if (style & (WS_CAPTION | WS_THICKFRAME | WS_BORDER))

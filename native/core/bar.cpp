@@ -1293,6 +1293,7 @@ void CALLBACK Bar::WinEvent(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idO
         // (Progman) and Explorer's taskbars are not apps: clicking the wallpaper used to read
         // as a full-screen game, take the bar away, and nothing brought it back.
         const bool fullscreenFrame = hwnd && IsWindowVisible(hwnd) && !IsIconic(hwnd) && !ShellSurface(hwnd) &&
+                                     !SystemCompose(hwnd) &&
                                      !(GetWindowLongW(hwnd, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) &&
                                      CoversMonitor(hwnd, bar->hmonitor_);
         if (FullScreenApp(hwnd) || fullscreenFrame)

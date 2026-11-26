@@ -43,6 +43,9 @@ bool BorderlessFill(HWND window);
 bool CoversMonitor(HWND root, HMONITOR monitor);
 // The desktop itself and Explorer's taskbars: windows every layout covers, never apps.
 bool ShellSurface(HWND window);
+// Windows' own composition hosts (IME, the input experience, the touch keyboard): they cover the
+// screen without a title bar but are not apps, so they never stand the bar down.
+bool SystemCompose(HWND window);
 bool FilterTasksOnDisplay(const std::wstring& mode, bool primary);
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary,
     HMONITOR monitor, HWND foreground, const std::function<HMONITOR(HWND)>& monitorOf);
