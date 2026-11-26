@@ -100,6 +100,21 @@ struct Settings {
     bool winKeyStart = false;        // the Windows key alone opens Yunzhao's start menu instead of Windows'
     bool winNumbers = false;         // Win + 1..9, 0 open the bar's apps
     bool startOnLogin = true;        // independent of starting/stopping the current session
+    // Upstream 3.0's three extra entries (extras_host.h).
+    bool showLaunchpad = true;                // the Launchpad entry next to the start logo
+    std::wstring launchpadMaterial = L"bar";  // bar: the bar's glass | tint: the glass under a black veil
+    std::wstring launchpadLayout = L"window"; // window: a window in the middle | fullscreen: the whole screen
+    bool showNowPlaying = true;               // the now-playing entry (visible while a player has a session)
+    bool nowPlayingShowPaused = true;
+    std::wstring nowPlayingMotion = L"normal"; // off | subtle | normal | vivid
+    std::wstring nowPlayingRhythm = L"live";   // live: the bars follow the sound | loop: a steady animation
+    std::wstring nowPlayingAppMode = L"all";   // all | allow | block
+    std::vector<std::wstring> nowPlayingApps;  // AUMIDs or exe names (max 64)
+    bool showFolderStacks = false;            // the folder stack entry left of the tray
+    std::wstring folderStackLayout = L"fan";  // fan | column
+    int folderStackMax = 8;                   // 4..24
+    std::vector<std::wstring> folderStacks;       // folder paths (max 32)
+    std::vector<std::wstring> folderStackFiles;   // file paths (max 32)
     // Pinned apps; nullopt = never saved yet (first run imports the Windows pins).
     std::optional<std::vector<PinnedApp>> pins;
 

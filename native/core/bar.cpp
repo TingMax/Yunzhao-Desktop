@@ -1,4 +1,4 @@
-#include "bar.h"
+﻿#include "bar.h"
 #include "render/continuous_corners.h"
 
 #include "clock.h"
@@ -45,6 +45,10 @@ constexpr wchar_t kNotifyKey[] = L"#notify";
 constexpr wchar_t kTrayKey[] = L"#tray";
 constexpr wchar_t kStatusKey[] = L"#status";
 constexpr wchar_t kMoreKey[] = L"#more";
+// Upstream 3.0's extra entries (ExtrasHost): Launchpad, now playing, folder stack.
+constexpr wchar_t kLaunchpadKey[] = L"#launchpad";
+constexpr wchar_t kMusicKey[] = L"#music";
+constexpr wchar_t kStacksKey[] = L"#stacks";
 // Bar entries and the clock start with '#'; app keys are AUMIDs or paths.
 bool IsEntry(const std::wstring& key) { return !key.empty() && key[0] == L'#'; }
 constexpr double kInsetDip = 14; // room for the drop shadow around the shape
@@ -623,6 +627,8 @@ LRESULT Bar::OnInput(HWND h, UINT m, WPARAM w, LPARAM l)
                 onClockClick();
             else if (key == kStartKey && onStartClick)
                 onStartClick(anchor);
+            else if ((key == kLaunchpadKey || key == kMusicKey || key == kStacksKey) && onExtraClick)
+                onExtraClick(key, anchor);
             else if (key == kNotifyKey && onNotifyClick)
                 onNotifyClick(anchor);
             else if (key == kTrayKey && onTrayClick)
@@ -1085,15 +1091,32 @@ void Bar::Relayout()
     const int bellLeft = rightSlot(plate, showNotifications);
     const int clockLeft = rightSlot(clockW, clockW != 0), clockRight = clockLeft + clockW;
     const int statusLeft = rightSlot(statusW, showStatus), statusRight = statusLeft + statusW;
+    // The now-playing entry sits right of the status entry, so it is placed before it (right to
+    // left): five bars on a capsule, only while a player has a session.
+    const int musicW = plate;
+    const int musicLeft = rightSlot(musicW, showStatus && musicShown_);
+    const int stacksLeft = rightSlot(plate, showStacks_);
     const int trayLeft = rightSlot(plate, showTray);
     const int rightLeft = rightCount ? cursor + gap : insetX + barW - pad;
-    const int appsMin = startLeft + plate + 2 * gap;
     const int slots = n + (more ? 1 : 0);
     const int appsW = slots ? slots * plate + (slots - 1) * gap : 0;
-    // Apps are centred in the space between the logo and the separator (matters when autoWidth is off).
-    const int appsLeft = appsMin + std::max(0, (rightLeft - 2 * groupGap - appsMin - appsW) / 2);
+    // Launchpad's entry sits right of the logo (upstream 3.0), so the app strip starts past it.
+    const int launchpadLeft = startLeft + plate + gap;
+    const int stripMin = showLaunchpad_ ? launchpadLeft + plate + gap : startLeft + plate + 2 * gap;
+    // Apps are centred in the space between the launchpad entry and the separator (matters when autoWidth is off).
+    const int appsLeft = stripMin + std::max(0, (rightLeft - 2 * groupGap - stripMin - appsW) / 2);
     scene.extras.push_back(entry(kStartKey, startLeft, L""));
-    hits_.push_back({kStartKey, RECT{insetX, hitTop, appsMin - gap / 2, hitBottom}});
+    hits_.push_back({kStartKey, RECT{insetX, hitTop, startLeft + plate + gap / 2, hitBottom}});
+    if (showLaunchpad_) {
+        scene.extras.push_back(entry(kLaunchpadKey, launchpadLeft, L"\uF0A4")); // the app grid
+        hits_.push_back({kLaunchpadKey, RECT{launchpadLeft - gap / 2, hitTop, launchpadLeft + plate + gap / 2, hitBottom}});
+    }
+    if (ULONGLONG now = GetTickCount64(); now - extrasLogged_ > 5000) {
+        extrasLogged_ = now;
+        const RECT lp = showLaunchpad_ ? EntryRect(kLaunchpadKey) : RECT{};
+        Log(L"bar: extras launchpad=%d screen=%ld,%ld-%ld,%ld stacks=%d music=%d", showLaunchpad_ ? 1 : 0, lp.left, lp.top, lp.right,
+            lp.bottom, showStacks_ ? 1 : 0, musicShown_ ? 1 : 0);
+    }
     // Icons are rendered for their magnified size, so they stay sharp when they grow.
     const int iconPx = int(std::lround(float(icon) * mag));
     std::map<std::wstring, CachedIcon> keep;
@@ -1130,14 +1153,14 @@ void Bar::Relayout()
         }
         scene.items.push_back(std::move(it));
         // Hit cells split the gaps; the last one reaches the separator.
-        int hl = k == 0 ? appsMin - gap / 2 : appsLeft + k * pitch - gap / 2;
+        int hl = k == 0 ? stripMin - gap / 2 : appsLeft + k * pitch - gap / 2;
         int hr = k == slots - 1 ? rightLeft - groupGap : appsLeft + k * pitch + plate + (gap - gap / 2);
         hits_.push_back({t.key, RECT{hl, hitTop, hr, hitBottom}});
     }
     if (more) {
         int left = appsLeft + n * pitch;
         scene.extras.push_back(entry(kMoreKey, left, L"\uE712"));
-        hits_.push_back({kMoreKey, RECT{n ? left - gap / 2 : appsMin - gap / 2, hitTop, rightLeft - groupGap, hitBottom}});
+        hits_.push_back({kMoreKey, RECT{n ? left - gap / 2 : stripMin - gap / 2, hitTop, rightLeft - groupGap, hitBottom}});
     }
     icons_ = std::move(keep);
     appsLeft_ = appsLeft;
@@ -1146,6 +1169,16 @@ void Bar::Relayout()
     gap_ = gap;
     shown_ = n;
     scene.separatorX = rightCount ? float(rightLeft - sepGap) : -1;
+    if (showStacks_) {
+        scene.extras.push_back(entry(kStacksKey, stacksLeft, L"\uE8F1")); // a folder
+        hits_.push_back({kStacksKey, RECT{stacksLeft - gap / 2, hitTop, stacksLeft + plate + gap / 2, hitBottom}});
+    }
+    if (musicShown_ && showStatus) {
+        SceneItem music = entry(kMusicKey, musicLeft, L"");
+        music.musicBars = true;
+        scene.extras.push_back(std::move(music));
+        hits_.push_back({kMusicKey, RECT{musicLeft - gap / 2, hitTop, musicLeft + plate + gap / 2, hitBottom}});
+    }
     if (showTray) {
         scene.extras.push_back(entry(kTrayKey, trayLeft, L"\uE70E"));
         hits_.push_back({kTrayKey, RECT{trayLeft - gap / 2, hitTop, trayLeft + plate + gap / 2, hitBottom}});
@@ -1405,6 +1438,8 @@ void Bar::UpdateAutoHide()
         return;
     tucked_ = tuck;
     scene_.tucked = tuck;
+    if (onTuckChanged)
+        onTuckChanged(); // the music entry samples the level only while the bar is on screen
     if (tuck) {
         HideTooltip();
         SetRegion(false);
@@ -1702,6 +1737,30 @@ void Bar::SetUnread(int count)
         return;
     unread_ = count;
     Relayout();
+}
+
+// The now-playing entry (upstream 3.0): while a player has a session, five bars sit right of the
+// status entry and move with `feed`. The entry comes and goes with `shown`, so the bar re-lays out.
+void Bar::SetMusic(std::shared_ptr<const MusicFeed> feed, bool shown, std::wstring tip)
+{
+    (void)tip; // the tooltip text is the track name, drawn by the card
+    const bool relayout = shown != musicShown_;
+    musicShown_ = shown;
+    {
+        std::lock_guard g(lock_);
+        music_ = std::move(feed);
+    }
+    if (relayout)
+        Relayout(); // the entry comes or goes
+    else
+        Publish(false); // the render thread takes up the bars (playing) or lets them settle
+}
+
+// A new audio level: the render thread redraws the music bars at once instead of on its own clock.
+void Bar::WakeRender()
+{
+    if (music_)
+        Publish(false);
 }
 
 RECT Bar::EntryRect(const std::wstring& key) const

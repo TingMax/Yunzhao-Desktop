@@ -65,6 +65,7 @@ add_executable(yunzhao_core WIN32
     ui/launchpad_drag.cpp
     ui/folder_stack_popup.cpp
     ui/now_playing_card.cpp
+    extras_host.cpp
     ui/start_menu.cpp
     ui/notifications.cpp
     ui/tray_panel.cpp

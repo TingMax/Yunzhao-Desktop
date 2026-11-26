@@ -4,6 +4,7 @@
 
 #include "bar.h"
 #include "clock.h"
+#include "extras_host.h"
 #include "log.h"
 #include "resource.h"
 #include "account.h"
@@ -94,6 +95,7 @@ struct App {
     std::unique_ptr<TaskModel> tasks;
     std::unique_ptr<AppCatalog> catalog;
     std::unique_ptr<StartMenu> start;
+    std::unique_ptr<ExtrasHost> extras; // Launchpad, the now-playing entry, the folder stack
     std::unique_ptr<Notifications> notes;
     std::unique_ptr<NotificationListener> listener;
     std::unique_ptr<UpdateChecker> updates;
@@ -638,6 +640,8 @@ void ApplySettings(const Settings& s)
     g_app.start->SetPreferredSize(s.startSize);
     g_app.notes->SetRadius(radius);
     g_app.notes->SetOptions(s.notifyTimeout, s.notifyHideBody, s.notifyPlacement);
+    if (g_app.extras)
+        g_app.extras->Apply(s, radius); // Launchpad, now playing, folder stack
     // Notification cards belong to the bar (its bell): without it, Windows shows its own banners.
     if (s.bar && s.notifyListener && !g_app.listener)
         g_app.listener = std::make_unique<NotificationListener>(g_app.host, WM_NOTICE);
@@ -1078,6 +1082,8 @@ void CloseBarPopups()
     g_app.calendar->Close();
     g_app.menu->Close();
     g_app.preview->Close();
+    if (g_app.extras)
+        g_app.extras->ClosePopups(); // Launchpad's and the folder stack's, and the now-playing card
     if (g_app.notes->CenterVisible())
         g_app.notes->ToggleCenter();
 }
@@ -1108,6 +1114,10 @@ void ConfigureBar(Bar& bar)
             g_app.calendar->Visible() || g_app.notes->CenterVisible() || g_app.menu->Visible());
     };
     bar.onStatusWheel = [](int notches) { AdjustVolume(2 * notches); UpdateStatus(); };
+    // Launchpad, the now-playing entry and the folder stack: their entries' callbacks and the
+    // music feed (ExtrasHost owns all three, upstream 3.0).
+    if (g_app.extras)
+        g_app.extras->ConfigureBar(bar);
     bar.onFileDragHover = [](const std::wstring& key) { g_app.tasks->Show(key); };
     bar.canOpenFiles = [](const std::wstring& key) { return g_app.tasks->CanOpenFiles(key); };
     bar.onDropFiles = [](const std::wstring& key, const std::vector<std::wstring>& files) { g_app.tasks->OpenFiles(key, files); };
@@ -1568,6 +1578,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     }
     g_app.start->onSystem = OpenSystem;
     g_app.start->menu = g_app.menu.get();
+    // Launchpad, the now-playing entry and the folder stack: one door for the three (upstream 3.0).
+    g_app.extras = std::make_unique<ExtrasHost>(instance, *g_app.catalog, [](const std::function<void(Bar&)>& each) { ForBars(each); });
+    g_app.extras->onPanelsChanged = [] { g_app.notes->PanelsChanged(); };
+    g_app.extras->onOpenSettings = [](const wchar_t* page) { (void)page; }; // the settings page is not part of this port yet
     g_app.notes = std::make_unique<Notifications>(instance);
     g_app.tray = std::make_unique<TrayModel>(g_app.host, WM_TRAY_ICONS, [] {
         std::vector<PinnedApp> names;
@@ -1664,6 +1678,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int)
     g_app.wechat.reset();
     g_app.feishu.reset();
     g_app.notes.reset();
+    // Before the bars go: ExtrasHost ends its media watcher's thread and closes its popups.
+    if (g_app.extras) {
+        g_app.extras->Shutdown();
+        g_app.extras.reset();
+    }
     g_app.widgets.reset();
     g_app.calendar.reset();
     g_app.control.reset();
