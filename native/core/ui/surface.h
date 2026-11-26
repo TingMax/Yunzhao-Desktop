@@ -93,7 +93,9 @@ public:
     float DarkAt(D2D1_RECT_F r) const;
     void Callout(D2D1_RECT_F body, float radius, float tipX, float halfWidth, float tailHeight, float tailInset, D2D1_COLOR_F color);
     // Draws what follows faded and scaled around (cx, cy), moved by (dx, dy); DIP. Groups nest.
-    void BeginGroup(float opacity, float scale, float cx, float cy, float dx = 0, float dy = 0);
+    // Draws what follows faded, scaled and turned (clockwise, radians) around (cx, cy), moved by
+    // (dx, dy); DIP. Groups nest. `turn` is upstream 3.0's, for the arc-shaped popups.
+    void BeginGroup(float opacity, float scale, float cx, float cy, float dx = 0, float dy = 0, float turn = 0);
     void EndGroup();
 
     D2D1_RECT_F Px(D2D1_RECT_F dip) const;

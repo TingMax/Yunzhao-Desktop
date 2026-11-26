@@ -646,12 +646,16 @@ void Canvas::Continue() { s_.frameWanted_ = true; }
 // D2D layer: layers allocate intermediate surfaces, which WARP keeps cached
 // (tens of MB with a fading tile per row). Overlapping shapes in a group fade
 // individually, which these groups never notice.
-void Canvas::BeginGroup(float opacity, float k, float cx, float cy, float dx, float dy)
+void Canvas::BeginGroup(float opacity, float k, float cx, float cy, float dx, float dy, float turn)
 {
     D2D1_MATRIX_3X2_F current;
     d2d_->GetTransform(&current);
     groups_.push_back({current, alpha_});
-    D2D1_MATRIX_3X2_F local = D2D1::Matrix3x2F::Scale(k, k, D2D1::Point2F(cx * scale, cy * scale)) * D2D1::Matrix3x2F::Translation(dx * scale, dy * scale);
+    const D2D1_POINT_2F pivot{cx * scale, cy * scale};
+    D2D1_MATRIX_3X2_F local = D2D1::Matrix3x2F::Scale(k, k, pivot);
+    if (turn != 0)
+        local = local * D2D1::Matrix3x2F::Rotation(turn * 180.f / 3.14159265358979323846f, pivot); // turn is radians
+    local = local * D2D1::Matrix3x2F::Translation(dx * scale, dy * scale);
     d2d_->SetTransform(local * current);
     alpha_ *= std::clamp(opacity, 0.f, 1.f);
 }
