@@ -777,10 +777,59 @@
                                                   Note="关闭后用回 Windows 自己的任务栏和通知横幅；桌面组件不受影响。" />
                                 <local:ToggleTile x:Name="LaunchpadSwitch" Title="启动台" SwitchName="启动台" Toggled="OnLaunchpadToggled" Flat="True"
                                                   Note="开始键右侧一个图标，点开是全部应用的大网格，可分页、搜索、拖动排序。" />
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="启动台的大小" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                        <RadioButton x:Name="LaunchpadWindow" GroupName="lplayout" Content="窗口" Tag="window" Style="{StaticResource SegmentStyle}" Checked="OnLaunchpadLayoutChecked" />
+                                        <RadioButton x:Name="LaunchpadFull" GroupName="lplayout" Content="全屏" Tag="fullscreen" Style="{StaticResource SegmentStyle}" Checked="OnLaunchpadLayoutChecked" />
+                                    </local:SegmentTrack>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="启动台的材质" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                        <RadioButton x:Name="LaunchpadBar" GroupName="lpmaterial" Content="跟任务栏一样" Tag="bar" Style="{StaticResource SegmentStyle}" Checked="OnLaunchpadMaterialChecked" />
+                                        <RadioButton x:Name="LaunchpadTint" GroupName="lpmaterial" Content="深色蒙层" Tag="tint" Style="{StaticResource SegmentStyle}" Checked="OnLaunchpadMaterialChecked" />
+                                    </local:SegmentTrack>
+                                </StackPanel>
                                 <local:ToggleTile x:Name="FolderStacksSwitch" Title="文件夹堆栈" SwitchName="文件夹堆栈" Toggled="OnFolderStacksToggled" Flat="True"
                                                   Note="托盘左侧一个图标，点开时常用文件夹和文件沿弧线飞散排开。" />
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="堆栈的排法" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                        <RadioButton x:Name="StackFan" GroupName="stacklayout" Content="弧形飞散" Tag="fan" Style="{StaticResource SegmentStyle}" Checked="OnStackLayoutChecked" />
+                                        <RadioButton x:Name="StackColumn" GroupName="stacklayout" Content="竖排" Tag="column" Style="{StaticResource SegmentStyle}" Checked="OnStackLayoutChecked" />
+                                    </local:SegmentTrack>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <Grid>
+                                        <TextBlock Text="堆栈里的文件夹" Style="{StaticResource RowTitleStyle}" />
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                                            <Button x:Name="AddStackFolderButton" Content="添加文件夹…" Click="OnAddStackFolder" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock x:Name="StackCountText" Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <StackPanel x:Name="StackFolderList" Spacing="4" Margin="0,6,0,0" />
+                                </StackPanel>
                                 <local:ToggleTile x:Name="NowPlayingSwitch" Title="正在播放" SwitchName="正在播放" Toggled="OnNowPlayingToggled" Flat="True"
                                                   Note="有播放器在放音乐时，状态环右侧出现五根随声音跳动的竖条，点开是播放卡片。" />
+                                <local:ToggleTile x:Name="NowPlayingPausedSwitch" Title="暂停时也显示" SwitchName="暂停时也显示" Toggled="OnNowPlayingPausedToggled" Flat="True"
+                                                  Note="关闭后只有正在播放时才出现那五根竖条。" />
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="竖条的动作" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                        <RadioButton x:Name="NpMotionOff" GroupName="npmotion" Content="静止" Tag="off" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
+                                        <RadioButton x:Name="NpMotionSubtle" GroupName="npmotion" Content="轻微" Tag="subtle" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
+                                        <RadioButton x:Name="NpMotionNormal" GroupName="npmotion" Content="正常" Tag="normal" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
+                                        <RadioButton x:Name="NpMotionVivid" GroupName="npmotion" Content="强烈" Tag="vivid" Style="{StaticResource SegmentStyle}" Checked="OnNpMotionChecked" />
+                                    </local:SegmentTrack>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource FlatRowStyle}">
+                                    <TextBlock Text="竖条的节奏" Style="{StaticResource RowTitleStyle}" />
+                                    <local:SegmentTrack>
+                                        <RadioButton x:Name="NpRhythmLive" GroupName="nprhythm" Content="跟随声音" Tag="live" Style="{StaticResource SegmentStyle}" Checked="OnNpRhythmChecked" />
+                                        <RadioButton x:Name="NpRhythmLoop" GroupName="nprhythm" Content="固定律动" Tag="loop" Style="{StaticResource SegmentStyle}" Checked="OnNpRhythmChecked" />
+                                    </local:SegmentTrack>
+                                </StackPanel>
                             </StackPanel>
                             <StackPanel x:Name="DockContent">
                                 <TextBlock Text="栏上显示" Style="{StaticResource SectionStyle}" />

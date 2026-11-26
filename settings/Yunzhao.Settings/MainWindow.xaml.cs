@@ -1532,6 +1532,19 @@ public sealed partial class MainWindow : Window
         LaunchpadSwitch.IsOn = _current.ShowLaunchpad;
         FolderStacksSwitch.IsOn = _current.ShowFolderStacks;
         NowPlayingSwitch.IsOn = _current.ShowNowPlaying;
+        NowPlayingPausedSwitch.IsOn = _current.NowPlayingShowPaused;
+        (_current.LaunchpadLayout == "fullscreen" ? LaunchpadFull : LaunchpadWindow).IsChecked = true;
+        (_current.LaunchpadMaterial == "tint" ? LaunchpadTint : LaunchpadBar).IsChecked = true;
+        (_current.FolderStackLayout == "column" ? StackColumn : StackFan).IsChecked = true;
+        (_current.NowPlayingMotion switch
+        {
+            "off" => NpMotionOff,
+            "subtle" => NpMotionSubtle,
+            "vivid" => NpMotionVivid,
+            _ => NpMotionNormal,
+        }).IsChecked = true;
+        (_current.NowPlayingRhythm == "loop" ? NpRhythmLoop : NpRhythmLive).IsChecked = true;
+        RebuildStackFolderList();
         UpdateBarModule();
         WidgetsSwitch.IsOn = _current.Widgets;
         (_current.WidgetsOnRight ? WidgetsRight : WidgetsLeft).IsChecked = true;
@@ -1714,6 +1727,99 @@ public sealed partial class MainWindow : Window
         if (_loading) return;
         _current.ShowLaunchpad = LaunchpadSwitch.IsOn;
         Changed();
+    }
+
+    private void OnLaunchpadLayoutChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.LaunchpadLayout = tag;
+        Changed();
+    }
+
+    private void OnLaunchpadMaterialChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.LaunchpadMaterial = tag;
+        Changed();
+    }
+
+    private void OnStackLayoutChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.FolderStackLayout = tag;
+        Changed();
+    }
+
+    private void OnNowPlayingPausedToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        _current.NowPlayingShowPaused = NowPlayingPausedSwitch.IsOn;
+        Changed();
+    }
+
+    private void OnNpMotionChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.NowPlayingMotion = tag;
+        Changed();
+    }
+
+    private void OnNpRhythmChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not RadioButton { Tag: string tag }) return;
+        _current.NowPlayingRhythm = tag;
+        Changed();
+    }
+
+    // Adds a folder to the stack, or removes one from the list shown under the picker.
+    private async void OnAddStackFolder(object sender, RoutedEventArgs e)
+    {
+        var picker = new Windows.Storage.Pickers.FolderPicker();
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
+        picker.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var folder = await picker.PickSingleFolderAsync();
+        if (folder == null) return;
+        if (_current.FolderStacks.Count >= 32) return;
+        if (_current.FolderStacks.Contains(folder.Path, StringComparer.OrdinalIgnoreCase)) return;
+        _current.FolderStacks.Add(folder.Path);
+        RebuildStackFolderList();
+        Changed();
+    }
+
+    private void OnRemoveStackFolder(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string path }) return;
+        _current.FolderStacks.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        RebuildStackFolderList();
+        Changed();
+    }
+
+    private void RebuildStackFolderList()
+    {
+        if (StackFolderList == null) return;
+        StackFolderList.Children.Clear();
+        int n = _current.FolderStacks.Count;
+        StackCountText.Text = n == 0 ? "还没有添加文件夹。堆栈开启后，这里放的文件夹会出现在任务栏上。" : $"已添加 {n} 个文件夹（最多 32 个）。";
+        foreach (var path in _current.FolderStacks.ToList())
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var name = new TextBlock
+            {
+                Text = System.IO.Path.GetFileName(path) is { Length: > 0 } leaf ? leaf : path,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTipService.SetToolTip(name, path);
+            var remove = new Button { Content = "移除", Tag = path, VerticalAlignment = VerticalAlignment.Center };
+            remove.Click += OnRemoveStackFolder;
+            Grid.SetColumn(remove, 1);
+            row.Children.Add(name);
+            row.Children.Add(remove);
+            StackFolderList.Children.Add(row);
+        }
     }
 
     private void OnFolderStacksToggled(object sender, RoutedEventArgs e)
