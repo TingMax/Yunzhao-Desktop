@@ -177,7 +177,7 @@ public sealed partial class MainWindow : Window
 
         _mains = new FrameworkElement[] { MainMaterial, MainShape, MainDock, MainNotify, MainWidgets, MainStage, MainDisplays, MainSystem, DesignStack, MainAbout,
                                           MainStart, MainTray, MainStatus, MainClock, MainAccount, PageSlot15, MainCalendar };
-        _sides = new FrameworkElement?[] { SideMaterial, SideShape, SideDock, SideNotify, SideWidgets, null, null, null, null, null,
+        _sides = new FrameworkElement?[] { SideMaterial, SideShape, SideDock, SideNotify, SideWidgets, SideStage, null, null, null, null,
                                            SideStart, SideTray, SideStatus, SideClock, null, null, null };
         RootGrid.Loaded += (_, _) => { HideCalendarSettings(); HideIslandHost(); };
         InitDisplays();

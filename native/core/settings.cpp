@@ -42,6 +42,7 @@ void Settings::Clamp()
     c(magnify, 1, 2, d.magnify);
     c(notifyTimeout, 3, 30, d.notifyTimeout);
     c(calendarDateSize, 12, 36, d.calendarDateSize);
+    c(calendarDockMs, 80, 1200, d.calendarDockMs); // the calendar and the settings page both write it
     c(timetableDateSize, 16, 48, d.timetableDateSize);
     c(timetableBadgeScale, 0.4, 1.6, d.timetableBadgeScale);
     c(islandTop, 0, 240, d.islandTop);
@@ -143,6 +144,7 @@ std::wstring Settings::ToJson() const
     o.SetNamedValue(L"widgetBackdrop", json::JsonValue::CreateStringValue(widgetBackdrop));
     o.SetNamedValue(L"widgetMaterial", json::JsonValue::CreateStringValue(widgetMaterial));
     num(L"calendarDateSize", calendarDateSize);
+    num(L"calendarDockMs", calendarDockMs);
     num(L"timetableDateSize", timetableDateSize);
     num(L"timetableBadgeScale", timetableBadgeScale);
     o.SetNamedValue(L"calendarEdgeHide", json::JsonValue::CreateBooleanValue(calendarEdgeHide));
@@ -292,6 +294,7 @@ bool Settings::FromJson(const std::wstring& text, const Settings& base, Settings
         s.widgetMaterial = m == L"dusk" || m == L"color" ? m : L"glass";
     }
     num(L"calendarDateSize", s.calendarDateSize);
+    num(L"calendarDockMs", s.calendarDockMs);
     num(L"timetableDateSize", s.timetableDateSize);
     num(L"timetableBadgeScale", s.timetableBadgeScale);
     flag(L"calendarEdgeHide", s.calendarEdgeHide);

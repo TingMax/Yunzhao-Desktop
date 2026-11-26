@@ -275,7 +275,7 @@ internal sealed class BarSettings
         s.WidgetBackdrop = o?["widgetBackdrop"] is JsonValue wb && wb.TryGetValue(out string? wbs) && wbs != null
             ? (wbs == "wallpaper" ? "wallpaper" : "desktop")
             : f.WidgetBackdrop;
-        s.StageManager = false;
+        s.StageManager = Flag("stageManager", f.StageManager);
         s.StageOnRight = Flag("stageOnRight", f.StageOnRight);
         s.StageAutoHide = Flag("stageAutoHide", f.StageAutoHide);
         s.StageMinimize = Flag("stageMinimize", f.StageMinimize);
@@ -286,7 +286,7 @@ internal sealed class BarSettings
         s.TimetableBadgeScale = Math.Clamp(Num("timetableBadgeScale", f.TimetableBadgeScale), 0.4, 1.6);
         s.CalendarEdgeHide = Flag("calendarEdgeHide", f.CalendarEdgeHide);
         s.CalendarDockMs = Math.Clamp(Num("calendarDockMs", f.CalendarDockMs), 80, 1200);
-        s.IslandOn = false;
+        s.IslandOn = Flag("islandOn", f.IslandOn);
         s.IslandTop = Math.Clamp(Num("islandTop", f.IslandTop), 0, 240);
         s.IslandWidth = Math.Clamp(Num("islandWidth", f.IslandWidth), 80, 560);
         s.IslandHeight = Math.Clamp(Num("islandHeight", f.IslandHeight), 28, 140);
@@ -365,6 +365,7 @@ internal sealed class BarSettings
         StartOnLogin == o.StartOnLogin &&
         ShowLaunchpad == o.ShowLaunchpad && LaunchpadMaterial == o.LaunchpadMaterial && LaunchpadLayout == o.LaunchpadLayout &&
         ShowFolderStacks == o.ShowFolderStacks && FolderStackLayout == o.FolderStackLayout && FolderStackMax == o.FolderStackMax &&
+        FolderStacks.SequenceEqual(o.FolderStacks) && FolderStackFiles.SequenceEqual(o.FolderStackFiles) &&
         DockDisplayMode == o.DockDisplayMode && DockDisplayDelay == o.DockDisplayDelay && BarRevealDelay == o.BarRevealDelay && BarHideDelay == o.BarHideDelay && DockDisplay == o.DockDisplay && DesktopDisplay == o.DesktopDisplay &&
         TaskbarApps == o.TaskbarApps && TaskbarRightPrimaryOnly == o.TaskbarRightPrimaryOnly &&
         WindowsContextMenu == o.WindowsContextMenu &&

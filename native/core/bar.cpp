@@ -1160,8 +1160,10 @@ void Bar::Relayout()
             keep[t.key] = c;
         }
         scene.items.push_back(std::move(it));
-        // Hit cells split the gaps; the last one reaches the separator.
-        int hl = k == 0 ? stripMin - gap / 2 : appsLeft + k * pitch - gap / 2;
+        // Hit cells split the gaps; the last one reaches the separator. The first starts at the
+        // icon that is actually drawn: the strip is centred, so `stripMin` can sit well left of it
+        // and clicking bare glass there would activate app #1.
+        int hl = k == 0 ? appsLeft - gap / 2 : appsLeft + k * pitch - gap / 2;
         int hr = k == slots - 1 ? rightLeft - groupGap : appsLeft + k * pitch + plate + (gap - gap / 2);
         hits_.push_back({t.key, RECT{hl, hitTop, hr, hitBottom}});
     }
@@ -1256,7 +1258,12 @@ void Bar::SetRegion(bool extended)
         CombineRgn(rgn, rgn, top, RGN_OR);
         DeleteObject(top);
     }
-    SetWindowRgn(input_, rgn, FALSE);
+    // SetWindowRgn takes ownership of the region only when it succeeds. Recording the size on
+    // failure would block every retry, leaving the input window with a stale hit shape.
+    if (!SetWindowRgn(input_, rgn, FALSE)) {
+        DeleteObject(rgn);
+        return;
+    }
     appliedRgn_[0] = barW;
     appliedRgn_[1] = barH;
     appliedRgn_[2] = radius_;
@@ -1438,7 +1445,12 @@ void Bar::UpdateCover()
 
 void Bar::UpdateAutoHide()
 {
-    bool tuck = covered_ && !revealed_ && visible_;
+    // Standing down for a game is a tuck too, and it lasts while the game holds the screen: only
+    // `covered_` would undo it whenever auto-hide is not what took the bar away (a game over a
+    // plain desktop, the desktop itself read as one), showing and raising the bar over the game
+    // and dropping it to the desktop.
+    const bool held = GetTickCount64() < yieldUntil_;
+    bool tuck = (covered_ || held) && !revealed_ && visible_;
     if (tuck == tucked_)
         return;
     tucked_ = tuck;
