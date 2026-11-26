@@ -795,6 +795,8 @@
                                             <RadioButton x:Name="HideFullscreen" GroupName="autohide" Content="全屏时隐藏" Tag="fullscreen" Style="{StaticResource SegmentStyle}" Checked="OnAutoHideChecked" />
                                             <RadioButton x:Name="HideAlways" GroupName="autohide" Content="一直隐藏" Tag="always" Style="{StaticResource SegmentStyle}" Checked="OnAutoHideChecked" />
                                         </local:SegmentTrack>
+                                    <TextBlock x:Name="HideAlwaysNote" Text="已隐藏系统任务栏，所以不能选“一直隐藏”：否则屏幕上会一条任务栏都没有。"
+                                               Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,6,0,0" />
                                 </StackPanel>
                                 <local:SliderTile x:Name="BarRevealDelay" />
                                 <local:SliderTile x:Name="BarHideDelay" />

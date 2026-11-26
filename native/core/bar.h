@@ -160,6 +160,7 @@ private:
     void GuardStacking(const wchar_t* why);
     bool MonitorCoveredByApp() const;
     void UpdateCover();    // this monitor's top app is maximized or full screen, regardless of focus
+    std::wstring EffectiveAutoHide(); // the hide mode actually in force (see UpdateCover)
     void UpdateAutoHide(); // tucks the bar away or brings it up
     void WatchPointer();   // while covered: the screen's bottom edge brings the bar up, leaving it lets it go
     void WatchDisplays();  // summon the shared Dock on another display, after the hover delay
@@ -228,6 +229,10 @@ private:
     std::map<HWND, std::pair<int, ULONGLONG>> raises_; // windows we were raised over: count, first time
     HWND lastCover_ = nullptr;
     ULONGLONG yieldUntil_ = 0; // a game is taking the screen; do not raise or reveal until then
+    ULONGLONG fullscreenSettleUntil_ = 0; // a fullscreen window just appeared; let it settle
+    ULONGLONG watchLogged_ = 0; // last reveal-poll state log
+    ULONGLONG revealLog2_ = 0;  // last reveal-wait state log
+    bool tuckModeLogged_ = false; // the "always" mode was refused because Windows' taskbar is hidden
     bool appliedVisible_ = false;
     std::wstring fileHoverKey_;
     winrt::com_ptr<IDropTarget> dropTarget_;

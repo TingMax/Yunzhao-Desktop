@@ -1286,10 +1286,24 @@ void CALLBACK Bar::WinEvent(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idO
         }
         return;
     }
-    if (event == EVENT_SYSTEM_FOREGROUND && FullScreenApp(hwnd))
-        bar->yieldUntil_ = GetTickCount64() + 2000;
-    if (bar->settings_.taskbarApps != L"all")
-        bar->Relayout();
+    if (event == EVENT_SYSTEM_FOREGROUND) {
+        // A game that just took the foreground may not match FullScreenApp yet (the
+        // caption is gone but SHQueryUserNotificationState has not caught up).
+        // A caption-less window covering the monitor is enough to stand down. The desktop
+        // (Progman) and Explorer's taskbars are not apps: clicking the wallpaper used to read
+        // as a full-screen game, take the bar away, and nothing brought it back.
+        const bool fullscreenFrame = hwnd && IsWindowVisible(hwnd) && !IsIconic(hwnd) && !ShellSurface(hwnd) &&
+                                     !(GetWindowLongW(hwnd, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) &&
+                                     CoversMonitor(hwnd, bar->hmonitor_);
+        if (FullScreenApp(hwnd) || fullscreenFrame)
+            bar->yieldUntil_ = GetTickCount64() + 2000;
+    }
+    if (bar->settings_.taskbarApps != L"all") {
+        // Relaying out moves the bar's windows; while a full-screen app holds the
+        // screen that is at best pointless and at worst a flicker over it.
+        if (GetTickCount64() >= bar->yieldUntil_ && !FullScreenInFront(bar->hmonitor_))
+            bar->Relayout();
+    }
     bar->GuardStacking(event == EVENT_SYSTEM_FOREGROUND ? L"foreground" : L"move");
 }
 
@@ -1324,7 +1338,16 @@ bool Bar::MonitorCoveredByApp() const
         RECT frame{};
         if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) && !GetWindowRect(window, &frame))
             continue;
+        // Windows' taskbar is hidden (settings hideTaskbar): this bar is the taskbar now, and a
+        // taskbar is not pushed off the screen by a maximized window. With the system taskbar
+        // hidden the work area is the whole screen, so a maximized app's frame looks exactly like
+        // a full-screen one. Only a window without a title bar or resize frame that really fills
+        // the monitor (a game, a full-screen video) takes the bar away; anything with a frame is
+        // an app's window and the bar stays on top of it.
+        const bool framed = (GetWindowLongW(window, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) != 0;
         if (auto covered = WindowCoverOnMonitor(windowMonitor, frame, IsZoomed(window) != FALSE, hmonitor_, monitor_)) {
+            if (*covered && settings_.hideTaskbar && framed)
+                continue; // a normal app's window, maximized or merely large: the bar stays, as a taskbar does
             if (*covered)
                 return true;
             // Snapped side by side, the windows fill the screen as a maximized one does.
@@ -1333,8 +1356,8 @@ bool Bar::MonitorCoveredByApp() const
             const int slack = MulDiv(8, int(GetDpiForWindow(window)), 96);
             if (IsTile(bounds, mi.rcWork, slack)) {
                 tiles.push_back(bounds);
-                if (TilesFill(tiles, mi.rcWork, slack))
-                    return true;
+                if (TilesFill(tiles, mi.rcWork, slack) && !settings_.hideTaskbar)
+                    return true; // snapped tiles are no reason to take the only taskbar away
             }
             // A smaller window in front (a mail opened from a chat, a dialog, a float) does not
             // decide: what fills the screen behind it still does.
@@ -1343,10 +1366,25 @@ bool Bar::MonitorCoveredByApp() const
     return false;
 }
 
+// Windows' own taskbar is off (settings hideTaskbar): this bar is then the only one there is.
+// A tuck-away mode would leave the desktop with no taskbar at all, so "always" is refused while
+// the system taskbar is hidden and only a full-screen app in front may take this bar away.
+std::wstring Bar::EffectiveAutoHide()
+{
+    if (settings_.autoHide == L"always" && settings_.hideTaskbar) {
+        if (!tuckModeLogged_) {
+            tuckModeLogged_ = true;
+            Log(L"bar: auto-hide 'always' ignored: Windows' taskbar is hidden, so this bar stays up (only a full-screen app takes it away)");
+        }
+        return L"fullscreen";
+    }
+    return settings_.autoHide;
+}
+
 void Bar::UpdateCover()
 {
     // Apply the hide mode independently on each display.
-    const std::wstring& mode = settings_.autoHide;
+    const std::wstring mode = EffectiveAutoHide();
     bool covered = mode == L"always" || (mode != L"never" && MonitorCoveredByApp());
     if (covered == covered_) {
         // Same state, but the poll can be gone (a window move, a display change, a
@@ -1356,6 +1394,10 @@ void Bar::UpdateCover()
             SetTimer(input_, kPointerTimer, kPointerMs, nullptr);
         else
             KillTimer(input_, kPointerTimer);
+        // YieldToGame tucks the bar without `covered_` changing (a game over a plain desktop,
+        // the desktop itself misread as one). Leaving here without re-checking kept the bar
+        // hidden for good, which is exactly the "the taskbar is gone" report.
+        UpdateAutoHide();
         return;
     }
     covered_ = covered;
@@ -1412,6 +1454,21 @@ void Bar::WatchPointer()
     }
     POINT p{};
     GetCursorPos(&p);
+    // A bar that will not come back is the worst failure this app has. The state is
+    // logged once every few seconds while the pointer sits on the strip, so a report
+    // of "the taskbar is gone" comes with the numbers behind it.
+    if (ULONGLONG now0 = GetTickCount64(); !revealed_ && now0 - watchLogged_ > 4000) {
+        MONITORINFO mi{sizeof(mi)};
+        GetMonitorInfoW(hmonitor_, &mi);
+        const bool onStrip = p.x >= mi.rcMonitor.left && p.x < mi.rcMonitor.right &&
+                             (p.y >= mi.rcMonitor.bottom - 120 || p.y >= mi.rcWork.bottom - 120);
+        if (onStrip) {
+            watchLogged_ = now0;
+            Log(L"bar: reveal poll pointer=%ld,%ld monitor=%ld,%ld-%ld,%ld work.bottom=%ld yieldLeft=%lld tucked=%d slidOut=%d",
+                p.x, p.y, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom, mi.rcWork.bottom,
+                (long long)yieldUntil_ - (long long)now0, tucked_ ? 1 : 0, slidOut_ ? 1 : 0);
+        }
+    }
     RECT bar = BarRect();
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG revealMs = static_cast<ULONGLONG>(settings_.barRevealDelay);
@@ -1436,7 +1493,7 @@ void Bar::WatchPointer()
         const bool atBottom = onScreen && nearBottom;
         // With auto-hide "always" the user asked for this bar, so a full-screen report
         // (a game, a browser in fullscreen, a stale UIA answer) must not lock it away.
-        const bool allowReveal = settings_.autoHide == L"always" || !FullScreenInFront(hmonitor_);
+        const bool allowReveal = EffectiveAutoHide() == L"always" || !FullScreenInFront(hmonitor_);
         // A bar that cannot be brought back is unrecoverable for the user, so the decision
         // is logged (rate-limited) whenever the pointer rests on the strip but nothing happens.
         if (atBottom && !allowReveal && now - revealLogged_ > 5000) {
@@ -1444,15 +1501,30 @@ void Bar::WatchPointer()
             Log(L"bar: pointer at the edge (%ld,%ld) but a full-screen window holds the bar away", p.x, p.y);
         }
         if (atBottom && allowReveal && now >= yieldUntil_) {
-            if (!revealAt_)
+            if (!revealAt_) {
                 revealAt_ = now;
-            else if (now - revealAt_ >= revealMs) {
+                if (now - revealLog2_ > 4000) {
+                    revealLog2_ = now;
+                    Log(L"bar: reveal wait started at the edge (delay %llu ms)", revealMs);
+                }
+            } else if (now - revealAt_ >= revealMs) {
                 revealed_ = true;
                 revealAt_ = 0;
                 leftAt_ = 0;
                 UpdateAutoHide();
             }
         } else {
+            // A bar that will not come back is the worst failure this app has, so the
+            // reason is recorded once per pause instead of failing silently.
+            if (atBottom && allowReveal && now < yieldUntil_ && now - revealLogged_ > 3000) {
+                revealLogged_ = now;
+                Log(L"bar: pointer at the edge but a game hold is still in effect (%llu ms left)", yieldUntil_ - now);
+            }
+            if (revealAt_ && now - revealLog2_ > 4000) {
+                revealLog2_ = now;
+                Log(L"bar: reveal wait reset (atBottom=%d allow=%d nowLTyield=%d)", atBottom ? 1 : 0, allowReveal ? 1 : 0,
+                    now < yieldUntil_ ? 1 : 0);
+            }
             revealAt_ = 0;
         }
         return;
@@ -1493,6 +1565,8 @@ void Bar::YieldToGame(HWND cover)
         KillTimer(input_, kSlideTimer);
         Relayout(); // hides now; waiting out the slide would keep the bar on top of the game
     }
+    // Standing down is not auto-hide: `covered_` can still be false, and UpdateCover is what puts
+    // the bar back once the screen is free (see its early return). Kept in one place on purpose.
 }
 
 void Bar::Raise()
@@ -1589,6 +1663,28 @@ void Bar::GuardStacking(const wchar_t* why)
     if (GetTickCount64() < yieldUntil_ || FullScreenInFront(hmonitor_) || FullScreenApp(cover)) {
         YieldToGame(cover ? cover : GetForegroundWindow());
         return;
+    }
+    // A game switching to exclusive fullscreen is not visible to Windows for a few
+    // frames: the foreground window is still the one it replaced and
+    // SHQueryUserNotificationState still reports the old state. Raising the bar in
+    // that window takes the screen from the game and lands the user on the desktop.
+    // A caption-less window that covers the monitor is that moment, so the raise
+    // waits for it to settle instead of racing it. The desktop and the taskbars are
+    // not apps: they always cover the monitor, and counting them held the bar down
+    // forever (it could not be brought back at all).
+    const bool fullscreenFrame = cover && IsWindowVisible(cover) && !IsIconic(cover) && !ShellSurface(cover) &&
+                                 !(GetWindowLongW(cover, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME)) &&
+                                 CoversMonitor(cover, hmonitor_);
+    if (fullscreenFrame) {
+        const ULONGLONG now = GetTickCount64();
+        if (!fullscreenSettleUntil_) {
+            fullscreenSettleUntil_ = now + 2000;
+            Log(L"bar: a fullscreen window just appeared; holding the bar down while it settles");
+        }
+        if (now < fullscreenSettleUntil_)
+            return;
+    } else {
+        fullscreenSettleUntil_ = 0;
     }
     if (!cover)
         return;

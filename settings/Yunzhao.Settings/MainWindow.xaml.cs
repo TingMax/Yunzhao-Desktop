@@ -1554,6 +1554,7 @@ public sealed partial class MainWindow : Window
         WinNumbersSwitch.IsEnabled = false;
         (_current.StatusStyle == "icons" ? StatusIcons : StatusRing).IsChecked = true;
         (_current.AutoHide switch { "never" => HideNever, "always" => HideAlways, _ => HideFullscreen }).IsChecked = true;
+        UpdateAutoHideAvailability();
         BarRevealDelay.SetValue(_current.BarRevealDelay);
         BarHideDelay.SetValue(_current.BarHideDelay);
         StartupSwitch.IsOn = _current.StartOnLogin;
@@ -1744,6 +1745,32 @@ public sealed partial class MainWindow : Window
     {
         if (_loading) return;
         _current.HideTaskbar = HideTaskbarSwitch.IsOn;
+        UpdateAutoHideAvailability();
+        Changed();
+    }
+
+    // Windows' taskbar hidden leaves this bar as the only one on screen: "always hidden"
+    // would take the last taskbar away, so that choice is refused while the switch is on.
+    private void UpdateAutoHideAvailability()
+    {
+        bool hidden = _current.HideTaskbar;
+        HideAlways.IsEnabled = !hidden;
+        ToolTipService.SetToolTip(HideAlways, hidden ? "已隐藏系统任务栏，Yunzhao 栏需要常驻或只在全屏时隐藏。" : null);
+        HideAlwaysNote.Visibility = hidden ? Visibility.Visible : Visibility.Collapsed;
+        if (!hidden)
+        {
+            // Back to what was stored all along.
+            (_current.AutoHide switch { "never" => HideNever, "always" => HideAlways, _ => HideFullscreen }).IsChecked = true;
+            return;
+        }
+        // The stored "always" cannot run: show the mode that really does. Loading leaves the
+        // stored value alone, so turning the switch off restores the user's own choice.
+        if (_current.AutoHide != "always")
+            return;
+        HideFullscreen.IsChecked = true;
+        if (_loading)
+            return;
+        _current.AutoHide = "fullscreen";
         Changed();
     }
 

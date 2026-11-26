@@ -128,6 +128,16 @@ bool BorderlessGame(HWND root, HMONITOR monitor)
     return CoversMonitor(root, monitor);
 }
 
+bool BorderlessFill(HWND window)
+{
+    if (!window)
+        return false;
+    HWND root = GetAncestor(window, GA_ROOT);
+    if (!root)
+        root = window;
+    return BorderlessGame(root, MonitorFromWindow(root, MONITOR_DEFAULTTONULL));
+}
+
 bool FullScreenApp(HWND window)
 {
     if (!window)
