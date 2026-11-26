@@ -1541,8 +1541,20 @@ void Bar::WatchPointer()
         }
         return;
     }
-    RECT zone{bar.left, window_.top, bar.right, monitor_.bottom};
-    if (PtInRect(&zone, p) || dragging_ || (keepShown && keepShown())) {
+    // Keeping it up: the pointer on the bar itself, or on the bottom strip it was summoned from.
+    // The strip comes from the monitor and work area, never from the window's own rect: that rect
+    // slides as the bar moves, so a pointer resting at the edge fell out of it, the bar tucked,
+    // the pointer was inside again and it came straight back — the up-and-down the user saw.
+    const RECT onBar{bar.left, window_.top, bar.right, monitor_.bottom};
+    bool inZone = PtInRect(&onBar, p) != 0;
+    if (!inZone)
+        if (MONITORINFO mi{sizeof(mi)}; hmonitor_ && GetMonitorInfoW(hmonitor_, &mi)) {
+            const int band = std::max(96, int(std::lround(64 * std::clamp(scale_, 0.25f, 8.f))));
+            const bool onScreen = p.x >= mi.rcMonitor.left && p.x < mi.rcMonitor.right;
+            const bool nearBottom = p.y >= mi.rcMonitor.bottom - band || p.y >= mi.rcWork.bottom - band;
+            inZone = onScreen && nearBottom;
+        }
+    if (inZone || dragging_ || (keepShown && keepShown())) {
         leftAt_ = 0;
         return;
     }
@@ -1673,6 +1685,14 @@ void Bar::GuardStacking(const wchar_t* why)
     // Climbing back over a full-screen game takes the screen away from it, so it
     // drops to the desktop. It used to take several tries before the bar gave up.
     if (GetTickCount64() < yieldUntil_ || FullScreenInFront(hmonitor_) || FullScreenApp(cover)) {
+        if (ULONGLONG now3 = GetTickCount64(); now3 - yieldLogged_ > 1200) {
+            yieldLogged_ = now3;
+            wchar_t cls[64] = {};
+            if (cover)
+                GetClassNameW(cover, cls, 64);
+            Log(L"bar: stand down (yieldLeft=%lld fullInFront=%d fullApp=%d cover=%s)", (long long)yieldUntil_ - (long long)now3,
+                FullScreenInFront(hmonitor_) ? 1 : 0, FullScreenApp(cover) ? 1 : 0, cls[0] ? cls : L"none");
+        }
         YieldToGame(cover ? cover : GetForegroundWindow());
         return;
     }

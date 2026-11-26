@@ -252,6 +252,7 @@ private:
     ULONGLONG yieldUntil_ = 0; // a game is taking the screen; do not raise or reveal until then
     ULONGLONG fullscreenSettleUntil_ = 0; // a fullscreen window just appeared; let it settle
     ULONGLONG watchLogged_ = 0; // last reveal-poll state log
+    ULONGLONG yieldLogged_ = 0; // last "stand down" state log
     ULONGLONG revealLog2_ = 0;  // last reveal-wait state log
     bool appliedVisible_ = false;
     std::wstring fileHoverKey_;
