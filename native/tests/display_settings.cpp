@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "bar_reveal.h"
 #include "shell/displays.h"
 #include "ui/notification_layout.h"
 #include "motion.h"
@@ -43,7 +44,8 @@ void CheckSettings()
             parsed.desktopDisplay == settings.desktopDisplay && parsed.taskbarApps == settings.taskbarApps && parsed.taskbarRightPrimaryOnly &&
             parsed.notifyPlacement == L"topRight", "all display and notification preferences survive saving");
     Require(Settings::FromJson(LR"({"taskbarRightPrimaryOnly":false})", settings, parsed) && !parsed.taskbarRightPrimaryOnly &&
-            parsed.showTray && parsed.showStatus && parsed.showClock && parsed.showNotifications, "disabling the primary-only group retains individual content switches");
+            parsed.showTray && parsed.showStatus && parsed.showClock && !parsed.showNotifications,
+        "disabling the primary-only group retains individual content switches, and the retired bell stays off");
     Require(Settings::FromJson(LR"({"taskbarRightPrimaryOnly":"bad"})", settings, parsed) && parsed.taskbarRightPrimaryOnly,
         "malformed primary-only visibility retains the current value");
     Require(Settings::FromJson(LR"({})", settings, parsed) && parsed.taskbarRightPrimaryOnly, "partial updates retain primary-only visibility");
@@ -145,6 +147,21 @@ void CheckFullscreenCoverage()
     Require(!AtDisplayBottom({960, 1080}, screen) && !AtDisplayBottom({960, 1600}, screen), "a lower display must not repeatedly reveal the upper display's bar");
     Require(!AtDisplayBottom({1920, 1079}, screen) && !AtDisplayBottom({960, 1077}, screen), "another display or a point above the edge does not reveal the bar");
     Require(AtDisplayBottom({-1280, 1239}, leftScreen), "edge reveal supports negative display coordinates");
+
+    // The bar itself only answers to the screen's last few pixels: the work area's edge and a
+    // window's bottom border sit above them, and a hover there must not summon it.
+    const RECT monitor{0, 0, 1920, 1080};
+    Require(TouchingBottomEdge({960, 1079}, monitor, 1.f) && TouchingBottomEdge({960, 1078}, monitor, 1.f) &&
+            TouchingBottomEdge({960, 1077}, monitor, 1.f),
+        "the screen's own bottom edge, and the few pixels of it, summon the bar");
+    Require(!TouchingBottomEdge({960, 1076}, monitor, 1.f), "a pixel above the strip is a hover, not a summon");
+    Require(!TouchingBottomEdge({960, 1040}, monitor, 1.f), "the work area's edge is not the screen's edge");
+    Require(!TouchingBottomEdge({1920, 1079}, monitor, 1.f) && !TouchingBottomEdge({-1, 1079}, monitor, 1.f),
+        "the strip stops at the display's own width");
+    Require(TouchingBottomEdge({960, 1079}, monitor, 2.f) && !TouchingBottomEdge({960, 1073}, monitor, 2.f),
+        "the strip grows with the display scale, and no further");
+    Require(TouchingBottomEdge({-1280, 1239}, RECT{-2560, -200, 0, 1240}, 1.f),
+        "edge reveal supports negative display coordinates");
 }
 
 void CheckNotificationLayout()

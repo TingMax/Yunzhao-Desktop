@@ -68,6 +68,7 @@ constexpr UINT_PTR kDisplayTimer = 6; // the shared Dock's cross-display gesture
 constexpr UINT_PTR kCoverTimer = 7;   // windows moved on this monitor: look at what covers it, once for a burst
 constexpr UINT kCoverMs = 50;
 constexpr UINT kPointerMs = 50;
+
 std::map<HWINEVENTHOOK, Bar*> g_guards; // each display has its own stacking guard
 struct CaptureWindows { HWND visual, input; bool visible; };
 std::map<Bar*, CaptureWindows> g_capturePolicies; // UI-thread only
@@ -1426,10 +1427,11 @@ void Bar::UpdateCover()
     // Maximizing with the pointer on the bar keeps it up until the pointer leaves.
     POINT p{};
     GetCursorPos(&p);
-    RECT bar = BarRect(), zone{bar.left, window_.top, bar.right, monitor_.bottom};
-    // The pointer has to rest on the edge before the bar comes up. Arriving there only starts the wait.
+    // The pointer has to reach the screen's own bottom edge before the bar comes up; arriving
+    // there only starts the wait. Anywhere above the edge is a window being used, not a summon.
     revealed_ = false;
-    revealAt_ = covered && !slidOut_ && PtInRect(&zone, p) && !FullScreenInFront(hmonitor_) && GetTickCount64() >= yieldUntil_
+    revealAt_ = covered && !slidOut_ && TouchingBottomEdge(p, hmonitor_, scale_) && !FullScreenInFront(hmonitor_) &&
+                        GetTickCount64() >= yieldUntil_
         ? GetTickCount64() : 0;
     leftAt_ = 0;
     if (mode == L"fullscreen")
@@ -1501,32 +1503,32 @@ void Bar::WatchPointer()
     const ULONGLONG revealMs = static_cast<ULONGLONG>(settings_.barRevealDelay);
     const ULONGLONG hideMs = static_cast<ULONGLONG>(settings_.barHideDelay);
     if (!revealed_) {
-        // The bar is hidden, so the pointer has to rest on this screen's bottom strip, not on a
-        // two-pixel line. A two-pixel line cannot be held for the reveal delay.
+        // The bar is hidden, so the pointer has to touch this screen's own bottom edge. A band
+        // above the edge does not count: the bar used to come up whenever the pointer merely
+        // rested near the bottom of the screen, which made it jump out over a window in use.
         MONITORINFO hot{sizeof(hot)};
         GetMonitorInfoW(hmonitor_, &hot);
         // A stale or failed scale would make the strip unusably thin, which is exactly
         // how a bar becomes impossible to bring back on an unfamiliar machine. Clamp it.
         const float sc = scale_ > 0.25f && scale_ < 8.f ? scale_ : 1.f;
-        const int barH = int(scene_.bar.bottom - scene_.bar.top);
-        const int band = std::max(96, std::max(int(std::lround(64 * sc)), barH + int(std::lround(32 * sc))));
-        // The pointer on Windows 10 often cannot cross into a hidden taskbar's
-        // strip, so the work area's own bottom edge has to count as well. The monitor
-        // rectangle from the last layout can be stale (a resolution change, a moved
+        // The monitor rectangle from the last layout can be stale (a resolution change, a moved
         // display), so the live one is asked for here.
         const RECT& m = hot.rcMonitor;
-        const bool onScreen = p.x >= m.left && p.x < m.right;
-        const bool nearBottom = p.y >= m.bottom - band || p.y >= hot.rcWork.bottom - band;
-        const bool atBottom = onScreen && nearBottom;
+        // Touching the very edge, not hovering above it. The work area's own edge no longer
+        // counts: with the bar hidden it still stops at the screen's edge, and a window's bottom
+        // border sits on the same line, so the two cannot be told apart.
+        const bool atBottom = TouchingBottomEdge(p, m, sc);
         // With auto-hide "always" the user asked for this bar, so a full-screen report
         // (a game, a browser in fullscreen, a stale UIA answer) must not lock it away.
         const bool allowReveal = settings_.autoHide == L"always" || !FullScreenInFront(hmonitor_);
         // A bar that cannot be brought back is unrecoverable for the user, so the decision
-        // is logged (rate-limited) whenever the pointer rests on the strip but nothing happens.
+        // is logged (rate-limited) whenever the pointer touches the edge but nothing happens.
         if (atBottom && !allowReveal && now - revealLogged_ > 5000) {
             revealLogged_ = now;
             Log(L"bar: pointer at the edge (%ld,%ld) but a full-screen window holds the bar away", p.x, p.y);
         }
+        // Above the edge only clears the wait: a pointer parked just inside the screen never
+        // arms the reveal, so brushing past the bottom of the screen changes nothing.
         if (atBottom && allowReveal && now >= yieldUntil_) {
             if (!revealAt_) {
                 revealAt_ = now;
@@ -1556,19 +1558,16 @@ void Bar::WatchPointer()
         }
         return;
     }
-    // Keeping it up: the pointer on the bar itself, or on the bottom strip it was summoned from.
-    // The strip comes from the monitor and work area, never from the window's own rect: that rect
-    // slides as the bar moves, so a pointer resting at the edge fell out of it, the bar tucked,
-    // the pointer was inside again and it came straight back — the up-and-down the user saw.
+    // Keeping it up: the pointer on the bar itself, or on the screen's own bottom edge (the
+    // strip it was summoned from). The zone comes from the monitor and work area, never from the
+    // window's own rect: that rect slides as the bar moves, so a pointer resting at the edge fell
+    // out of it, the bar tucked, the pointer was inside again and it came straight back — the
+    // up-and-down the user saw. A wider band here would keep the bar up over a window in use.
     const RECT onBar{bar.left, window_.top, bar.right, monitor_.bottom};
     bool inZone = PtInRect(&onBar, p) != 0;
     if (!inZone)
-        if (MONITORINFO mi{sizeof(mi)}; hmonitor_ && GetMonitorInfoW(hmonitor_, &mi)) {
-            const int band = std::max(96, int(std::lround(64 * std::clamp(scale_, 0.25f, 8.f))));
-            const bool onScreen = p.x >= mi.rcMonitor.left && p.x < mi.rcMonitor.right;
-            const bool nearBottom = p.y >= mi.rcMonitor.bottom - band || p.y >= mi.rcWork.bottom - band;
-            inZone = onScreen && nearBottom;
-        }
+        if (MONITORINFO mi{sizeof(mi)}; hmonitor_ && GetMonitorInfoW(hmonitor_, &mi))
+            inZone = TouchingBottomEdge(p, mi.rcMonitor, scale_);
     if (inZone || dragging_ || (keepShown && keepShown())) {
         leftAt_ = 0;
         return;

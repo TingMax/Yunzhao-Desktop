@@ -463,7 +463,18 @@ void PaintTodoLines(Canvas& c, const WidgetContent& content, const Pal& p, std::
         const Reminder& item = *rows[size_t(n)].item;
         const float radius = std::clamp(lineH * 0.28f, 3.2f, 5.f);
         PaintMark(c, x + 8, ly + lineH * 0.42f, radius, item);
-        PaintTodoText(c, item.text, D2D1::RectF(x + 16, ly, x + width - 3, ly + lineH), std::max(10.f, lineH - 2), item.done, false);
+        // A todo carrying its result is two lines high in the same slot: title, then the
+        // result in a smaller, quieter ink. The slot height does not change, so the count
+        // of visible todos stays predictable.
+        if (!item.progress.empty()) {
+            const float titleH = lineH * 0.56f;
+            PaintTodoText(c, item.text, D2D1::RectF(x + 16, ly - 1.f, x + width - 3, ly + titleH), std::max(9.f, lineH * 0.5f),
+                item.done, false);
+            const D2D1_COLOR_F ink = item.done ? Alpha(Rgba(0x07C160, 0.98f), 0.82f) : Alpha(p.sub, 0.92f);
+            c.Text(item.progress, D2D1::RectF(x + 16, ly + titleH - 2.f, x + width - 3, ly + lineH), std::max(8.f, lineH * 0.42f), ink);
+        } else {
+            PaintTodoText(c, item.text, D2D1::RectF(x + 16, ly, x + width - 3, ly + lineH), std::max(10.f, lineH - 2), item.done, false);
+        }
         wchar_t id[32];
         swprintf_s(id, L"todo:%zu", rows[size_t(n)].index);
         hits.push_back({D2D1::RectF(x + 2, ly, x + width - 2, ly + lineH), id});
@@ -594,10 +605,18 @@ void PaintTodoPopup(Canvas& c, const WidgetContent& content, const Pal& p, float
     const float cardW = std::min(300.f, std::max(180.f, W - 16.f));
     const float textW = cardW - 48;
     float body = 0;
+    auto progressLines = [&](const Reminder& item) {
+        if (item.progress.empty())
+            return 0;
+        const float tw = c.TextWidth(item.progress, 11.5f);
+        return std::max(1, int(std::ceil(tw / std::max(1.f, textW))));
+    };
     for (size_t index : rows) {
-        float tw = c.TextWidth(content.items[index].text, 13.5f);
+        const Reminder& item = content.items[index];
+        float tw = c.TextWidth(item.text, 13.5f);
         int lines = std::max(1, int(std::ceil(tw / std::max(1.f, textW))));
         body += float(lines) * 18.f + 10.f;
+        body += float(progressLines(item)) * 15.f + (progressLines(item) ? 4.f : 0.f);
     }
     const float foot = 8.f;
     const float cardH = std::min(H - 16.f, 40.f + body + foot);
@@ -617,19 +636,26 @@ void PaintTodoPopup(Canvas& c, const WidgetContent& content, const Pal& p, float
         float tw = c.TextWidth(item.text, 13.5f);
         int lines = std::max(1, int(std::ceil(tw / std::max(1.f, textW))));
         float lh = float(lines) * 18.f;
+        const int extra = progressLines(item);
+        const float progressH = extra ? float(extra) * 15.f + 4.f : 0.f;
         if (ly + 8 > card.bottom - 8.f)
             break;
         const float cy = ly + 9;
         PaintMark(c, card.left + 18, cy, 7.f, item);
         wchar_t check[32];
         swprintf_s(check, L"check:%zu", index);
-        hits.push_back({D2D1::RectF(card.left + 6, ly, card.left + 34, ly + std::max(22.f, lh)), check});
+        hits.push_back({D2D1::RectF(card.left + 6, ly, card.left + 34, ly + std::max(22.f, lh + progressH)), check});
         D2D1_RECT_F text = D2D1::RectF(card.left + 34, ly, card.right - 12, std::min(card.bottom - 8, ly + lh));
         PaintTodoText(c, item.text, text, 13.5f, item.done, true);
+        if (extra) {
+            const D2D1_COLOR_F ink = item.done ? Alpha(Rgba(0x07C160, 0.98f), 0.88f) : Alpha(p.sub, 0.95f);
+            D2D1_RECT_F line = D2D1::RectF(card.left + 34, ly + lh + 2.f, card.right - 12, std::min(card.bottom - 8, ly + lh + progressH));
+            c.Text(item.progress, line, 11.5f, ink, DWRITE_FONT_WEIGHT_NORMAL, 0, true);
+        }
         wchar_t sel[32];
         swprintf_s(sel, L"sel:%zu", index);
         hits.push_back({text, sel});
-        ly += lh + 10.f;
+        ly += lh + progressH + 10.f;
     }
 }
 
@@ -775,7 +801,15 @@ void PaintSplitList(Canvas& c, const WidgetContent& content, const Pal& p, float
         wchar_t check[32];
         swprintf_s(check, L"check:%zu", i);
         hits.push_back({D2D1::RectF(row.left + 4, row.top, row.left + 30, row.bottom), check});
-        PaintTodoText(c, item.text, D2D1::RectF(row.left + 32, row.top, row.right - 8, row.bottom), 13.f, item.done, false);
+        // The result rides under the title, so a finished todo still says what it produced.
+        const bool hasProgress = !item.progress.empty();
+        const float textTop = hasProgress ? row.top + 1.f : row.top;
+        const float textBottom = hasProgress ? row.bottom - 13.f : row.bottom;
+        PaintTodoText(c, item.text, D2D1::RectF(row.left + 32, textTop, row.right - 8, textBottom), 13.f, item.done, false);
+        if (hasProgress) {
+            const D2D1_COLOR_F ink = item.done ? Alpha(Rgba(0x07C160, 0.98f), 0.85f) : p.sub;
+            c.Text(item.progress, D2D1::RectF(row.left + 32, row.bottom - 14.f, row.right - 8, row.bottom), 10.5f, ink);
+        }
         wchar_t id[32];
         swprintf_s(id, L"todo:%zu", i);
         hits.push_back({D2D1::RectF(row.left + 30, row.top, row.right, row.bottom), id});

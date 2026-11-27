@@ -1015,6 +1015,7 @@ void DesktopWidgets::Load()
                             continue;
                         json::JsonObject io = iv.GetObject();
                         Reminder item{std::wstring(io.GetNamedString(L"text", L"")), io.GetNamedBoolean(L"done", false),
+                                      std::wstring(io.GetNamedString(L"progress", L"")),
                                       int(io.GetNamedNumber(L"year", 0)), int(io.GetNamedNumber(L"month", 0)),
                                       int(io.GetNamedNumber(L"day", 0))};
                         item.pri = std::clamp(int(io.GetNamedNumber(L"pri", 0)), 0, 3);
@@ -1280,6 +1281,7 @@ void DesktopWidgets::Save() const
                 json::JsonObject io;
                 io.SetNamedValue(L"text", json::JsonValue::CreateStringValue(r.text));
                 io.SetNamedValue(L"done", json::JsonValue::CreateBooleanValue(r.done));
+                io.SetNamedValue(L"progress", json::JsonValue::CreateStringValue(r.progress));
                 if (r.year) {
                     io.SetNamedValue(L"year", json::JsonValue::CreateNumberValue(r.year));
                     io.SetNamedValue(L"month", json::JsonValue::CreateNumberValue(r.month));
@@ -1380,6 +1382,7 @@ void DesktopWidgets::PublishTodos() const
             json::JsonObject io;
             io.SetNamedValue(L"text", json::JsonValue::CreateStringValue(r.text));
             io.SetNamedValue(L"done", json::JsonValue::CreateBooleanValue(r.done));
+            io.SetNamedValue(L"progress", json::JsonValue::CreateStringValue(r.progress));
             io.SetNamedValue(L"i", json::JsonValue::CreateNumberValue(i));
             io.SetNamedValue(L"y", json::JsonValue::CreateNumberValue(r.year));
             io.SetNamedValue(L"m", json::JsonValue::CreateNumberValue(r.month));

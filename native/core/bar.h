@@ -16,6 +16,8 @@
 // The render thread also draws the glass layer of Yunzhao's popups.
 #pragma once
 
+#include "bar_edge.h"
+#include "bar_reveal.h"
 #include "render/bar_painter.h"
 #include "render/glass_panel.h"
 #include "settings.h"

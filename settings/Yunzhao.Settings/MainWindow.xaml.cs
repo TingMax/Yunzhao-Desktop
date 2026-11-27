@@ -184,7 +184,7 @@ public sealed partial class MainWindow : Window
         LoupeSwitch.IsOn = true;
         BuildRows();
         BarRevealDelay.Flat = true;
-        BarRevealDelay.Configure("出现前停留", 200, 5000, 100, "ms");
+        BarRevealDelay.Configure("触底停留", 200, 5000, 100, "ms");
         BarRevealDelay.UserValueChanged += v =>
         {
             if (_loading) return;

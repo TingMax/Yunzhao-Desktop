@@ -832,6 +832,8 @@
                                         </local:SegmentTrack>
                                 </StackPanel>
                                 <local:SliderTile x:Name="BarRevealDelay" />
+                                <TextBlock Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" Margin="0,-8,0,0"
+                                           Text="隐藏时，鼠标必须落到显示器最下面的那条边上，并停住上面设定的时间，任务栏才会升起。只在靠近底部的位置经过或停留都不会唤起；离开这条边会立即取消计时。" />
                                 <local:SliderTile x:Name="BarHideDelay" />
                             </StackPanel>
                             <StackPanel x:Name="DockLayout">

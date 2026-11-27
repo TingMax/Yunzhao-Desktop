@@ -46,6 +46,7 @@ std::vector<std::wstring> WidgetCities(WidgetKind kind, const std::vector<std::w
 struct Reminder {
     std::wstring text;
     bool done = false;
+    std::wstring progress; // what came of it: filled in when it is ticked, or along the way
     int year = 0;  // a calendar todo's date; 0 means the reminders widget (no date)
     int month = 0;
     int day = 0;
