@@ -2,7 +2,7 @@ import { reactive, readonly } from 'vue'
 
 const commands = {
   initialized: { method: 'startProgress', to: 'in_progress' },
-  in_progress: { method: 'completeNote', to: 'completed' },
+  in_progress: { method: 'completeNote', to: 'completed', asksResult: true },
   completed: { method: 'reopenNote', to: 'in_progress' }
 }
 
@@ -11,7 +11,10 @@ export function useNoteStatusActions({
   api,
   onCommit = () => {},
   onFinish = () => {},
-  onError = () => {}
+  onError = () => {},
+  // A tick that completes a note has to say what came of it. The view answers with the
+  // typed result, or null when the user backed out; the note then stays as it was.
+  askResult = null
 }) {
   const transitions = reactive(new Map()),
     operations = new Map()
@@ -122,9 +125,9 @@ export function useNoteStatusActions({
     await operation.commitTask
     if (current(operation) && operation.commitError) await finish(operation, true)
   }
-  async function perform(operation, method) {
+  async function perform(operation, method, args) {
     try {
-      const updated = await api[method](operation.id)
+      const updated = await api[method](...args)
       if (!current(operation)) return
       if (!updated) throw new Error('状态接口未返回更新后的待办')
       operation.committed = true
@@ -138,6 +141,22 @@ export function useNoteStatusActions({
       settle(operation, { status: 'committed', updated })
     } catch (error) {
       await fail(operation, error)
+    }
+  }
+  /**
+   * The result a completion has to carry, or null when the user backed out of it.
+   * Only views that can ask for one get the extra step; a caller without `askResult`
+   * keeps the old one-click completion instead of silently cancelling it.
+   */
+  async function result(operation) {
+    try {
+      const typed = await askResult({ ...operation.note, from: operation.from, to: operation.to })
+      if (!current(operation)) return null
+      const text = String(typed ?? '')
+      return text.trim() ? text : null
+    } catch (error) {
+      if (current(operation)) await report(operation, error)
+      return null
     }
   }
   function execute(note) {
@@ -162,11 +181,34 @@ export function useNoteStatusActions({
       operation.resolveRequest = resolve
     })
     operations.set(operation.id, operation)
-    phase(operation, 'acknowledging')
-    schedule(operation, 'waiting', 120, () => {
-      if (transitions.get(operation.id)?.phase === 'acknowledging') phase(operation, 'waiting')
-    })
-    void perform(operation, command.method).catch((error) => {
+    // A completion first asks what came of it; the status only moves once the user has
+    // said so. Everything else keeps its immediate feedback.
+    const begin = async () => {
+      if (!current(operation)) return
+      let args
+      // Only a view that can ask for a result gets the extra step; one that cannot
+      // completes straight away, as it always did.
+      if (command.asksResult && typeof askResult === 'function') {
+        const text = await result(operation)
+        if (!current(operation)) return
+        if (text === null) {
+          // Backing out of the result leaves the note exactly as it was, with no error.
+          settle(operation, cancelled(operation))
+          release(operation)
+          return
+        }
+        args = [operation.id, text]
+      } else {
+        args = [operation.id]
+      }
+      if (!current(operation)) return
+      phase(operation, 'acknowledging')
+      schedule(operation, 'waiting', 120, () => {
+        if (transitions.get(operation.id)?.phase === 'acknowledging') phase(operation, 'waiting')
+      })
+      await perform(operation, command.method, args)
+    }
+    void begin().catch((error) => {
       if (!current(operation)) return
       console.error('[NoteStatusActions] 状态操作未能结束:', error)
       settle(operation, cancelled(operation))

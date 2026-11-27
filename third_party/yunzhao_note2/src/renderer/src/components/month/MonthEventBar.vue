@@ -44,9 +44,15 @@ const scheduledTimeLabel = computed(() =>
 const fullTitle = computed(() => {
   const content = String(props.note.content || '').trim()
   if (isImageOnly.value) return '查看图片'
+  const result = String(props.note.progress || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const resultLine = result
+    ? `\n${props.note.status === 'completed' ? '结果' : '进度'}：${result}`
+    : ''
   return isRecurringPreview.value
     ? `循环待办预览 · 预计 ${scheduledTimeLabel.value} 生成 · 只读\n${content}`
-    : content
+    : content + resultLine
 })
 const previewSlice = computed(() => {
   const content = String(props.note.content || '')
@@ -59,6 +65,14 @@ const previewSlice = computed(() => {
   return { text: isImageOnly.value ? '查看图片' : '', start: -1 }
 })
 const previewText = computed(() => previewSlice.value.text)
+// 处理结果跟在标题后面，用“·”分开；完成的和未完成的都要能看到。
+const tooltipProgress = computed(() => {
+  const text = String(props.note?.progress ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return isRecurringPreview.value ? '' : text
+})
+const progressLabel = computed(() => (tooltipProgress.value ? `· ${tooltipProgress.value}` : ''))
 
 const barRef = ref(null)
 const tooltipRef = ref(null)
@@ -369,7 +383,7 @@ watch(
           :key="`${day}:${index}:${colorSegment.start ?? 0}:${colorSegment.end ?? 0}:${colorSegment.color || 'default'}`"
           :style="colorSegment.color ? { color: colorSegment.color } : undefined"
           >{{ colorSegment.text }}</span
-        >
+        ><span v-if="progressLabel" class="month-event-bar__progress">{{ progressLabel }}</span>
       </span>
       <span
         v-if="day === segment.columnSpan && segment.continuesAfter"
@@ -399,19 +413,31 @@ watch(
         :aria-label="isRecurringPreview ? '循环待办详情' : '待办详情，可选择文字设置颜色'"
       >
         <template v-if="isRecurringPreview">{{ fullTitle }}</template>
-        <span
-          v-else
-          ref="tooltipContentRef"
-          class="month-event-tooltip__content"
-          @pointerup="onTooltipPointerUp"
-        >
+        <template v-else>
           <span
-            v-for="colorSegment in tooltipSegments"
-            :key="`${colorSegment.start}:${colorSegment.end}:${colorSegment.color || 'default'}`"
-            :style="colorSegment.color ? { color: colorSegment.color } : undefined"
-            >{{ colorSegment.text }}</span
+            ref="tooltipContentRef"
+            class="month-event-tooltip__content"
+            @pointerup="onTooltipPointerUp"
           >
-        </span>
+            <span
+              v-for="colorSegment in tooltipSegments"
+              :key="`${colorSegment.start}:${colorSegment.end}:${colorSegment.color || 'default'}`"
+              :style="colorSegment.color ? { color: colorSegment.color } : undefined"
+              >{{ colorSegment.text }}</span
+            >
+          </span>
+          <!-- 处理结果单独成块，读正文时也能立刻看到结果或进度。 -->
+          <span
+            v-if="tooltipProgress"
+            class="month-event-tooltip__progress"
+            :class="{ 'is-done': note.status === 'completed' }"
+          >
+            <span class="month-event-tooltip__progress-label">{{
+              note.status === 'completed' ? '结果' : '进度'
+            }}</span>
+            <span>{{ tooltipProgress }}</span>
+          </span>
+        </template>
       </section>
     </Transition>
   </Teleport>
@@ -436,7 +462,7 @@ watch(
   grid-template-columns: repeat(var(--event-span), minmax(0, 1fr));
   column-gap: var(--calendar-gap);
   grid-row: 1;
-  height: max(19rem, calc(var(--fs-month-event) + 6rem));
+  height: var(--calendar-event-bar);
   align-self: start;
   min-width: 0;
   margin: 0;
@@ -448,10 +474,10 @@ watch(
   color: #fff;
   cursor: pointer;
   font: inherit;
-  font-size: var(--fs-month-event);
+  font-size: calc(var(--fs-month-event) * var(--calendar-event-font-scale, 1));
   line-height: 1;
   pointer-events: auto;
-  transform: translateY(calc(var(--event-lane) * max(22rem, calc(var(--fs-month-event) + 9rem))));
+  transform: translateY(calc(var(--event-lane) * var(--calendar-event-pitch)));
   transition: filter 140ms ease;
 }
 .month-event-bar__day {
@@ -511,6 +537,10 @@ watch(
   text-align: left;
   white-space: nowrap;
 }
+.month-event-bar__progress {
+  opacity: 0.78;
+  font-weight: 400;
+}
 .month-event-bar__continuation {
   margin-left: auto;
   opacity: 0.8;
@@ -545,6 +575,30 @@ watch(
 }
 .month-event-tooltip__content {
   display: inline;
+}
+.month-event-tooltip__progress {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-color) 5%, transparent);
+  color: var(--text-color);
+  font-size: calc(var(--fs-secondary) * 0.94);
+  white-space: pre-wrap;
+}
+.month-event-tooltip__progress.is-done {
+  background: color-mix(in srgb, var(--ui-status-completed) 12%, transparent);
+}
+.month-event-tooltip__progress-label {
+  flex: 0 0 auto;
+  color: var(--text-color-secondary);
+  font-size: calc(var(--fs-secondary) * 0.8);
+  font-weight: 600;
+}
+.month-event-tooltip__progress.is-done .month-event-tooltip__progress-label {
+  color: var(--ui-status-completed);
 }
 .month-event-tooltip.is-bottom::after {
   bottom: 100%;

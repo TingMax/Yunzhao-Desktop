@@ -1455,7 +1455,10 @@ async function runMonthViewTests() {
       const activateRect = activate.getBoundingClientRect()
       const quickCreateRect = quickCreate.getBoundingClientRect()
       return {
-        text: badge.textContent.trim(),
+        // 徽标读作“未完成 / 总数”，总数在独立的一段里。
+        text: badge.querySelector('.month-day-cell__count-label')?.textContent?.trim() || '',
+        full: badge.textContent.replace(/\\s+/g, '').trim(),
+        title: badge.title,
         rightGap: cellRect.right - badgeRect.right,
         bottomGap: cellRect.bottom - badgeRect.bottom,
         hasOverflowDots: Boolean(cell.querySelector('.month-day-cell__overflow')),
@@ -1469,6 +1472,9 @@ async function runMonthViewTests() {
       }
     })()`)
     assert.equal(countBadge.text, '10', '便签数量徽标必须只显示总数数字')
+    // 未完成数与总数并排：新建的待办都还没完成，所以两段数字相同。
+    assert.equal(countBadge.full, '10/10', '数量徽标必须在总数左侧显示未完成数')
+    assert.match(countBadge.title, /未完成 10 条/, '数量徽标的说明必须给出未完成数')
     assert.ok(
       countBadge.rightGap > 0 && countBadge.bottomGap > 0,
       '便签数量徽标必须位于日期格右下角'

@@ -123,6 +123,17 @@ function calendar(id) {
 function settingsSnapshot(values, revision = 1) {
   return { source: { token: 'calendar-document', scope: 'month' }, revision, values }
 }
+
+/**
+ * Ticking a note now asks for what came of it before the status moves. These tests
+ * drive the same path a card does: start the action, answer the dialog, let it run.
+ */
+async function complete(mounted, target, text = '已处理') {
+  mounted.state.onCardStatusAction(target)
+  await flush()
+  if (mounted.state.resultDialogVisible.value) mounted.state.finishCompletionResult(text)
+  await flush()
+}
 const location = { name: '北京', latitude: 39.9, longitude: 116.4, timezone: 'Asia/Shanghai' }
 function apiFixture() {
   const stops = []
@@ -150,7 +161,14 @@ function apiFixture() {
     onSettingsChanged: vi.fn((callback) => listen(callback)),
     onWeatherForecastUpdated: vi.fn((callback) => listen(callback))
   }
-  vi.stubGlobal('window', { api })
+  // The workspace listens for window events (the hosted page's new-note request) and
+  // reads document/DOM state in a few places; give the stubbed window those surfaces.
+  vi.stubGlobal('window', {
+    api,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    matchMedia: vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  })
   return { api, listen, stops }
 }
 afterEach(async () => {
@@ -219,18 +237,19 @@ describe('calendar status actions use the real shared owner', () => {
     const notify = vi.fn()
     const mounted = mount(await workspaceComponent(notify), vi.fn())
     await flush()
-    mounted.state.onCardStatusAction(original)
+    await complete(mounted, original)
     await flush()
-    expect(notify).toHaveBeenCalledExactlyOnceWith('error', '便签状态修改未确认：SQL拒绝')
+    expect(notify).toHaveBeenCalledExactlyOnceWith('error', '待办状态修改未确认：SQL拒绝')
     expect(mounted.state.statusTransitions.get(original.id)?.phase).toBe('error')
     mounted.state.onCardStatusAction(original)
     expect(api.completeNote).toHaveBeenCalledOnce()
     await vi.advanceTimersByTimeAsync(320)
     expect(mounted.state.statusTransitions.has(original.id)).toBe(false)
     api.getMonthCalendarData.mockResolvedValue(dataFor([updated]))
-    mounted.state.onCardStatusAction(original)
-    await flush()
+    await complete(mounted, original)
     expect(api.completeNote).toHaveBeenCalledTimes(2)
+    // The typed result travels with the status change.
+    expect(api.completeNote).toHaveBeenLastCalledWith(original.id, '已处理')
     await vi.advanceTimersByTimeAsync(920)
     expect(mounted.state.calendarData.value.notes[0].status).toBe('completed')
     expect(api.getMonthCalendarData).toHaveBeenCalledOnce()
@@ -238,6 +257,24 @@ describe('calendar status actions use the real shared owner', () => {
     await flush()
     expect(api.getMonthCalendarData).toHaveBeenCalledTimes(2)
     expect(mounted.state.statusTransitions.size).toBe(0)
+  })
+
+  it('leaves the note alone when the result dialog is cancelled', async () => {
+    const { api } = apiFixture()
+    const original = note(16)
+    api.getMonthCalendarData.mockResolvedValue(dataFor([original]))
+    const mounted = mount(await workspaceComponent(), vi.fn())
+    await flush()
+    mounted.state.onCardStatusAction(original)
+    await flush()
+    expect(mounted.state.resultDialogVisible.value).toBe(true)
+    expect(api.completeNote).not.toHaveBeenCalled()
+    mounted.state.finishCompletionResult(null)
+    await flush()
+    expect(mounted.state.resultDialogVisible.value).toBe(false)
+    expect(api.completeNote).not.toHaveBeenCalled()
+    expect(mounted.state.statusTransitions.size).toBe(0)
+    expect(mounted.state.calendarData.value.notes[0].status).toBe('in_progress')
   })
 
   it.each(['success', 'failure'])('ignores a late status %s after unmount', async (outcome) => {
@@ -250,7 +287,12 @@ describe('calendar status actions use the real shared owner', () => {
     const mounted = mount(await workspaceComponent(notify), vi.fn())
     await flush()
     const patch = vi.spyOn(mounted.state.calendarModel, 'patchNote')
-    const pending = mounted.state.executeCardStatusAction(original)
+    // Answer the result dialog first: only then does the status request go out, and
+    // this test is about that request landing after the workspace is gone.
+    await complete(mounted, original)
+    const pending = mounted.state.statusTransitions.size
+      ? mounted.state.executeCardStatusAction(original)
+      : null
     mounted.unmount()
     if (outcome === 'success') response.resolve({ ...original, status: 'completed' })
     else response.reject(new Error('迟到失败'))
@@ -274,9 +316,8 @@ describe('calendar status actions use the real shared owner', () => {
     api.completeNote.mockResolvedValueOnce(completed[0]).mockReturnValueOnce(secondResponse.promise)
     const mounted = mount(await workspaceComponent(), vi.fn())
     await flush()
-    mounted.state.onCardStatusAction(first)
-    mounted.state.onCardStatusAction(second)
-    await flush()
+    await complete(mounted, first)
+    await complete(mounted, second)
     api.onNotesChanged.mock.calls[0][0]({ reason: 'first-status' })
     api.onNotesChanged.mock.calls[0][0]({ reason: 'second-status' })
     await vi.advanceTimersByTimeAsync(100)
@@ -321,14 +362,13 @@ describe('calendar status actions use the real shared owner', () => {
     vi.spyOn(mounted.state.calendarModel, 'patchNote').mockImplementationOnce(() => {
       throw new Error('视图不可用')
     })
-    mounted.state.onCardStatusAction(original)
-    await flush()
+    await complete(mounted, original)
     await vi.advanceTimersByTimeAsync(1040)
     await flush()
     expect(api.completeNote).toHaveBeenCalledOnce()
     expect(notify).toHaveBeenCalledExactlyOnceWith(
       'warning',
-      '便签状态已保存，但显示更新失败，请稍后核对。'
+      '待办状态已保存，但显示更新失败，请稍后核对。'
     )
     expect(api.getMonthCalendarData).toHaveBeenCalledTimes(2)
     expect(mounted.state.calendarData.value.notes[0].status).toBe('completed')

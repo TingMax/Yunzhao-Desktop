@@ -129,6 +129,7 @@ export function createNote(
     content = '',
     contentColorRanges = [],
     remark = '',
+    progress = '',
     effectiveAt = null,
     status: requestedStatus,
     finishedAt: requestedFinishedAt,
@@ -163,15 +164,16 @@ export function createNote(
   const result = getDb()
     .prepare(
       `INSERT INTO notes (
-         note_type, content, content_color_ranges, remark, status, is_pinned, notify_enabled, reminder_channels,
+         note_type, content, content_color_ranges, remark, progress, status, is_pinned, notify_enabled, reminder_channels,
          effective_at, duration_days, duration_kind, finished_at, sort_order, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       noteType,
       normalizedContent,
       JSON.stringify(normalizedColorRanges),
       String(remark ?? ''),
+      String(progress ?? ''),
       status,
       isPinned ? 1 : 0,
       pendingNotification,
@@ -249,17 +251,19 @@ export function updateNote(id, fields = {}) {
       ? normalizeNoteTextColorRanges(old.content_color_ranges, content)
       : reconcileNoteTextColorRanges(old.content_color_ranges, old.content, content)
   const remark = fields.remark === undefined ? old.remark : String(fields.remark ?? '')
+  const progress = fields.progress === undefined ? old.progress : String(fields.progress ?? '')
   const duration = resolveNoteDurationUpdate(old, fields)
   getDb()
     .prepare(
       `UPDATE notes SET
-         content = ?, content_color_ranges = ?, remark = ?, is_pinned = ?, duration_days = ?, duration_kind = ?, sort_order = ?, updated_at = ?
+         content = ?, content_color_ranges = ?, remark = ?, progress = ?, is_pinned = ?, duration_days = ?, duration_kind = ?, sort_order = ?, updated_at = ?
        WHERE id = ?`
     )
     .run(
       content,
       JSON.stringify(contentColorRanges),
       remark,
+      progress,
       fields.is_pinned ?? old.is_pinned,
       duration.durationDays,
       duration.durationKind,
@@ -304,6 +308,7 @@ export function getNoteById(id) {
           content: note.content,
           contentColorRanges: note.content_color_ranges,
           remark: note.remark,
+          progress: note.progress,
           status: note.status,
           effectiveAt: note.effective_at,
           durationDays: note.duration_days,
@@ -400,10 +405,12 @@ export function countActiveNotes() {
 // 状态流转
 // ============================================================
 
-function transitionNote(id, targetStatus, { setEffectiveAtToNow = false } = {}) {
+function transitionNote(id, targetStatus, { setEffectiveAtToNow = false, progress } = {}) {
   const db = getDb()
   const current = db
-    .prepare('SELECT status, effective_at, finished_at FROM notes WHERE id = ? AND is_deleted = 0')
+    .prepare(
+      'SELECT status, effective_at, finished_at, progress FROM notes WHERE id = ? AND is_deleted = 0'
+    )
     .get(id)
   if (!current) return null
 
@@ -421,14 +428,25 @@ function transitionNote(id, targetStatus, { setEffectiveAtToNow = false } = {}) 
     requestedStatus: targetStatus,
     currentTime: ts
   })
+  // The result of the work rides along with the status change: a tick and the sentence
+  // explaining it land in the same write, so a completed todo can never lose its outcome.
+  // Reopening keeps the old result until it is edited again.
   const result = db
     .prepare(
       `UPDATE notes
        SET status = ?, effective_at = ?, notify_enabled = 0, reminder_channels = 0,
-           finished_at = ?, updated_at = ?
+           finished_at = ?, progress = ?, updated_at = ?
        WHERE id = ? AND status = ? AND is_deleted = 0`
     )
-    .run(schedule.status, schedule.effectiveAt, schedule.finishedAt, ts, id, current.status)
+    .run(
+      schedule.status,
+      schedule.effectiveAt,
+      schedule.finishedAt,
+      progress === undefined ? String(current.progress ?? '') : String(progress ?? ''),
+      ts,
+      id,
+      current.status
+    )
 
   return result.changes === 1 ? getNoteById(id) : null
 }
@@ -438,9 +456,9 @@ export function startProgress(id) {
   return transitionNote(id, 'in_progress', { setEffectiveAtToNow: true })
 }
 
-/** in_progress → completed。 */
-export function completeNote(id) {
-  return transitionNote(id, 'completed')
+/** in_progress → completed；progress 是这次完成的结果/进度，与状态同一次写入。 */
+export function completeNote(id, progress) {
+  return transitionNote(id, 'completed', { progress })
 }
 
 /** completed → in_progress：恢复原任务，保留原生效时间与持续区间。 */
@@ -501,6 +519,7 @@ export function activateNotes() {
  * @property {string} content
  * @property {Array<{start:number,end:number,text:string,color:string}>} content_color_ranges
  * @property {string} remark
+ * @property {string} progress
  * @property {'initialized'|'in_progress'|'completed'} status
  * @property {number} is_pinned
  * @property {number} is_deleted
@@ -599,6 +618,7 @@ export function toNoteListItems(notes) {
         content: note.content,
         content_color_ranges: normalizeNoteTextColorRanges(note.content_color_ranges, note.content),
         remark: note.remark,
+        progress: note.progress ?? '',
         status: note.status,
         is_pinned: note.is_pinned,
         is_deleted: note.is_deleted,

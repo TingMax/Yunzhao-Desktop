@@ -35,7 +35,11 @@ export async function verifyCalendarCountPreview(window, waitUntil) {
     const badge = document.querySelector('${badgeSelector}')
     if (!badge) return null
     const style = getComputedStyle(badge)
-    return { tag: badge.tagName, text: badge.textContent.trim(), overflow: badge.classList.contains('is-overflow'),
+    // 徽标读作“未完成 / 总数”；总数取独立的那一段，避免把两个数字当成一个。
+    const total = badge.querySelector('.month-day-cell__count-label')?.textContent?.trim() || ''
+    const open = badge.querySelector('.month-day-cell__count-open')?.textContent?.trim() || ''
+    return { tag: badge.tagName, text: total, open, full: badge.textContent.replace(/\\s+/g, '').trim(),
+      overflow: badge.classList.contains('is-overflow'),
       title: badge.title, color: style.color, background: style.backgroundColor }
   })()`)
   if (isWeek) {
@@ -72,11 +76,18 @@ export async function verifyCalendarCountPreview(window, waitUntil) {
   assert.equal(overflow.background, 'rgb(10, 132, 255)', '溢出数量必须使用实心强调蓝底')
   const alignment = await window.webContents.executeJavaScript(`(() => {
     const badge = document.querySelector('${badgeSelector}')
-    const label = badge.querySelector('.month-day-cell__count-label').getBoundingClientRect()
+    // 徽标里现在并排显示“未完成 / 总数”，居中要对整组数字判断，而不是只看最后一段。
+    const parts = [...badge.children].map((node) => node.getBoundingClientRect())
+    const group = {
+      left: Math.min(...parts.map((rect) => rect.left)),
+      right: Math.max(...parts.map((rect) => rect.right)),
+      top: Math.min(...parts.map((rect) => rect.top)),
+      bottom: Math.max(...parts.map((rect) => rect.bottom))
+    }
     const rect = badge.getBoundingClientRect()
     const plus = badge.parentElement.querySelector('.month-day-cell__quick-create').getBoundingClientRect()
-    return { x: Math.abs(label.left + label.width / 2 - rect.left - rect.width / 2),
-      y: Math.abs(label.top + label.height / 2 - rect.top - rect.height / 2),
+    return { x: Math.abs((group.left + group.right) / 2 - (rect.left + rect.right) / 2),
+      y: Math.abs((group.top + group.bottom) / 2 - (rect.top + rect.bottom) / 2),
       footer: Math.abs(rect.top + rect.height / 2 - plus.top - plus.height / 2) }
   })()`)
   assert.ok(alignment.x < 0.75 && alignment.y < 0.75, '数量文字未在按钮内水平垂直居中')

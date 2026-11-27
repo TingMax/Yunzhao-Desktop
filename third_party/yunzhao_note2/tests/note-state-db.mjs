@@ -101,6 +101,19 @@ app.once('ready', async () => {
       assert.equal(quickEdited.finished_at, edited.finished_at)
       assert.equal(quickEdited.reminder_channels, edited.reminder_channels)
       assert.equal(quickEdited.remark, '快捷备注')
+      assert.equal(quickEdited.progress, '', 'an untouched result stays empty')
+
+      // 处理结果/进度可以随时单独写，不必先完成；正文与备注的保存不会把它清掉。
+      const withResult = updateNote(edited.id, { progress: '已确认方案，等供应商报价' })
+      assert.equal(withResult.progress, '已确认方案，等供应商报价')
+      const afterTextEdit = updateNote(edited.id, { content: '再改一次正文' })
+      assert.equal(
+        afterTextEdit.progress,
+        '已确认方案，等供应商报价',
+        'a text edit keeps the result'
+      )
+      const clearedResult = updateNote(edited.id, { progress: '' })
+      assert.equal(clearedResult.progress, '', 'an empty result can be written on purpose')
     }
 
     const oldSingle = createNote({ content: '仅当天不会自动完成', effectiveAt: precisePast })
@@ -354,8 +367,9 @@ app.once('ready', async () => {
     assert.equal(early.status, 'in_progress')
     assert.ok(early.effective_at >= now)
     assert.equal(early.reminder_channels, 0)
-    const complete = completeNote(early.id)
+    const complete = completeNote(early.id, '已交付并等对方确认')
     assert.equal(complete.status, 'completed')
+    assert.equal(complete.progress, '已交付并等对方确认', 'the result lands with the completion')
     assert.ok(complete.finished_at >= complete.effective_at)
 
     const reminderNote = createNote({ content: '改期取消旧轮次', effectiveAt: past })

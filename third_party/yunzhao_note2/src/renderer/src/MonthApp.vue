@@ -166,9 +166,13 @@ const pullData = async () => {
   } catch (error) {
     pullFailed.value = true
     console.warn('[MonthApp] 刷新数据失败:', error)
-    setTimeout(() => { pullFailed.value = false }, 2400)
+    setTimeout(() => {
+      pullFailed.value = false
+    }, 2400)
   } finally {
-    setTimeout(() => { pullingData.value = false }, 1200)
+    setTimeout(() => {
+      pullingData.value = false
+    }, 1200)
   }
 }
 const reportQueue = useModalRequest()
@@ -282,9 +286,17 @@ function releaseSettingsBlur() {
   <div v-if="daySurface" class="month-root app-bg day-surface">
     <MonthWorkspace day-surface :day-key="dayKey" @ready="onCalendarWorkspaceReady" />
   </div>
-  <div v-else class="month-root app-bg" :class="{ 'is-week-view': isWeekView, 'yunzhao-shell': yunzhaoShell, 'is-peek': peekEdge }">
+  <div
+    v-else
+    class="month-root app-bg"
+    :class="{ 'is-week-view': isWeekView, 'yunzhao-shell': yunzhaoShell, 'is-peek': peekEdge }"
+  >
     <Transition name="month-wallpaper" v-bind="wallpaper.transitionHooks()">
-      <div v-if="wallpaperVisible && !yunzhaoShell" :key="wallpaperRenderKey" class="month-wallpaper">
+      <div
+        v-if="wallpaperVisible && !yunzhaoShell"
+        :key="wallpaperRenderKey"
+        class="month-wallpaper"
+      >
         <div
           class="month-wallpaper-image"
           :style="{
@@ -307,7 +319,11 @@ function releaseSettingsBlur() {
     >
       <span />
     </button>
-    <ResizeHandles v-show="!peekEdge" :locked="yunzhaoShell ? yunzhaoLocked : locked" :mode="presentationMode.displayMode.value" />
+    <ResizeHandles
+      v-show="!peekEdge"
+      :locked="yunzhaoShell ? yunzhaoLocked : locked"
+      :mode="presentationMode.displayMode.value"
+    />
     <WindowPresentation
       v-show="!peekEdge"
       :mode="presentationMode.mode.value"
@@ -353,7 +369,13 @@ function releaseSettingsBlur() {
             <button
               class="titlebar-btn titlebar-btn-refresh month-titlebar-btn"
               :class="{ 'is-pulling': pullingData, 'is-failed': pullFailed }"
-              :title="pullFailed ? '刷新失败，请稍后重试' : pullingData ? '正在从服务器刷新数据' : '从服务器刷新数据'"
+              :title="
+                pullFailed
+                  ? '刷新失败，请稍后重试'
+                  : pullingData
+                    ? '正在从服务器刷新数据'
+                    : '从服务器刷新数据'
+              "
               :disabled="pullingData"
               @click="pullData"
             >
@@ -705,12 +727,14 @@ html[data-yunzhao-dock] .month-root.yunzhao-shell .month-scene {
 }
 .month-root.yunzhao-shell .month-week__events {
   top: 30rem;
-  bottom: 16rem;
+  /* 底部留白由容量计算按真实数量徽标量出（--calendar-event-footer），这里不再写死。 */
+}
+/* 宿主页把字体收小一档，横条和行距按同一比例缩放，容量计算才与画出来的一致。 */
+.month-root.yunzhao-shell .month-grid {
+  --calendar-event-font-scale: 0.85;
 }
 .month-root.yunzhao-shell .month-event-bar {
-  height: 16rem;
-  font-size: calc(var(--fs-month-event) * 0.85);
-  transform: translateY(calc(var(--event-lane) * 17rem));
+  font-size: var(--calendar-event-font);
 }
 .month-root.yunzhao-shell .month-day-cell,
 .month-root.yunzhao-shell .month-week {

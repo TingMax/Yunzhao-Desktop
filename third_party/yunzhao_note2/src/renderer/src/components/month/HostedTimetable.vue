@@ -19,7 +19,9 @@ const form = ref(null)
 const paneH = ref(Number(localStorage.getItem('yunzhao-todo-pane')) || 160)
 
 function mondayOf(iso) {
-  const parts = String(iso || '').split('-').map(Number)
+  const parts = String(iso || '')
+    .split('-')
+    .map(Number)
   const now = new Date()
   const year = parts[0] || now.getFullYear()
   const month = parts[1] || now.getMonth() + 1
@@ -47,7 +49,9 @@ const week = computed(() => {
 const monday = computed(() => week.value[0])
 
 const focusDay = computed(() => {
-  const parts = String(focus.value || '').split('-').map(Number)
+  const parts = String(focus.value || '')
+    .split('-')
+    .map(Number)
   const now = new Date()
   return {
     y: parts[0] || now.getFullYear(),
@@ -81,6 +85,13 @@ const dayNotes = computed(() =>
 function noteLabel(note) {
   const text = String(note?.content || note?.remark || '').trim()
   return text || '未命名待办'
+}
+
+/** 处理结果跟在标题后面；完成的和未完成的都显示。 */
+function noteProgress(note) {
+  return String(note?.progress ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 async function loadNotes() {
@@ -134,7 +145,9 @@ watch(
 )
 
 function same(day, iso) {
-  const parts = String(iso || '').split('-').map(Number)
+  const parts = String(iso || '')
+    .split('-')
+    .map(Number)
   return day.y === parts[0] && day.m === parts[1] && day.d === parts[2]
 }
 
@@ -163,10 +176,11 @@ function dayMark(day) {
       if (start <= key && end >= key) total += 1
     }
     if (!total) return null
-    return { done: false, count: total }
+    return { done: false, count: total, total }
   }
-  if (!open) return { done: true }
-  return { done: false, count: open }
+  // 全部完成才打勾；否则给出未完成数和总数，避免把“已完成”误读成还有事要做。
+  if (!open) return { done: true, count: 0, total }
+  return { done: false, count: open, total }
 }
 
 function courseAt(wd, period) {
@@ -183,7 +197,9 @@ function courseAt(wd, period) {
     if (change.off || !change.name) return null
     return { name: change.name, teacher: change.teacher || '', kind: 'week' }
   }
-  const lesson = table.value.lessons.find((row) => Number(row.wd) === wd && Number(row.period) === period)
+  const lesson = table.value.lessons.find(
+    (row) => Number(row.wd) === wd && Number(row.period) === period
+  )
   if (!lesson?.name) return null
   return { name: lesson.name, teacher: lesson.teacher || '', kind: 'fixed' }
 }
@@ -374,7 +390,11 @@ function startSplit(event) {
 function openClock(row) {
   if (!editing.value) return
   const period = periodAt(row)
-  clock.value = { row, s: period.s >= 0 ? period.s : 8 * 60, e: period.e >= 0 ? period.e : 8 * 60 + 45 }
+  clock.value = {
+    row,
+    s: period.s >= 0 ? period.s : 8 * 60,
+    e: period.e >= 0 ? period.e : 8 * 60 + 45
+  }
   form.value = null
 }
 
@@ -387,7 +407,12 @@ function stepClock(field, delta) {
 
 function saveClock() {
   if (!clock.value) return
-  window.api.yunzhaoCommand?.({ cmd: 'period', row: clock.value.row, s: clock.value.s, e: clock.value.e })
+  window.api.yunzhaoCommand?.({
+    cmd: 'period',
+    row: clock.value.row,
+    s: clock.value.s,
+    e: clock.value.e
+  })
   clock.value = null
 }
 </script>
@@ -411,15 +436,31 @@ function saveClock() {
         <span>{{ names[day.wd] }}</span>
         <strong>{{ day.m }}/{{ day.d }}</strong>
         <span v-if="dayMark(day)?.done" class="mark is-done" aria-label="待办已全部完成">✓</span>
-        <span v-else-if="dayMark(day)" class="mark" :aria-label="`${dayMark(day).count} 条待办`">{{ dayMark(day).count }}</span>
+        <span
+          v-else-if="dayMark(day)"
+          class="mark"
+          :aria-label="`${dayMark(day).count} 条未完成待办`"
+          ><b>{{ dayMark(day).count }}</b
+          ><small v-if="dayMark(day).total > dayMark(day).count">{{
+            dayMark(day).total
+          }}</small></span
+        >
       </button>
 
       <div class="ampm am">上<br />午</div>
       <div class="ampm pm">下<br />午</div>
 
       <template v-for="row in 8" :key="row">
-        <div class="num" :class="{ split: row === 5 }" :style="{ gridColumn: 2, gridRow: row + 1 }">{{ row <= 5 ? row : row - 5 }}</div>
-        <button type="button" class="time" :class="{ split: row === 5 }" :style="{ gridColumn: 3, gridRow: row + 1 }" @click="openClock(row - 1)">
+        <div class="num" :class="{ split: row === 5 }" :style="{ gridColumn: 2, gridRow: row + 1 }">
+          {{ row <= 5 ? row : row - 5 }}
+        </div>
+        <button
+          type="button"
+          class="time"
+          :class="{ split: row === 5 }"
+          :style="{ gridColumn: 3, gridRow: row + 1 }"
+          @click="openClock(row - 1)"
+        >
           <template v-if="clock && clock.row === row - 1">
             <span class="stepper" @click.stop>
               <button type="button" @click="stepClock('s', -5)">−</button>
@@ -450,7 +491,9 @@ function saveClock() {
         >
           <template v-if="courseAt(day.wd, row - 1)">
             <b>{{ courseAt(day.wd, row - 1).name }}</b>
-            <small v-if="courseAt(day.wd, row - 1).teacher">{{ courseAt(day.wd, row - 1).teacher }}</small>
+            <small v-if="courseAt(day.wd, row - 1).teacher">{{
+              courseAt(day.wd, row - 1).teacher
+            }}</small>
           </template>
         </button>
       </template>
@@ -470,7 +513,15 @@ function saveClock() {
           :transition-state="transitionOf(note)"
           @activate="askStatus(note)"
         />
-        <span>{{ noteLabel(note) }}</span>
+        <span class="todo-text">
+          <span class="todo-title">{{ noteLabel(note) }}</span>
+          <span
+            v-if="noteProgress(note)"
+            class="todo-progress"
+            :class="{ 'is-done': note.status === 'completed' }"
+            >{{ noteProgress(note) }}</span
+          >
+        </span>
       </div>
       <p v-if="!dayNotes.length" class="todo-empty">这一天没有待办</p>
       <button type="button" class="todo-add" @click="askCreate">新建待办</button>
@@ -508,7 +559,9 @@ function saveClock() {
 }
 .sheet {
   display: grid;
-  grid-template-columns: clamp(12px, 2cqw, 18px) clamp(14px, 2.2cqw, 20px) clamp(40px, 9cqw, 92px) repeat(7, minmax(0, 1fr));
+  grid-template-columns:
+    clamp(12px, 2cqw, 18px) clamp(14px, 2.2cqw, 20px) clamp(40px, 9cqw, 92px)
+    repeat(7, minmax(0, 1fr));
   grid-template-rows: clamp(40px, 9cqh, 64px) repeat(8, minmax(0, 1fr));
   flex: 1;
   min-height: 0;
@@ -751,7 +804,8 @@ function saveClock() {
 .todo :deep(.sr-control) {
   margin: 0;
 }
-.todo span {
+.todo-title,
+.todo-progress {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -759,9 +813,32 @@ function saveClock() {
 .todo:hover {
   border-color: var(--ui-border-control);
 }
-.todo.is-done span {
+.todo.is-done .todo-title {
   color: var(--text-color-secondary);
   text-decoration: line-through;
+}
+.todo-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+.todo-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-progress {
+  overflow: hidden;
+  color: var(--text-color-secondary);
+  font-size: calc(1em * 0.86);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-progress.is-done {
+  color: color-mix(in srgb, var(--ui-status-completed) 78%, var(--text-color-secondary));
 }
 @keyframes tt-status-sweep-motion {
   0% {
@@ -889,6 +966,8 @@ function saveClock() {
   top: 1rem;
   right: 1rem;
   display: inline-grid;
+  grid-auto-flow: column;
+  align-items: center;
   min-width: calc(20rem * var(--timetable-badge-scale, 0.7));
   height: calc(20rem * var(--timetable-badge-scale, 0.7));
   place-items: center;
@@ -906,6 +985,19 @@ function saveClock() {
 .day.picked > .mark,
 .day.today > .mark {
   color: var(--ui-on-primary);
+}
+/* 未完成数在前、总数在后，与月历格子底部的小标记同一套读法。 */
+.day > .mark:not(.is-done) {
+  gap: calc(3rem * var(--timetable-badge-scale, 0.7));
+}
+.day > .mark:not(.is-done) b {
+  font: inherit;
+}
+.day > .mark:not(.is-done) small {
+  font: inherit;
+  font-size: 0.78em;
+  font-weight: 600;
+  opacity: 0.7;
 }
 .day > .mark.is-done {
   width: calc(20rem * var(--timetable-badge-scale, 0.7));

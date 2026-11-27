@@ -2,11 +2,15 @@
 import { computed, useId } from 'vue'
 
 const props = defineProps({
-  modelValue: { type: String, default: '' }
+  modelValue: { type: String, default: '' },
+  label: { type: String, default: '备注' },
+  optional: { type: Boolean, default: true },
+  placeholder: { type: String, default: '添加补充说明…' },
+  rows: { type: Number, default: 2 }
 })
 const emit = defineEmits(['update:modelValue'])
-const remarkId = useId()
-const remark = computed({
+const fieldId = useId()
+const text = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
 })
@@ -14,16 +18,17 @@ const remark = computed({
 
 <template>
   <div class="note-remark-field">
-    <label :for="remarkId">
-      <span>备注</span><span class="note-remark-field__optional">（可选）</span>
+    <label :for="fieldId">
+      <span>{{ label }}</span
+      ><span v-if="optional" class="note-remark-field__optional">（可选）</span>
     </label>
     <textarea
-      :id="remarkId"
-      v-model="remark"
+      :id="fieldId"
+      v-model="text"
       class="note-remark-field__input scroll-y"
-      rows="2"
-      aria-label="备注（可选）"
-      placeholder="添加补充说明…"
+      :rows="rows"
+      :aria-label="optional ? `${label}（可选）` : label"
+      :placeholder="placeholder"
     />
   </div>
 </template>

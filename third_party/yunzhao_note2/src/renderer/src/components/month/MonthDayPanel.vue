@@ -20,7 +20,14 @@ const props = defineProps({
   hosted: { type: Boolean, default: false },
   windowed: { type: Boolean, default: false }
 })
-const emit = defineEmits(['close', 'create', 'edit', 'resize-start', 'status-action'])
+const emit = defineEmits([
+  'close',
+  'create',
+  'edit',
+  'edit-progress',
+  'resize-start',
+  'status-action'
+])
 const { weatherEnabled, almanacEnabled, forecast } = useDateContextSettings()
 const listRef = ref(null)
 const dayDirection = ref('forward')
@@ -51,6 +58,13 @@ const title = computed(() => {
     new Date(year, month - 1, day).getDay()
   ]
   return `${month}月${day}日 · 周${weekday}`
+})
+// 总数与未完成数一起给出：只看总数时，一条已完成会让人以为还有事没做。
+const noteCountsLabel = computed(() => {
+  const total = props.notes.length
+  if (!total) return '0 条待办'
+  const open = props.notes.filter((note) => note.status !== 'completed').length
+  return open ? `共 ${total} 条 · 未完成 ${open}` : `共 ${total} 条 · 全部完成`
 })
 watch(
   [() => props.dateKey, noteSignature],
@@ -95,7 +109,7 @@ onBeforeUnmount(() => {
         <Transition name="month-day-identity">
           <div :key="dateKey" class="month-day-panel__identity">
             <strong>{{ title }}</strong>
-            <span>{{ notes.length }} 条待办</span>
+            <span>{{ noteCountsLabel }}</span>
           </div>
         </Transition>
       </div>
@@ -141,6 +155,7 @@ onBeforeUnmount(() => {
         :status-transition="statusTransitions.get(note.id) || null"
         external-edit
         @edit="emit('edit', $event)"
+        @edit-progress="emit('edit-progress', $event)"
         @status-action="emit('status-action', $event)"
       />
       <Transition name="month-day-empty">

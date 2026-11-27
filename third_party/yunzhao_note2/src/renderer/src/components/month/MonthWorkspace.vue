@@ -13,6 +13,7 @@ import HostedTimetable from './HostedTimetable.vue'
 import MonthDayPanel from './MonthDayPanel.vue'
 import MonthNoteCreator from './MonthNoteCreator.vue'
 import NoteEditor from '../note/NoteEditor.vue'
+import NoteResultDialog from '../note/NoteResultDialog.vue'
 import ConfirmDialog from '../ui/ConfirmDialog.vue'
 import { useMessage } from '../../composables/useMessage.js'
 import { useTodayKey } from '../../composables/useTodayKey.js'
@@ -141,6 +142,8 @@ const creatorOverlayRef = ref(null)
 const editorOverlayRef = ref(null)
 const statusActions = useNoteStatusActions({
   api: window.api,
+  // Completing asks for the result first; the tick only lands with that note attached.
+  askResult: askCompletionResult,
   onCommit(updated, _note, { from }) {
     calendarModel.patchNote(updated, { preserveEffectiveAt: from === 'initialized' })
   },
@@ -157,6 +160,9 @@ const statusTransitions = statusActions.transitions
 const executeCardStatusAction = statusActions.execute
 const earlyStartConfirmVisible = ref(false)
 const earlyStartNote = ref(null)
+const resultDialogVisible = ref(false)
+const resultDialogNote = ref(null)
+let resultDialogResolve = null
 const deleteConfirmVisible = ref(false)
 const deleteTargetNote = ref(null)
 const deletingNote = ref(false)
@@ -176,8 +182,13 @@ const selectedNotes = computed(() =>
     : []
 )
 const historicalMoveOpen = ref(false)
+// 处理结果弹窗有两种用法：勾选完成时必填（挡在状态流转前），以及平时主动补写。
+// 这个开关决定这一次是哪种，两个入口共用同一个弹窗。
+const progressDialogRequire = ref(true)
 const modalOpen = computed(() =>
-  Boolean(creatorDate.value || editingNote.value || historicalMoveOpen.value)
+  Boolean(
+    creatorDate.value || editingNote.value || historicalMoveOpen.value || resultDialogVisible.value
+  )
 )
 const selectedWeather = computed(() => weatherByDate.value.get(selectedKey.value) || null)
 const earlyStartMessage = computed(() => {
@@ -425,6 +436,70 @@ function onCardStatusAction(note) {
   void executeCardStatusAction(note)
 }
 
+/**
+ * The typed result for a completion, or null when the user backed out. The status
+ * action waits on this promise, so cancelling leaves the note untouched.
+ */
+function askCompletionResult(note) {
+  if (!note?.id) return Promise.resolve(null)
+  if (resultDialogResolve) {
+    // A second tick while the dialog is open answers the first one instead of
+    // stacking two dialogs on top of each other.
+    resultDialogResolve(null)
+    resultDialogResolve = null
+  }
+  progressDialogRequire.value = true
+  resultDialogNote.value = note
+  resultDialogVisible.value = true
+  return new Promise((resolve) => {
+    resultDialogResolve = resolve
+  })
+}
+
+function finishCompletionResult(value) {
+  const resolve = resultDialogResolve
+  resultDialogResolve = null
+  resultDialogVisible.value = false
+  resultDialogNote.value = null
+  if (resolve) resolve(value)
+}
+
+/**
+ * 主动补写或修改处理结果：不必先完成待办，做完多少就记多少。
+ * 保存走 updateNote，日历横条和卡片会像其他修改一样立刻跟上。
+ */
+async function editNoteProgress(note) {
+  if (!note?.id || note.preview_kind === 'recurrence') return
+  if (resultDialogResolve) {
+    resultDialogResolve(null)
+    resultDialogResolve = null
+  }
+  progressDialogRequire.value = false
+  resultDialogNote.value = note
+  resultDialogVisible.value = true
+  const typed = await new Promise((resolve) => {
+    resultDialogResolve = resolve
+  })
+  if (typed === null || typed === undefined) return
+  const text = String(typed).trim()
+  if (text === String(note.progress ?? '').trim()) return
+  try {
+    const updated = await window.api.updateNote(
+      note.id,
+      { progress: text },
+      undefined,
+      undefined,
+      String(note.progress ?? '')
+    )
+    if (!updated) throw new Error('待办不存在或已被删除')
+    calendarModel.patchNote(updated)
+    showMessage('success', text ? '处理结果已保存' : '已清空处理结果')
+  } catch (error) {
+    console.error('[MonthWorkspace] 保存处理结果失败:', note.id, error)
+    showMessage('error', error.message || '保存处理结果失败，请重试')
+  }
+}
+
 function confirmEarlyStart() {
   const note = earlyStartNote.value
   earlyStartNote.value = null
@@ -441,24 +516,31 @@ function selectContextDate(day) {
 }
 
 function applyShownDay(dateKey) {
-  if (!props.daySurface || typeof dateKey !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return
+  if (!props.daySurface || typeof dateKey !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey))
+    return
   const [year, month] = dateKey.split('-').map(Number)
   selectedKey.value = dateKey
   panelOpen.value = true
-  if (year && month && (year !== viewYear.value || month !== viewMonth.value)) void loadMonth(year, month)
+  if (year && month && (year !== viewYear.value || month !== viewMonth.value))
+    void loadMonth(year, month)
 }
 
 function dayWindowPayload() {
   const key = selectedKey.value
   if (!key) return null
   const [year, month, day] = key.split('-').map(Number)
-  const weekday = ['日', '一', '二', '三', '四', '五', '六'][new Date(year, month - 1, day).getDay()]
+  const weekday = ['日', '一', '二', '三', '四', '五', '六'][
+    new Date(year, month - 1, day).getDay()
+  ]
   return {
     dateKey: key,
     title: `${month}月${day}日 · 周${weekday}`,
     notes: selectedNotes.value.map((note) => ({
       id: note.id,
-      content: String(note.content || '').replace(/<[^>]+>/g, '').trim() || '未命名待办',
+      content:
+        String(note.content || '')
+          .replace(/<[^>]+>/g, '')
+          .trim() || '未命名待办',
       done: note.status === 'completed'
     }))
   }
@@ -588,7 +670,8 @@ function onEditRequest(note) {
 }
 
 function onTimetableFocus(dateKey) {
-  if (typeof dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) selectedKey.value = dateKey
+  if (typeof dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey))
+    selectedKey.value = dateKey
 }
 
 let yunzhaoAsk = 0
@@ -805,7 +888,9 @@ onMounted(async () => {
   let calendarLoadPromise
   if (props.daySurface) {
     const key = props.dayKey || todayKey.value
-    const [year, month] = String(key || '').split('-').map(Number)
+    const [year, month] = String(key || '')
+      .split('-')
+      .map(Number)
     if (key) selectedKey.value = key
     panelOpen.value = true
     calendarLoadPromise = year && month ? loadMonth(year, month) : loadMonth()
@@ -846,6 +931,9 @@ onBeforeUnmount(() => {
   stopYunzhaoCreator?.()
   stopYunzhaoUi?.()
   stopNewNoteShortcut?.()
+  // A dialog still waiting for an answer must release its promise, or the status
+  // action that opened it never settles.
+  finishCompletionResult(null)
   statusActions.dispose()
   calendarModel.dispose()
   calendarPreferences.dispose()
@@ -889,6 +977,7 @@ onBeforeUnmount(() => {
           @close="onDayPanelClose"
           @create="onCreateRequest"
           @edit="onEditRequest"
+          @edit-progress="editNoteProgress"
           @status-action="onCardStatusAction"
           @resize-start="startPanelResize"
         />
@@ -908,59 +997,60 @@ onBeforeUnmount(() => {
           @status-action="onCardStatusAction"
         />
         <template v-else>
-        <MonthCalendarToolbar
-          :view-mode="viewMode"
-          :year="viewYear"
-          :month="viewMonth"
-          :week-start="calendarData.weekStart || ''"
-          :week-end="calendarData.weekEnd || ''"
-          :selected-key="selectedKey || weekAnchorKey"
-          :day-panel-open="panelOpen"
-          :refreshing="refreshing"
-          :busy="transitioning"
-          :forecast="weatherEnabled ? weatherForecast : null"
-          :recurring-preview-enabled="recurringPreviewEnabled"
-          :recurring-preview-saving="recurringPreviewSaving"
-          @previous="goPrevious"
-          @next="goNext"
-          @today="goToday"
-          @jump="jumpTo"
-          @jump-date="jumpToDate"
-          @refresh="refreshCalendar"
-          @update:recurring-preview-enabled="updateRecurringPreviewEnabled"
-          @toggle-day-panel="toggleDayPanel"
-          @historical-move-open-change="historicalMoveOpen = $event"
-          @historical-notes-moved="onHistoricalNotesMoved"
-        />
-        <div ref="calendarSurfaceRef" class="month-workspace__calendar-body scroll-y">
-          <MonthCalendarGrid
+          <MonthCalendarToolbar
             :view-mode="viewMode"
-            :days="calendarData.days"
-            :notes="calendarData.notes"
-            :recurring-previews="calendarData.recurringPreviews || []"
-            :selected-key="selectedKey"
-            :today-key="todayKey"
-            :quick-create-until-completed="quickCreateUntilCompleted"
-            :weather-by-date="weatherByDate"
-            :status-transitions="statusTransitions"
-            @select-date="selectDate"
-            @quick-create-opened="onQuickCreateOpened"
-            @quick-created="onQuickCreated"
-            @context-select-date="selectContextDate"
-            @context-create="openCreator"
-            @context-edit="openEditor"
-            @context-delete="requestDeleteNote"
-            @context-status-action="onCardStatusAction"
-            @preview-open-day-panel="openPreviewDayPanel"
+            :year="viewYear"
+            :month="viewMonth"
+            :week-start="calendarData.weekStart || ''"
+            :week-end="calendarData.weekEnd || ''"
+            :selected-key="selectedKey || weekAnchorKey"
+            :day-panel-open="panelOpen"
+            :refreshing="refreshing"
+            :busy="transitioning"
+            :forecast="weatherEnabled ? weatherForecast : null"
+            :recurring-preview-enabled="recurringPreviewEnabled"
+            :recurring-preview-saving="recurringPreviewSaving"
+            @previous="goPrevious"
+            @next="goNext"
+            @today="goToday"
+            @jump="jumpTo"
+            @jump-date="jumpToDate"
+            @refresh="refreshCalendar"
+            @update:recurring-preview-enabled="updateRecurringPreviewEnabled"
+            @toggle-day-panel="toggleDayPanel"
+            @historical-move-open-change="historicalMoveOpen = $event"
+            @historical-notes-moved="onHistoricalNotesMoved"
           />
-          <div v-if="loading && !calendarData.days.length" class="month-workspace__state">
-            正在加载{{ isWeekView ? '周历' : '月历' }}…
+          <div ref="calendarSurfaceRef" class="month-workspace__calendar-body scroll-y">
+            <MonthCalendarGrid
+              :view-mode="viewMode"
+              :days="calendarData.days"
+              :notes="calendarData.notes"
+              :recurring-previews="calendarData.recurringPreviews || []"
+              :selected-key="selectedKey"
+              :today-key="todayKey"
+              :quick-create-until-completed="quickCreateUntilCompleted"
+              :weather-by-date="weatherByDate"
+              :status-transitions="statusTransitions"
+              @select-date="selectDate"
+              @quick-create-opened="onQuickCreateOpened"
+              @quick-created="onQuickCreated"
+              @context-select-date="selectContextDate"
+              @context-create="openCreator"
+              @context-edit="openEditor"
+              @context-edit-progress="editNoteProgress"
+              @context-delete="requestDeleteNote"
+              @context-status-action="onCardStatusAction"
+              @preview-open-day-panel="openPreviewDayPanel"
+            />
+            <div v-if="loading && !calendarData.days.length" class="month-workspace__state">
+              正在加载{{ isWeekView ? '周历' : '月历' }}…
+            </div>
+            <div v-else-if="loadError" class="month-workspace__state is-error">
+              <span>{{ loadError }}</span
+              ><button type="button" @click="isWeekView ? loadWeek() : loadMonth()">重试</button>
+            </div>
           </div>
-          <div v-else-if="loadError" class="month-workspace__state is-error">
-            <span>{{ loadError }}</span
-            ><button type="button" @click="isWeekView ? loadWeek() : loadMonth()">重试</button>
-          </div>
-        </div>
         </template>
       </section>
     </div>
@@ -1026,6 +1116,14 @@ onBeforeUnmount(() => {
       cancel-text="取消"
       @confirm="confirmEarlyStart"
       @cancel="cancelEarlyStart"
+    />
+    <NoteResultDialog
+      v-if="resultDialogVisible"
+      :visible="resultDialogVisible"
+      :note="resultDialogNote"
+      :completion="progressDialogRequire"
+      @confirm="finishCompletionResult"
+      @cancel="finishCompletionResult(null)"
     />
     <ConfirmDialog
       v-model:visible="deleteConfirmVisible"

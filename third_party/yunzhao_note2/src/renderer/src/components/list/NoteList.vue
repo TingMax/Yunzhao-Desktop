@@ -18,6 +18,7 @@ import draggable from 'vuedraggable'
 import TagSelector from '../ui/TagSelector.vue'
 import FilterTabs from '../ui/FilterTabs.vue'
 import NoteCard from '../note/NoteCard.vue'
+import NoteResultDialog from '../note/NoteResultDialog.vue'
 import ListDisclosure from './ListDisclosure.vue'
 import ConfirmDialog from '../ui/ConfirmDialog.vue'
 import TagManagerDialog from '../ui/TagManagerDialog.vue'
@@ -660,6 +661,8 @@ async function onCustomNormalDragEnd() {
 
 const statusActions = useNoteStatusActions({
   api: window.api,
+  // Completing asks for the result first; the tick only lands with that note attached.
+  askResult: askCompletionResult,
   onCommit(updated, note, { from, to }) {
     // Keep the old group until the ring finishes its early-start transition.
     const resetsEffectiveTime = from === 'initialized' && to === 'in_progress'
@@ -698,6 +701,11 @@ const {
 } = statusActions
 const earlyStartConfirmVisible = ref(false)
 const earlyStartNote = ref(null)
+const resultDialogVisible = ref(false)
+const resultDialogNote = ref(null)
+// 这个弹窗既是“完成时必填结果”，也是平时主动补写结果的入口。
+const progressDialogRequire = ref(true)
+let resultDialogResolve = null
 const earlyStartMessage = computed(() => {
   if (earlyStartNote.value?.duration_kind === 'until_completed') {
     return '该待办设置为持续到完成。提前执行后，生效时间将改为当前时间，并从今天开始连续显示，直到标记完成。是否确认提前执行？'
@@ -724,6 +732,68 @@ function confirmEarlyStart() {
   const note = earlyStartNote.value
   earlyStartNote.value = null
   if (note) void executeCardStatusAction(note)
+}
+
+/**
+ * The typed result for a completion, or null when the user backed out. The status
+ * action waits on this promise, so cancelling leaves the note untouched.
+ */
+function askCompletionResult(note) {
+  if (!note?.id) return Promise.resolve(null)
+  if (resultDialogResolve) {
+    resultDialogResolve(null)
+    resultDialogResolve = null
+  }
+  progressDialogRequire.value = true
+  resultDialogNote.value = note
+  resultDialogVisible.value = true
+  return new Promise((resolve) => {
+    resultDialogResolve = resolve
+  })
+}
+
+function finishCompletionResult(value) {
+  const resolve = resultDialogResolve
+  resultDialogResolve = null
+  resultDialogVisible.value = false
+  resultDialogNote.value = null
+  if (resolve) resolve(value)
+}
+
+/**
+ * 主动补写或修改处理结果：不必先完成待办，做完多少就记多少。
+ * 保存后立即改写这张卡片，列表不用整个重载。
+ */
+async function openProgressEditor(note) {
+  if (!note?.id) return
+  if (resultDialogResolve) {
+    resultDialogResolve(null)
+    resultDialogResolve = null
+  }
+  progressDialogRequire.value = false
+  resultDialogNote.value = note
+  resultDialogVisible.value = true
+  const typed = await new Promise((resolve) => {
+    resultDialogResolve = resolve
+  })
+  if (typed === null || typed === undefined) return
+  const text = String(typed).trim()
+  if (text === String(note.progress ?? '').trim()) return
+  try {
+    const updated = await window.api.updateNote(
+      note.id,
+      { progress: text },
+      undefined,
+      undefined,
+      String(note.progress ?? '')
+    )
+    if (!updated) throw new Error('待办不存在或已被删除')
+    patchVisibleNote(updated, true)
+    showMessage('success', text ? '处理结果已保存' : '已清空处理结果')
+  } catch (error) {
+    console.error('[NoteList] 保存处理结果失败:', note.id, error)
+    showMessage('error', error.message || '保存处理结果失败，请重试')
+  }
 }
 
 function cancelEarlyStart() {
@@ -1268,6 +1338,7 @@ defineExpose({
                 show-date-context
                 :status-transition="statusTransitionFor(note.id)"
                 @edit="emit('edit', $event)"
+                @edit-progress="openProgressEditor"
                 @status-action="onCardStatusAction"
               />
             </template>
@@ -1301,6 +1372,7 @@ defineExpose({
                   show-date-context
                   :status-transition="statusTransitionFor(note.id)"
                   @edit="emit('edit', $event)"
+                  @edit-progress="openProgressEditor"
                   @status-action="onCardStatusAction"
                 />
               </div>
@@ -1447,6 +1519,7 @@ defineExpose({
                       allow-create-tag
                       :status-transition="statusTransitionFor(note.id)"
                       @edit="emit('edit', $event)"
+                      @edit-progress="openProgressEditor"
                       @status-action="onCardStatusAction"
                       @create-tag="openCreateTagManager"
                     />
@@ -1537,6 +1610,7 @@ defineExpose({
                   draggable
                   :status-transition="statusTransitionFor(note.id)"
                   @edit="emit('edit', $event)"
+                  @edit-progress="openProgressEditor"
                   @status-action="onCardStatusAction"
                 />
               </template>
@@ -1571,6 +1645,7 @@ defineExpose({
                   draggable
                   :status-transition="statusTransitionFor(note.id)"
                   @edit="emit('edit', $event)"
+                  @edit-progress="openProgressEditor"
                   @status-action="onCardStatusAction"
                 />
               </template>
@@ -1599,6 +1674,13 @@ defineExpose({
       cancel-text="取消"
       @confirm="confirmEarlyStart"
       @cancel="cancelEarlyStart"
+    />
+    <NoteResultDialog
+      :visible="resultDialogVisible"
+      :note="resultDialogNote"
+      :completion="progressDialogRequire"
+      @confirm="finishCompletionResult"
+      @cancel="finishCompletionResult(null)"
     />
   </div>
 </template>

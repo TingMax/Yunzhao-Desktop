@@ -223,17 +223,30 @@ export function registerBusinessIpcHandlers({
     broadcastNoteChange('restore', restoreNote(id), { id })
   )
 
-  ipcMain.handle('notes:update', (_event, { id, fields, expectedContent, expectedRemark }) => {
-    if (expectedContent !== undefined || expectedRemark !== undefined) {
-      const current = getNoteById(id)
-      if (!current) throw new Error('待办不存在或已被删除')
-      if (expectedContent !== undefined && current.content !== expectedContent)
-        throw new Error('待办正文已被其他操作修改，草稿已保留。请复制草稿或加载最新正文后重试。')
-      if (expectedRemark !== undefined && current.remark !== expectedRemark)
-        throw new Error('待办备注已被其他操作修改，草稿已保留。请复制草稿或加载最新内容后重试。')
+  ipcMain.handle(
+    'notes:update',
+    (_event, { id, fields, expectedContent, expectedRemark, expectedProgress }) => {
+      if (
+        expectedContent !== undefined ||
+        expectedRemark !== undefined ||
+        expectedProgress !== undefined
+      ) {
+        const current = getNoteById(id)
+        if (!current) throw new Error('待办不存在或已被删除')
+        if (expectedContent !== undefined && current.content !== expectedContent)
+          throw new Error('待办正文已被其他操作修改，草稿已保留。请复制草稿或加载最新正文后重试。')
+        if (expectedRemark !== undefined && current.remark !== expectedRemark)
+          throw new Error('待办备注已被其他操作修改，草稿已保留。请复制草稿或加载最新内容后重试。')
+        if (expectedProgress !== undefined && String(current.progress ?? '') !== expectedProgress)
+          throw new Error(
+            '待办处理结果已被其他操作修改，草稿已保留。请复制草稿或加载最新内容后重试。'
+          )
+      }
+      return broadcastNoteChange('update', updateNote(id, enforceNotificationPolicy(fields)), {
+        id
+      })
     }
-    return broadcastNoteChange('update', updateNote(id, enforceNotificationPolicy(fields)), { id })
-  })
+  )
 
   ipcMain.handle('notes:set-text-color', (_event, payload = {}) => {
     const id = Number(payload.id)
@@ -290,8 +303,8 @@ export function registerBusinessIpcHandlers({
   ipcMain.handle('notes:start-progress', (_event, { id }) =>
     broadcastNoteChange('status', startProgress(id), { id, status: 'in_progress' })
   )
-  ipcMain.handle('notes:complete', (_event, { id }) =>
-    broadcastNoteChange('status', completeNote(id), { id, status: 'completed' })
+  ipcMain.handle('notes:complete', (_event, { id, progress } = {}) =>
+    broadcastNoteChange('status', completeNote(id, progress), { id, status: 'completed' })
   )
   ipcMain.handle('notes:reopen', (_event, { id }) =>
     broadcastNoteChange('status', reopenNote(id), { id, status: 'in_progress' })

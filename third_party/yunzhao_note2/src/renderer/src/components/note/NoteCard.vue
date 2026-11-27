@@ -42,7 +42,7 @@ const props = defineProps({
   externalEdit: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['status-action', 'edit', 'create-tag'])
+const emit = defineEmits(['status-action', 'edit', 'edit-progress', 'create-tag'])
 const { showMessage } = useMessage()
 const { enabled: doubleClickQuickEditEnabled } = useQuickNoteEditSetting()
 const { enabled: tagColorEnabled } = useTagColorSetting()
@@ -57,6 +57,9 @@ const STATUS_META = {
 
 const status = computed(() => STATUS_META[props.note.status] || STATUS_META.initialized)
 const isTerminal = computed(() => props.note.status === 'completed')
+// What came of the work. Shown on the card whether the note is finished or still going,
+// so a tick never hides the only sentence that says how it went.
+const hasProgress = computed(() => Boolean(String(props.note.progress ?? '').trim()))
 const canChangeStatus = computed(() =>
   ['initialized', 'in_progress', 'completed'].includes(props.note.status)
 )
@@ -563,6 +566,10 @@ async function onContextMenuAction(action) {
     emit('edit', props.note)
     return
   }
+  if (action === 'progress') {
+    emit('edit-progress', props.note)
+    return
+  }
   if (action === 'pin') {
     if (togglingPinned.value) return
     togglingPinned.value = true
@@ -737,6 +744,14 @@ async function toggleTags() {
         :readonly-max-size="260"
         @overflow-change="imageOverflows = $event"
       />
+      <p
+        v-if="!minimal && hasProgress"
+        class="nl-card-progress-text"
+        :class="{ 'is-done': isTerminal }"
+      >
+        <span class="nl-card-progress-label">{{ isTerminal ? '结果' : '进度' }}</span>
+        <span class="nl-card-progress-body">{{ note.progress }}</span>
+      </p>
       <p v-if="!minimal && String(note.remark || '').trim()" class="nl-card-remark-text">
         {{ note.remark }}
       </p>
@@ -967,6 +982,9 @@ async function toggleTags() {
               @click="onContextMenuAction('edit')"
             >
               修改
+            </button>
+            <button role="menuitem" @click="onContextMenuAction('progress')">
+              {{ hasProgress ? '修改处理结果 / 进度' : '补充处理结果 / 进度' }}
             </button>
             <button
               role="menuitem"
@@ -1468,6 +1486,42 @@ async function toggleTags() {
 .nl-card-attachment svg,
 .nl-card-remark-toggle svg {
   display: block;
+}
+
+.nl-card-progress-text {
+  display: flex;
+  align-items: baseline;
+  gap: 6rem;
+  margin: 5rem 0 0;
+  padding: 4rem 8rem;
+  border-radius: 6rem;
+  background: var(--ui-fill-passive);
+  color: var(--text-color);
+  font-size: var(--note-remark-font-size);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  user-select: text;
+  cursor: text;
+}
+/* 已完成的结果用强调绿区分，未完成时的进度保持中性，靠“进度”二字表达。 */
+.nl-card-progress-text.is-done {
+  background: color-mix(in srgb, var(--ui-status-completed) 12%, transparent);
+}
+.nl-card-progress-label {
+  flex: 0 0 auto;
+  color: var(--text-color-secondary);
+  font-size: calc(var(--note-remark-font-size) * 0.86);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.nl-card-progress-text.is-done .nl-card-progress-label {
+  color: var(--ui-status-completed);
+}
+.nl-card-progress-body {
+  min-width: 0;
+  flex: 1;
 }
 
 .nl-card-remark-text {

@@ -13,13 +13,16 @@ const { showMessage } = useMessage()
 const hintId = useId()
 const contentId = useId()
 const remarkId = useId()
+const progressId = useId()
 
 const editorRef = ref(null)
 const contentTextareaRef = ref(null)
 const originalContent = ref(String(props.note.content || ''))
 const originalRemark = ref(String(props.note.remark || ''))
+const originalProgress = ref(String(props.note.progress || ''))
 const contentDraft = ref(originalContent.value)
 const remarkDraft = ref(originalRemark.value)
+const progressDraft = ref(originalProgress.value)
 const conflict = ref(false)
 const positionStyle = reactive({ left: '12px', top: '12px', visibility: 'hidden' })
 const phase = ref('editing')
@@ -81,6 +84,7 @@ async function commit() {
 
   const content = contentDraft.value.replace(/\r\n?/g, '\n')
   const remark = remarkDraft.value.replace(/\r\n?/g, '\n')
+  const progress = progressDraft.value.replace(/\r\n?/g, '\n')
   if (!content.trim() && Number(props.note.attachment_count) <= 0) {
     phase.value = 'invalid'
     showMessage('warning', '请输入待办内容或保留至少一张图片')
@@ -92,13 +96,23 @@ async function commit() {
     }, 0)
     return false
   }
-  if (content === originalContent.value && remark === originalRemark.value) {
+  if (
+    content === originalContent.value &&
+    remark === originalRemark.value &&
+    progress === originalProgress.value
+  ) {
     return closeEditor()
   }
 
   phase.value = 'saving'
   pendingSave = window.api
-    .updateNote(props.note.id, { content, remark }, originalContent.value, originalRemark.value)
+    .updateNote(
+      props.note.id,
+      { content, remark, progress },
+      originalContent.value,
+      originalRemark.value,
+      originalProgress.value
+    )
     .then(async (updated) => {
       if (!updated) throw new Error('待办不存在或已被删除')
       if (!currentDraft()) return true
@@ -167,9 +181,18 @@ onBeforeUnmount(() => {
 const protectedDraft = useDraftProtection({
   key: 'quick:' + props.note.id,
   // 保留 draft 键，兼容已经落盘的快速编辑正文草稿。
-  fields: { draft: contentDraft, remarkDraft, originalContent, originalRemark },
+  fields: {
+    draft: contentDraft,
+    remarkDraft,
+    progressDraft,
+    originalContent,
+    originalRemark,
+    originalProgress
+  },
   dirty: () =>
-    contentDraft.value !== originalContent.value || remarkDraft.value !== originalRemark.value,
+    contentDraft.value !== originalContent.value ||
+    remarkDraft.value !== originalRemark.value ||
+    progressDraft.value !== originalProgress.value,
   busy: () => phase.value === 'saving'
 })
 function retrySave() {
@@ -186,8 +209,10 @@ async function loadLatest() {
     }
     originalContent.value = current.content
     originalRemark.value = String(current.remark || '')
+    originalProgress.value = String(current.progress || '')
     contentDraft.value = current.content
     remarkDraft.value = originalRemark.value
+    progressDraft.value = originalProgress.value
     conflict.value = false
   } catch (error) {
     showMessage('error', error.message || '加载失败，草稿仍保留')
@@ -195,9 +220,10 @@ async function loadLatest() {
 }
 async function copyDraft() {
   try {
-    const text = remarkDraft.value
-      ? `${contentDraft.value}\n\n备注：\n${remarkDraft.value}`
-      : contentDraft.value
+    const parts = [contentDraft.value]
+    if (remarkDraft.value) parts.push(`备注：\n${remarkDraft.value}`)
+    if (progressDraft.value) parts.push(`处理结果 / 进度：\n${progressDraft.value}`)
+    const text = parts.join('\n\n')
     await window.api.writeClipboardText(text)
     showMessage('success', '草稿已复制')
   } catch {
@@ -239,6 +265,18 @@ async function copyDraft() {
             :aria-describedby="hintId"
             :disabled="phase === 'saving'"
             placeholder="添加备注"
+            spellcheck="true"
+          />
+        </div>
+        <div class="quick-note-editor__divider" aria-hidden="true" />
+        <div class="quick-note-editor__field quick-note-editor__field--remark">
+          <label :for="progressId">处理结果 / 进度</label>
+          <textarea
+            :id="progressId"
+            v-model="progressDraft"
+            :aria-describedby="hintId"
+            :disabled="phase === 'saving'"
+            placeholder="做到了哪一步、结果是什么…"
             spellcheck="true"
           />
         </div>

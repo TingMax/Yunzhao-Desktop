@@ -238,11 +238,13 @@ export async function saveNoteDraft(payload = {}) {
         ? reconcileNoteTextColorRanges(current.content_color_ranges, current.content, content)
         : normalizeNoteTextColorRanges(submittedColorRanges, content)
     const remark = fields.remark === undefined ? current.remark : String(fields.remark ?? '')
+    const progress =
+      fields.progress === undefined ? current.progress : String(fields.progress ?? '')
 
     db.prepare(
       `UPDATE notes SET
             content = ?, content_color_ranges = ?, status = ?, is_pinned = ?, notify_enabled = ?, reminder_channels = ?, effective_at = ?, duration_days = ?, duration_kind = ?,
-            finished_at = ?, remark = ?, updated_at = ?
+            finished_at = ?, remark = ?, progress = ?, updated_at = ?
          WHERE id = ? AND is_deleted = 0`
     ).run(
       content,
@@ -256,6 +258,7 @@ export async function saveNoteDraft(payload = {}) {
       duration.durationKind,
       schedule.finishedAt,
       remark,
+      progress,
       timestamp,
       id
     )

@@ -44,6 +44,7 @@ const emit = defineEmits([
   'context-select-date',
   'context-create',
   'context-edit',
+  'context-edit-progress',
   'context-delete',
   'context-status-action',
   'preview-open-day-panel'
@@ -122,6 +123,14 @@ const segments = computed(() =>
 const noteById = computed(() => new Map(calendarItems.value.map((note) => [String(note.id), note])))
 const noteCounts = computed(() =>
   noteCountsByDate(activeDays.value, calendarItems.value, props.todayKey)
+)
+// 不是“已完成”的都算未完成，跨日的横条在它覆盖的每一天都计数。
+const openNoteCounts = computed(() =>
+  noteCountsByDate(
+    activeDays.value,
+    calendarItems.value.filter((note) => note.status !== 'completed'),
+    props.todayKey
+  )
 )
 const recurringPreviewCounts = computed(() =>
   noteCountsByDate(activeDays.value, props.recurringPreviews, props.todayKey)
@@ -220,11 +229,14 @@ function dayHasHiddenNotes(day) {
 
 function dayCountLabel(day) {
   const total = noteCounts.value.get(day.key) || 0
+  const open = openNoteCounts.value.get(day.key) || 0
+  const done = total - open
   const previewCount = recurringPreviewCounts.value.get(day.key) || 0
   const previewSuffix = previewCount ? `，其中 ${previewCount} 条循环待办预览` : ''
+  const openSuffix = open ? `，未完成 ${open} 条` : done ? '，全部已完成' : ''
   return dayHasHiddenNotes(day)
-    ? `${day.key} 共 ${total} 条待办${previewSuffix}，已显示 ${visibleNoteCounts.value.get(day.key) || 0} 条，点击预览全部`
-    : `${day.key} 共 ${total} 条待办${previewSuffix}，点击查看全部`
+    ? `${day.key} 共 ${total} 条待办${previewSuffix}${openSuffix}，已显示 ${visibleNoteCounts.value.get(day.key) || 0} 条，点击预览全部`
+    : `${day.key} 共 ${total} 条待办${previewSuffix}${openSuffix}，点击查看全部`
 }
 
 function toggleCountPreview(day, event) {
@@ -241,19 +253,71 @@ function toggleCountPreview(day, event) {
 
 function calculateCapacity() {
   return measureRendererLayout('layout.calendar-capacity', () => {
+    const grid = gridRef.value
+    if (!grid) return
+    // Read the event geometry from the same CSS the bars are drawn with. Hard-coded
+    // constants here used to disagree with the hosted stylesheet, so a cell with room
+    // for three bars still showed two and left the space empty.
+    const resolved = (expression) => {
+      const probe = document.createElement('div')
+      probe.style.cssText =
+        'position:absolute;left:0;top:0;width:0;visibility:hidden;pointer-events:none;height:' +
+        expression
+      grid.appendChild(probe)
+      const height = probe.getBoundingClientRect().height
+      probe.remove()
+      return height
+    }
+    const barMax = resolved('var(--calendar-event-bar-max, 0px)')
+    const barMin = resolved('var(--calendar-event-bar-min, 0px)')
+    const gapMin = resolved('var(--calendar-event-gap-min, 0px)')
+    if (!(barMax > 0) || !(barMin > 0) || !(gapMin > 0)) {
+      capacityByWeek.value = Array.from({ length: rowCount.value }, () => 0)
+      return
+    }
+    // The bars stop above the day's count badge, so the blank space they may fill is the
+    // layer's own height. The reserve is measured from a real badge when one is shown, and
+    // from the badge's own size when it is not, so a font or scale change cannot make the
+    // last bar touch the count.
     const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 1
-    const yunzhao = Boolean(document.documentElement.dataset.yunzhaoDock)
-    // 课表所在的日历格子较矮。横条间距和上下留白要与 yunzhao 样式一致，否则第三条待办会被藏起来。
-    const headerHeight = (yunzhao ? 30 : 35) * rem
-    const footerHeight = (yunzhao ? 16 : 18) * rem
-    const base =
-      Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--font-size-base')
-      ) || 20
-    const pitch = (yunzhao ? 17 : Math.max(22, base * 0.72 + 9)) * rem
+    const badgeEl = grid.querySelector('.month-day-cell__count')
+    const badge = badgeEl?.getBoundingClientRect()
+    const cellRect = badgeEl?.closest('.month-day-cell')?.getBoundingClientRect()
+    const reserve =
+      badge && cellRect && badge.height > 0 ? cellRect.bottom - badge.top : (18 + 5) * rem // the badge's height plus its distance from the cell's bottom edge
+    const footer = `${(reserve + gapMin).toFixed(2)}px`
+    // Writing the same value would still dirty style; only a real change goes out, or the
+    // resize observer feeding this function would keep waking itself up.
+    if (grid.style.getPropertyValue('--calendar-event-footer') !== footer)
+      grid.style.setProperty('--calendar-event-footer', footer)
+    // Every week shares the tightest blank space, so bars line up across rows.
+    const heights = weekRefs.value
+      .map(
+        (element) =>
+          element?.querySelector('.month-week__events')?.getBoundingClientRect().height || 0
+      )
+      .filter((height) => height > 0)
+    const available = heights.length ? Math.min(...heights) : 0
+    const laneMin = barMin + gapMin
+    if (available < barMin) {
+      capacityByWeek.value = Array.from({ length: rowCount.value }, () => 0)
+      return
+    }
+    // As many lanes as the height allows at the shortest readable lane, then the extra
+    // space is shared out so the last lane ends where the blank space does. The bar never
+    // grows past its maximum: spare height becomes the gap between lanes instead.
+    const lanes = Math.max(1, Math.floor((available + gapMin) / laneMin))
+    const barHeight = Math.max(barMin, Math.min(barMax, (available - (lanes - 1) * gapMin) / lanes))
+    const pitch = lanes > 1 ? (available - barHeight) / (lanes - 1) : barHeight + gapMin
+    grid.style.setProperty('--calendar-event-bar', `${barHeight.toFixed(2)}px`)
+    grid.style.setProperty('--calendar-event-pitch', `${pitch.toFixed(2)}px`)
     const next = weekRefs.value.map((element) => {
-      const height = element?.getBoundingClientRect().height || 0
-      return Math.max(0, Math.floor((height - headerHeight - footerHeight) / pitch))
+      const layer = element?.querySelector('.month-week__events')
+      const height = layer?.getBoundingClientRect().height || 0
+      if (height < barHeight) return 0
+      // Lane n occupies [n * pitch, n * pitch + barHeight]; the last lane that still ends
+      // above the footer is the number of bars a cell can show.
+      return Math.max(0, Math.floor((height - barHeight) / pitch + 0.001) + 1)
     })
     capacityByWeek.value = Array.from({ length: rowCount.value }, (_, index) => next[index] || 0)
   })
@@ -350,6 +414,13 @@ function previewNoteText(note) {
   const content = String(note?.content || '').trim()
   if (content) return content
   return Number(note?.attachment_count) > 0 ? '查看图片' : '空待办'
+}
+
+// 处理结果单独成行，预览里也不要把标题和结果挤在一句里。
+function previewProgressText(note) {
+  return String(note?.progress ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function isImageOnlyNote(note) {
@@ -514,6 +585,7 @@ function runContextMenuAction(action) {
   }
   if (target.type !== 'note' || !note) return
   if (action === 'status') emit('context-status-action', note)
+  else if (action === 'progress') emit('context-edit-progress', note)
   else if (action === 'edit') emit('context-edit', note)
   else if (action === 'delete') emit('context-delete', note)
 }
@@ -1013,7 +1085,8 @@ const protectedDraft = useDraftProtection({
               class="month-day-cell__count"
               :class="{
                 'is-hidden': activeQuickCreateKey === day.key,
-                'is-overflow': dayHasHiddenNotes(day)
+                'is-overflow': dayHasHiddenNotes(day),
+                'is-all-done': !openNoteCounts.get(day.key)
               }"
               :tabindex="day.key === tabStopKey && activeQuickCreateKey !== day.key ? 0 : -1"
               :disabled="activeQuickCreateKey === day.key"
@@ -1023,6 +1096,12 @@ const protectedDraft = useDraftProtection({
               :aria-expanded="dayPreviewVisible && dayPreviewKey === day.key"
               @click.stop="toggleCountPreview(day, $event)"
             >
+              <!-- 未完成数在左、总数在右，斜线分开：一眼看得出还有几件没做完。
+                   未完成数与总数相同时照常并列，读起来仍是“还剩几件 / 一共几件”。 -->
+              <span class="month-day-cell__count-open" aria-hidden="true">{{
+                openNoteCounts.get(day.key) || 0
+              }}</span>
+              <span class="month-day-cell__count-sep" aria-hidden="true">/</span>
               <span class="month-day-cell__count-label">{{ noteCounts.get(day.key) }}</span>
             </button>
           </div>
@@ -1062,6 +1141,13 @@ const protectedDraft = useDraftProtection({
               <button role="menuitem" type="button" @click="runContextMenuAction('status')">
                 {{ contextStatusLabel(contextMenuNote) }}
               </button>
+              <button role="menuitem" type="button" @click="runContextMenuAction('progress')">
+                {{
+                  previewProgressText(contextMenuNote)
+                    ? '修改处理结果 / 进度'
+                    : '补充处理结果 / 进度'
+                }}
+              </button>
               <button role="menuitem" type="button" @click="runContextMenuAction('edit')">
                 修改待办
               </button>
@@ -1076,7 +1162,12 @@ const protectedDraft = useDraftProtection({
               </button>
             </template>
             <template v-else>
-              <button v-if="!yunzhaoHosted" role="menuitem" type="button" @click="runContextMenuAction('create')">
+              <button
+                v-if="!yunzhaoHosted"
+                role="menuitem"
+                type="button"
+                @click="runContextMenuAction('create')"
+              >
                 新建待办…
               </button>
             </template>
@@ -1144,7 +1235,28 @@ const protectedDraft = useDraftProtection({
                   查看图片
                 </button>
                 <template v-else>{{ previewNoteText(note) }}</template>
+                <small
+                  v-if="previewProgressText(note)"
+                  class="month-day-preview__progress"
+                  :class="{ 'is-done': note.status === 'completed' }"
+                  >{{ note.status === 'completed' ? '结果' : '进度' }}：{{
+                    previewProgressText(note)
+                  }}</small
+                >
               </p>
+              <button
+                v-if="note.preview_kind !== 'recurrence'"
+                type="button"
+                class="month-day-preview__progress-action"
+                :class="{ 'has-progress': Boolean(previewProgressText(note)) }"
+                :title="previewProgressText(note) ? '修改处理结果 / 进度' : '补充处理结果 / 进度'"
+                :aria-label="`${previewProgressText(note) ? '修改' : '补充'}处理结果 / 进度：${previewNoteText(note)}`"
+                @click="emit('context-edit-progress', note)"
+              >
+                <svg viewBox="0 0 18 18" aria-hidden="true">
+                  <path d="M4.5 14.5h9M6 11.5l6.5-6.5 2 2L8 13.5H6v-2z" />
+                </svg>
+              </button>
               <button
                 v-if="note.preview_kind !== 'recurrence' && previewStatusLabel(note)"
                 type="button"
@@ -1188,6 +1300,16 @@ const protectedDraft = useDraftProtection({
 .month-grid {
   --calendar-gap: 7rem;
   --calendar-weekday-height: 27rem;
+  /* 横条高度与相邻两条之间的距离：容量计算和实际绘制必须用同一组值，
+     否则有空间的格子会白留一行。min 是还能读清一行字的高度，max 是正常高度，
+     计算会按格子实际空白在两者之间挑一个，并把剩余高度分给行距。 */
+  --calendar-event-font-scale: 1;
+  --calendar-event-font: calc(var(--fs-month-event) * var(--calendar-event-font-scale));
+  --calendar-event-bar-min: max(11rem, calc(var(--calendar-event-font) * 1.08));
+  --calendar-event-bar-max: max(19rem, calc(var(--calendar-event-font) + 6rem));
+  --calendar-event-bar: var(--calendar-event-bar-max);
+  --calendar-event-gap-min: 2rem;
+  --calendar-event-pitch: calc(var(--calendar-event-bar) + var(--calendar-event-gap-min));
   /* 每排保留顶部日期区 32rem 和底部新建区 28rem；月、周共用同一格子下限。 */
   --calendar-row-min-height: 60rem;
   display: flex;
@@ -1228,7 +1350,8 @@ const protectedDraft = useDraftProtection({
 }
 .month-week__events {
   top: 32rem;
-  bottom: 18rem;
+  /* 底部留出当天数量徽标的高度，横条不会压到数字；这个值由容量计算按真实徽标量出来。 */
+  bottom: var(--calendar-event-footer, 22rem);
   z-index: var(--z-local-raised);
   align-content: start;
   overflow: hidden;
@@ -1339,6 +1462,7 @@ const protectedDraft = useDraftProtection({
   right: 6rem;
   bottom: 5rem;
   display: inline-flex;
+  gap: 4rem;
   min-width: 22rem;
   height: 18rem;
   align-items: center;
@@ -1363,6 +1487,26 @@ const protectedDraft = useDraftProtection({
     opacity 140ms ease,
     transform 220ms var(--ease-standard);
   white-space: nowrap;
+}
+/* 未完成数用强调色，总数保持中性：两段数字靠颜色和一条细斜线分开。 */
+.month-day-cell__count-open {
+  color: var(--ui-accent);
+  font-weight: 650;
+  pointer-events: none;
+}
+.month-day-cell__count-sep {
+  margin: 0 1rem;
+  color: var(--text-color-secondary);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.month-day-cell__count.is-all-done .month-day-cell__count-open {
+  color: var(--ui-status-completed);
+}
+.month-day-cell__count.is-overflow .month-day-cell__count-open,
+.month-day-cell__count.is-overflow .month-day-cell__count-sep {
+  color: inherit;
+  opacity: 0.82;
 }
 .month-day-cell__count:hover {
   background: var(--ui-fill-hover);
@@ -1804,6 +1948,19 @@ const protectedDraft = useDraftProtection({
   font-size: calc(var(--fs-secondary) * 0.82);
   font-weight: 500;
 }
+.month-day-preview__note p small.month-day-preview__progress {
+  margin: 4rem 0 0;
+  padding: 3rem 6rem;
+  border-radius: 4rem;
+  background: var(--ui-fill-passive);
+  font-size: calc(var(--fs-secondary) * 0.86);
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+.month-day-preview__note p small.month-day-preview__progress.is-done {
+  background: color-mix(in srgb, var(--ui-status-completed) 12%, transparent);
+  color: var(--ui-status-completed);
+}
 .month-day-preview__image-link {
   padding: 0;
   border: 0;
@@ -1826,6 +1983,38 @@ const protectedDraft = useDraftProtection({
   background: transparent;
   color: var(--text-color-secondary);
   cursor: pointer;
+}
+/* 主动补写处理结果的入口，和右侧状态按钮同一套图标按钮规则。 */
+.month-day-preview__progress-action {
+  display: grid;
+  width: 27rem;
+  height: 27rem;
+  align-self: center;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7rem;
+  background: transparent;
+  color: var(--text-color-secondary);
+  cursor: pointer;
+}
+.month-day-preview__progress-action.has-progress {
+  color: var(--ui-accent);
+}
+.month-day-preview__progress-action svg {
+  width: 15rem;
+  height: 15rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+.month-day-preview__progress-action:hover,
+.month-day-preview__progress-action:focus-visible {
+  outline: none;
+  background: var(--ui-fill-hover);
+  color: var(--text-color);
 }
 .month-day-preview__status-action:hover:not(:disabled),
 .month-day-preview__status-action:focus-visible {
@@ -1877,9 +2066,16 @@ const protectedDraft = useDraftProtection({
   text-overflow: ellipsis;
   background: #8e8e93;
 }
-.month-day-cell__linked-item.is-pri-1 { background: #0a84ff; }
-.month-day-cell__linked-item.is-pri-2 { background: #ffd60a; color: #1d1d1f; }
-.month-day-cell__linked-item.is-pri-3 { background: #ff3b30; }
+.month-day-cell__linked-item.is-pri-1 {
+  background: #0a84ff;
+}
+.month-day-cell__linked-item.is-pri-2 {
+  background: #ffd60a;
+  color: #1d1d1f;
+}
+.month-day-cell__linked-item.is-pri-3 {
+  background: #ff3b30;
+}
 .month-day-cell__linked-item.is-done {
   opacity: 0.55;
   text-decoration: line-through;

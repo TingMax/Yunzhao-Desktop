@@ -247,9 +247,15 @@ const api = {
   /** 原子创建便签（含图片 + 标签，事务保护） */
   createNoteWithAssets: ({ options, images, tagIds }) =>
     ipcRenderer.invoke('notes:create-with-assets', { options, images, tagIds }),
-  /** 更新便签（部分字段） */
-  updateNote: (id, fields, expectedContent, expectedRemark) =>
-    ipcRenderer.invoke('notes:update', { id, fields, expectedContent, expectedRemark }),
+  /** 更新便签（部分字段）；expectedProgress 参与处理结果的并发校验 */
+  updateNote: (id, fields, expectedContent, expectedRemark, expectedProgress) =>
+    ipcRenderer.invoke('notes:update', {
+      id,
+      fields,
+      expectedContent,
+      expectedRemark,
+      expectedProgress
+    }),
   /** 设置或清除便签正文选区颜色。 */
   setNoteTextColor: (payload) => ipcRenderer.invoke('notes:set-text-color', payload),
   /** 原子保存编辑草稿（字段、标签及附件变更） */
@@ -289,8 +295,8 @@ const api = {
   updateCustomSortOrders: (items) => ipcRenderer.invoke('notes:update-custom-order', { items }),
   /** 开始处理 */
   startProgress: (id) => ipcRenderer.invoke('notes:start-progress', { id }),
-  /** 完成便签 */
-  completeNote: (id) => ipcRenderer.invoke('notes:complete', { id }),
+  /** 完成便签；progress 是这次处理的结果或进度，与状态一起写入 */
+  completeNote: (id, progress) => ipcRenderer.invoke('notes:complete', { id, progress }),
   /** 将已完成便签重新恢复为进行中 */
   reopenNote: (id) => ipcRenderer.invoke('notes:reopen', { id }),
   /** 分页预览历史未完成便签，包含不可移动项及原因。 */
@@ -530,7 +536,8 @@ const api = {
   yunzhaoSaveHandouts: (body) => ipcRenderer.invoke('yunzhao:handouts-save', body),
   yunzhaoTable: () => ipcRenderer.invoke('yunzhao:table'),
   onYunzhaoTable: (callback) => {
-    const handler = (_event, table) => callback(table || { lessons: [], changes: [], periods: [], marks: [] })
+    const handler = (_event, table) =>
+      callback(table || { lessons: [], changes: [], periods: [], marks: [] })
     ipcRenderer.on('yunzhao:table', handler)
     return () => ipcRenderer.removeListener('yunzhao:table', handler)
   },

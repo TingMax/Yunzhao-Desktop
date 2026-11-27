@@ -180,12 +180,13 @@ async function expandFromKeyboard() {
 
 async function completeCurrentNote() {
   if (!note.value || note.value.status !== 'in_progress' || completing.value) return
+  // Finishing a note has to say what came of it, and the island has no room for that
+  // input. Open the main view instead, where the tick asks for the result.
   completing.value = true
   try {
-    await window.api.completeNote(note.value.id)
-    await loadNote()
+    await expandAfterDrag()
   } catch (error) {
-    console.warn('[CompactIsland] 完成待办失败:', error)
+    console.warn('[CompactIsland] 展开主视图以填写处理结果失败:', error)
   } finally {
     completing.value = false
   }

@@ -7,11 +7,12 @@
  * V19 扩大独立便利贴字号范围，保留已有待办与外观设置。
  * V20 重建待办表时必须保持子表外键仍指向 notes，不能跟着临时表名走。
  * V21 修复已经写成 notes_v19 的外键，否则更新待办会报“没有这张表”。
+ * V22 为待办增加处理结果/进度（progress），完成与进行中的待办都能带上。
  */
 import { createReminderSchema } from './db-reminders.js'
 import { createAttachmentResetJournalSchema } from './attachment-reset-journal.js'
 
-export const DATABASE_SCHEMA_VERSION = 21
+export const DATABASE_SCHEMA_VERSION = 22
 
 function migrateToVersion19(db) {
   const definition = db
@@ -80,6 +81,13 @@ function quoteIdent(name) {
     throw new Error(`无法修复的表名: ${name}`)
   }
   return `"${name}"`
+}
+
+/** V22 为待办增加处理结果/进度；旧待办默认没有，仍按原样显示。 */
+function migrateToVersion22(db) {
+  if (!hasColumn(db, 'notes', 'progress')) {
+    db.exec("ALTER TABLE notes ADD COLUMN progress TEXT NOT NULL DEFAULT '';")
+  }
 }
 
 function rewriteRetiredNoteNames(sql) {
@@ -467,6 +475,7 @@ function migrateDatabaseSchema(db, existingVersion) {
   const missingDesktopStickies = !hasTable(db, 'desktop_stickies')
   const missingTemplateOrigin = !hasColumn(db, 'notes', 'from_template')
   const missingNoteRemark = !hasColumn(db, 'notes', 'remark')
+  const missingNoteProgress = !hasColumn(db, 'notes', 'progress')
   const missingDurationKind = !hasColumn(db, 'notes', 'duration_kind')
   const missingContentColorRanges = !hasColumn(db, 'notes', 'content_color_ranges')
   const missingTemplateTimeRange =
@@ -507,6 +516,7 @@ function migrateDatabaseSchema(db, existingVersion) {
     !missingDurationKind &&
     !missingContentColorRanges &&
     !missingTemplateTimeRange &&
+    !missingNoteProgress &&
     !hasRemovedWindowModeSettings &&
     !hasRemovedHistoricalMoveSettings
   )
@@ -537,6 +547,7 @@ function migrateDatabaseSchema(db, existingVersion) {
       createAttachmentResetJournalSchema(db)
     if (existingVersion < 19) migrateToVersion19(db)
     if (existingVersion < 20) migrateToVersion20(db)
+    if (existingVersion < 22 || missingNoteProgress) migrateToVersion22(db)
     if (existingVersion < DATABASE_SCHEMA_VERSION) {
       db.pragma(`user_version = ${DATABASE_SCHEMA_VERSION}`)
     }
@@ -652,6 +663,7 @@ export function createNotesSchema(db) {
       content             TEXT    NOT NULL DEFAULT '',
       content_color_ranges TEXT  NOT NULL DEFAULT '[]',
       remark              TEXT    NOT NULL DEFAULT '',
+      progress            TEXT    NOT NULL DEFAULT '',
       status              TEXT    NOT NULL DEFAULT 'initialized'
                           CHECK(status IN ('initialized','in_progress','completed')),
       is_deleted          INTEGER NOT NULL DEFAULT 0 CHECK(is_deleted IN (0, 1)),

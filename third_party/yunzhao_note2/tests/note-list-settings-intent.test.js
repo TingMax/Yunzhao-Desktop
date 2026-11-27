@@ -223,6 +223,12 @@ describe('NoteList status consumer', () => {
       f.api.completeNote.mockReturnValueOnce(response.promise)
       const patch = vi.spyOn(view.state.timelineModel, 'patchNote')
       const task = view.state.executeCardStatusAction(note)
+      // The tick asks for a result first; only after that answer does the request go
+      // out, and this test is about that request landing after the list is gone.
+      await flush()
+      expect(view.state.resultDialogVisible.value).toBe(true)
+      view.state.finishCompletionResult('已处理')
+      await flush()
       view.unmount()
       if (reject) response.reject(new Error('late old response'))
       else response.resolve({ ...note, status: 'completed' })

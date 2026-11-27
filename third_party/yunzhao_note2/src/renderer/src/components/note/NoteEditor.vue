@@ -33,6 +33,7 @@ const emit = defineEmits(['saved', 'cancel'])
 const { showMessage } = useMessage()
 const content = ref('')
 const remark = ref('')
+const progress = ref('')
 const contentColorRanges = ref([])
 const statusChoice = ref('initialized')
 const effectiveAt = ref('')
@@ -80,6 +81,7 @@ function createSnapshot(note) {
   return {
     content: note.content || '',
     remark: String(note.remark ?? ''),
+    progress: String(note.progress ?? ''),
     contentColorRanges: normalizeNoteTextColorRanges(note.content_color_ranges, note.content || ''),
     status: note.status,
     effectiveAt: formatDateTime(note.effective_at),
@@ -105,6 +107,7 @@ function resetFromNote(note) {
   initialVersion.value = note.editVersion
   content.value = snapshot.content
   remark.value = snapshot.remark
+  progress.value = snapshot.progress
   contentColorRanges.value = snapshot.contentColorRanges.map((range) => ({ ...range }))
   statusChoice.value = snapshot.status
   effectiveAt.value = snapshot.effectiveAt
@@ -216,6 +219,7 @@ const hasChanges = computed(() => {
     attachmentDirty.value ||
     content.value !== initial.content ||
     remark.value !== initial.remark ||
+    progress.value !== initial.progress ||
     JSON.stringify(contentColorRanges.value) !== JSON.stringify(initial.contentColorRanges) ||
     statusChoice.value !== initial.status ||
     effectiveAt.value !== initial.effectiveAt ||
@@ -327,6 +331,7 @@ async function handleSave() {
       fields: {
         content: text,
         remark: remark.value.replace(/\r\n?/g, '\n'),
+        progress: progress.value.replace(/\r\n?/g, '\n'),
         contentColorRanges: normalizeNoteTextColorRanges(contentColorRanges.value, text),
         ...stateFields,
         durationKind: durationKind.value === 'fixed_days' ? 'fixed_days' : 'single_day',
@@ -369,6 +374,7 @@ const protectedDraft = useDraftProtection({
   fields: {
     content,
     remark,
+    progress,
     contentColorRanges,
     statusChoice,
     effectiveAt,
@@ -409,6 +415,13 @@ const commitLocked = computed(() => protectedDraft.commitLocked.value)
       />
 
       <NoteRemarkField v-model="remark" class="ne-stagger" style="animation-delay: 35ms" />
+      <NoteRemarkField
+        v-model="progress"
+        class="ne-stagger"
+        style="animation-delay: 45ms"
+        label="处理结果 / 进度"
+        placeholder="这件事做到了哪一步、结果是什么…"
+      />
 
       <div class="ne-field-row ne-stagger" style="animation-delay: 70ms">
         <label class="ne-field-label">生效时间<HelpButton :text="scheduleHelp" /></label>
